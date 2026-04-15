@@ -1,0 +1,14 @@
+# OS files
+.DS_Store
+
+# Environments
+venv/
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Databases (Specific files only)
+*.db
+*.sqlite3

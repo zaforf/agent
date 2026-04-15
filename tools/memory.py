@@ -1,0 +1,131 @@
+from mem0 import Memory
+from config import GROQ_API_KEY, QDRANT_HOST, QDRANT_PORT
+
+_config = {
+    "llm": {
+        "provider": "groq",
+        "config": {
+            "model": "llama-3.1-8b-instant",
+            "api_key": GROQ_API_KEY,
+        },
+    },
+    "embedder": {
+        "provider": "huggingface",
+        "config": {"model": "BAAI/bge-base-en-v1.5"},
+    },
+    "vector_store": {
+        "provider": "qdrant",
+        "config": {
+            "host": QDRANT_HOST,
+            "port": QDRANT_PORT,
+            "collection_name": "agent_memories",
+            "embedding_model_dims": 768,
+        },
+    },
+}
+
+memory = Memory.from_config(_config)
+USER_ID = "user"
+
+
+def remember(content: str, category: str = "fact") -> str:
+    memory.add(content, user_id=USER_ID, metadata={"category": category})
+    return f"Stored: {content}"
+
+
+def recall(query: str) -> str:
+    results = memory.search(query, user_id=USER_ID, limit=5)
+    entries = results.get("results", [])
+    if not entries:
+        return "No relevant memories found."
+    return "\n".join(f"- {r['memory']}" for r in entries)
+
+
+def list_memories() -> str:
+    results = memory.get_all(user_id=USER_ID)
+    entries = results.get("results", [])
+    if not entries:
+        return "No memories stored."
+    return "\n".join(f"[{r['id']}] ({r.get('metadata', {}).get('category','?')}) {r['memory']}" for r in entries)
+
+
+def delete_memory(memory_id: str) -> str:
+    memory.delete(memory_id=memory_id)
+    return f"Deleted memory {memory_id}"
+
+
+# Exposed for API endpoints (not a tool)
+def get_all() -> list[dict]:
+    results = memory.get_all(user_id=USER_ID)
+    return results.get("results", [])
+
+
+SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "remember",
+            "description": (
+                "Store a durable fact to long-term memory. "
+                "ONLY call for facts worth recalling in a completely different future conversation: "
+                "user's name, skills, ongoing projects, strong preferences, important context. "
+                "Do NOT store: what was asked in this conversation, temporary context, "
+                "things already in memory, or trivial facts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "The durable fact to store"},
+                    "category": {
+                        "type": "string",
+                        "enum": ["user", "preference", "fact", "project"],
+                    },
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recall",
+            "description": "Search long-term memory for relevant context before answering.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What to search for"}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_memories",
+            "description": "List all stored memories. Use to check what you know before adding duplicates.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_memory",
+            "description": "Delete a specific memory by its ID (first 8 chars from list_memories).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string", "description": "Full memory ID to delete"}
+                },
+                "required": ["memory_id"],
+            },
+        },
+    },
+]
+
+FUNCTIONS = {
+    "remember": remember,
+    "recall": recall,
+    "list_memories": list_memories,
+    "delete_memory": delete_memory,
+}

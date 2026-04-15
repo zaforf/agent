@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+openai
+mem0ai
+qdrant-client
+sentence-transformers
+groq
+python-dotenv
+pydantic
+aiofiles
