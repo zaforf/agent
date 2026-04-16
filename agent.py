@@ -172,13 +172,16 @@ async def _call(messages: list[dict], use_tools: bool = True) -> tuple:
                 return resp, entry["name"]
             except (RateLimitError, APIConnectionError) as e:
                 last_err = e
+                log.warning("provider=%s attempt=%d retryable error: %s", entry["name"], attempt, e)
                 if attempt < 2:
                     await asyncio.sleep(2 ** attempt)
             except APIError as e:
                 last_err = e
+                log.warning("provider=%s attempt=%d api error (skipping): %s", entry["name"], attempt, e)
                 break
             except Exception as e:
                 last_err = e
+                log.warning("provider=%s attempt=%d unexpected error (skipping): %s", entry["name"], attempt, e)
                 break
 
     raise RuntimeError(f"All providers exhausted. Last error: {last_err}")
@@ -205,13 +208,16 @@ async def _call_stream(messages: list[dict]) -> tuple:
                 return stream, entry["name"]
             except (RateLimitError, APIConnectionError) as e:
                 last_err = e
+                log.warning("stream provider=%s attempt=%d retryable error: %s", entry["name"], attempt, e)
                 if attempt < 2:
                     await asyncio.sleep(2 ** attempt)
             except APIError as e:
                 last_err = e
+                log.warning("stream provider=%s attempt=%d api error (skipping): %s", entry["name"], attempt, e)
                 break
             except Exception as e:
                 last_err = e
+                log.warning("stream provider=%s attempt=%d unexpected error (skipping): %s", entry["name"], attempt, e)
                 break
 
     raise RuntimeError(f"All providers exhausted for streaming. Last error: {last_err}")
