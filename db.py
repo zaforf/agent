@@ -72,7 +72,7 @@ def get_sessions() -> list[dict]:
                 MAX(ts)  as last_ts,
                 (SELECT content FROM messages m2
                  WHERE m2.session_id = m.session_id AND m2.role = 'user'
-                 ORDER BY id LIMIT 1) as preview
+                 ORDER BY id DESC LIMIT 1) as preview
             FROM messages m
             GROUP BY session_id
             ORDER BY last_ts DESC

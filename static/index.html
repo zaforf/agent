@@ -249,6 +249,12 @@
       flex-shrink: 0;
     }
     .bubble.expanded .step-chevron { transform: rotate(90deg); }
+    .step-meta {
+      font-weight: normal;
+      opacity: 0.55;
+      margin-left: 4px;
+      font-size: 10px;
+    }
     /* Step body (collapsed by default) */
     .step-body {
       display: none;
@@ -257,9 +263,11 @@
       border-top: 1px solid currentColor;
       opacity: 0.75;
       white-space: pre-wrap;
-      word-break: break-all;
+      word-break: break-word;
       user-select: text;
       cursor: text;
+      max-height: 140px;
+      overflow-y: auto;
     }
     .bubble.expanded .step-body { display: block; }
 
@@ -674,9 +682,25 @@
 
     const header = document.createElement('div');
     header.className = 'step-header';
+
+    // Meta hint shown in the collapsed header
+    let meta = '';
+    if (type === 'tool-call' && typeof payload === 'object') {
+      const first = Object.values(payload)[0];
+      if (first != null) {
+        const s = String(first);
+        meta = s.length > 50 ? s.slice(0, 50) + '…' : s;
+      }
+    } else if (type === 'tool-result') {
+      const raw = String(payload ?? '');
+      meta = raw.length > 80 ? raw.length.toLocaleString() + ' chars' : '';
+    }
+
     header.innerHTML =
       `<span class="step-chevron">▶</span>` +
-      `<span>${arrow} <strong>${esc(name)}</strong></span>`;
+      `<span>${arrow} <strong>${esc(name)}</strong>` +
+      (meta ? `<span class="step-meta">${esc(meta)}</span>` : '') +
+      `</span>`;
     bub.appendChild(header);
 
     const body = document.createElement('div');
@@ -686,12 +710,12 @@
         .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
         .join('\n');
     } else {
-      // Flatten multi-line results: collapse whitespace/newlines → single space
+      // Collapse whitespace/newlines into single spaces, then truncate
       let text = String(payload ?? '')
         .replace(/\s*\n\s*/g, ' ')
         .replace(/[ \t]{2,}/g, ' ')
         .trim();
-      const MAX = 400;
+      const MAX = 600;
       if (text.length > MAX) text = text.slice(0, MAX) + ' …';
       body.textContent = text;
     }

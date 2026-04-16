@@ -46,14 +46,6 @@ PROVIDERS: list[dict] = [
     },
 ]
 
-# Back-compat shims
-INFERENCE_MODEL    = PROVIDERS[0]["model"]
-INFERENCE_BASE_URL = PROVIDERS[0]["base_url"]
-INFERENCE_API_KEY  = PROVIDERS[0]["api_key"]
-FALLBACK_MODEL     = PROVIDERS[-1]["model"]
-FALLBACK_BASE_URL  = PROVIDERS[-1]["base_url"]
-FALLBACK_API_KEY   = PROVIDERS[-1]["api_key"]
-
 # Paths
 DATA_DIR           = Path(__file__).parent / "data"
 SYSTEM_PROMPT_PATH = DATA_DIR / "system_prompt.md"

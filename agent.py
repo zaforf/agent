@@ -22,124 +22,82 @@ _clients: list[dict] = [
 
 MAX_TOOL_ITERATIONS = 10
 
-# Explicit <tool_call>…</tool_call> text fallback (XML only — no Python syntax)
-_TOOL_CALL_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
-# Thought/reasoning blocks to strip from final output
-_THINK_RE     = re.compile(r"<(thought|think|thinking)>.*?</(thought|think|thinking)>", re.DOTALL)
+# Closed reasoning blocks stripped from user-visible output (opening tag → matching close).
+_THINK_RE = re.compile(
+    r"<(thought|think|thinking|redacted_reasoning|redacted_thinking)[\s>].*?</\1>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+_REPAIR_USER = (
+    "Your previous assistant message had no user-visible text after removing "
+    "closed reasoning blocks such as <thought>, <thinking>, or <redacted_reasoning> (or the reply was empty). "
+    "Reply again with ONLY the answer the user should see — no reasoning tags."
+)
+
+_STREAM_TEXT_CHUNK = 160
+# Tool results longer than this get summarized for history; shorter ones kept verbatim.
+_HISTORY_SUMMARIZE_THRESHOLD = 4000
+
+# Sync tools that do HTTP / long completions — run off the event loop.
+_BLOCKING_SYNC_TOOLS = frozenset({"fetch_url"})
 
 
-# ── Streaming thought-stripper ────────────────────────────────────────────────
-
-class _ThinkStripper:
-    """
-    Streaming-safe removal of <thought/think/thinking> blocks.
-    Gemma 4 emits these at the start of a response before actual content.
-
-    States:
-      scanning    – looking for an opening tag
-      buffering   – inside a thought block; accumulate, don't forward
-      passthrough – past any thought block; forward everything immediately
-
-    Key correctness property: _PARTIAL_OPEN_RE detects when the end of the
-    buffer could be the beginning of an opening tag that is split across chunk
-    boundaries. We never flush those trailing bytes until we know whether they
-    complete a tag or not. This prevents partial tags like "<thought" from
-    leaking into the output.
-    """
-    _OPEN_RE  = re.compile(r"<(thought|think|thinking)>", re.IGNORECASE)
-    _CLOSE_RE = re.compile(r"</(thought|think|thinking)>", re.IGNORECASE)
-
-    # Matches any suffix of the buffer that is a valid PREFIX of one of the
-    # three opening tags. Used to hold back bytes that might complete a tag
-    # in the next chunk. Ends with $ so re.search finds the rightmost such
-    # suffix (the one touching the end of the string).
-    _PARTIAL_OPEN_RE = re.compile(
-        r"<(t(h(o(u(g(h(t>?)?)?)?)?)?|i(n(k(>|(i(n(g>?)?)?)?)?)?)?)?)?$",
-        re.IGNORECASE,
-    )
-
-    def __init__(self):
-        self._state = "scanning"
-        self._buf   = ""
-
-    def feed(self, chunk: str) -> str:
-        """Returns text safe to forward to the client."""
-        if self._state == "passthrough":
-            return chunk
-
-        self._buf += chunk
-
-        if self._state == "scanning":
-            # Check for a complete opening tag anywhere in the accumulated buffer
-            m = self._OPEN_RE.search(self._buf)
-            if m:
-                pre         = self._buf[:m.start()]
-                self._buf   = self._buf[m.end():]
-                self._state = "buffering"
-                log.debug("thought-stripper: opening tag found, buffering")
-                return pre + self._drain()
-
-            # No complete tag yet. Find the largest safe prefix: everything
-            # before any potential partial tag at the buffer's end.
-            pm       = self._PARTIAL_OPEN_RE.search(self._buf)
-            safe_end = pm.start() if pm else len(self._buf)
-            out       = self._buf[:safe_end]
-            self._buf = self._buf[safe_end:]
-            return out
-
-        # state == "buffering"
-        return self._drain()
-
-    def _drain(self) -> str:
-        m = self._CLOSE_RE.search(self._buf)
-        if m:
-            thought_chars = m.start()
-            log.debug("thought-stripper: closing tag found, stripped %d chars", thought_chars)
-            remaining   = self._buf[m.end():].lstrip("\n")
-            self._buf   = ""
-            self._state = "passthrough"
-            return remaining
-        return ""
-
-    def finalize(self) -> str:
-        """Call after stream ends; returns any buffered non-thought text."""
-        if self._state == "buffering":
-            # Thought block was never closed — discard entirely
-            log.debug("thought-stripper: stream ended inside thought block, discarding")
-            out = ""
-        elif self._state == "scanning":
-            # Discard any partial tag candidate at the end of the buffer
-            pm  = self._PARTIAL_OPEN_RE.search(self._buf)
-            out = self._buf[:pm.start()] if pm else self._buf
-        else:
-            out = self._buf
-        self._buf = ""
-        return out
+def _sanitize_message(m: dict) -> dict | None:
+    """Keep only API-safe keys. Drops UI-only fields like `steps`."""
+    role = m.get("role")
+    if role not in ("user", "assistant", "system", "tool"):
+        return None
+    o: dict = {"role": role}
+    if m.get("content") is not None:
+        o["content"] = m["content"]
+    if role == "assistant" and m.get("tool_calls"):
+        tcs = []
+        for tc in m["tool_calls"]:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") or {}
+            if not isinstance(fn, dict):
+                fn = {}
+            tcs.append({
+                "id": tc.get("id", ""),
+                "type": tc.get("type", "function"),
+                "function": {
+                    "name": fn.get("name", ""),
+                    "arguments": fn.get("arguments", ""),
+                },
+            })
+        o["tool_calls"] = tcs
+    if role == "tool":
+        o["tool_call_id"] = m.get("tool_call_id", "")
+        o["content"] = m.get("content", "")
+    return o
 
 
-# ── Tool call parsing (XML fallback only) ────────────────────────────────────
+def _sanitize_history(history: list[dict]) -> list[dict]:
+    return [sm for m in history if (sm := _sanitize_message(m)) is not None]
 
-def _parse_tool_calls(content: str) -> list[dict]:
-    calls = []
-    for m in _TOOL_CALL_RE.finditer(content):
-        try:
-            calls.append(json.loads(m.group(1).strip()))
-        except json.JSONDecodeError:
-            pass
-    return calls
+
+def _visible_after_think(text: str) -> str:
+    return _THINK_RE.sub("", text or "").strip()
+
+
+def _chunk_text(s: str) -> list[str]:
+    if not s:
+        return []
+    return [s[i : i + _STREAM_TEXT_CHUNK] for i in range(0, len(s), _STREAM_TEXT_CHUNK)]
 
 
 def _extract_calls(msg) -> list[dict]:
-    if getattr(msg, "tool_calls", None):
-        out = []
-        for tc in msg.tool_calls:
-            try:
-                args = json.loads(tc.function.arguments or "{}")
-            except json.JSONDecodeError:
-                args = {}
-            out.append({"name": tc.function.name, "args": args})
-        return out
-    return _parse_tool_calls(msg.content or "")
+    if not getattr(msg, "tool_calls", None):
+        return []
+    out = []
+    for tc in msg.tool_calls:
+        try:
+            args = json.loads(tc.function.arguments or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        out.append({"name": tc.function.name, "args": args})
+    return out
 
 
 # ── Provider calls ────────────────────────────────────────────────────────────
@@ -212,9 +170,7 @@ async def _call_stream(messages: list[dict]) -> tuple:
 def _tool_docs() -> str:
     lines = [
         "## Tools\n",
-        "Preferred call format (use this if structured tool calls aren't available):\n",
-        "```\n<tool_call>{\"name\": \"tool_name\", \"args\": {\"param\": \"value\"}}</tool_call>\n```\n",
-        "You will receive `<tool_result>` messages. Give your final response only after all tool calls resolve.\n",
+        "Use the API **function / tool_calls** mechanism only (no XML or fenced code for tools).\n",
     ]
     for schema in TOOL_SCHEMAS:
         fn       = schema["function"]
@@ -230,13 +186,52 @@ def _build_system_prompt() -> str:
 
 # ── Tool execution helper ─────────────────────────────────────────────────────
 
-def _run_tool(name: str, args: dict) -> str:
+async def _run_tool_async(name: str, args: dict) -> str:
     if name not in TOOL_FUNCTIONS:
         return f"Unknown tool: {name}"
+    fn = TOOL_FUNCTIONS[name]
+
+    def _invoke_sync() -> str:
+        try:
+            return str(fn(**args))
+        except Exception as e:
+            return f"Error in {name}: {e}"
+
+    if name in _BLOCKING_SYNC_TOOLS:
+        return await asyncio.to_thread(_invoke_sync)
+    return _invoke_sync()
+
+
+async def _summarize_for_history(name: str, args: dict, user_message: str, content: str) -> str:
+    """Summarize a large tool result for storage in conversation history."""
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a precise summarizer. Given a tool call and its output, produce a compact "
+                "summary that retains everything relevant to the user's request and the tool's purpose. "
+                "Keep key facts, numbers, decisions, errors, and conclusions. Omit boilerplate and repetition."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"User request: {user_message}\n"
+                f"Tool called: {name}\n"
+                f"Tool args: {json.dumps(args)}\n\n"
+                f"Tool output:\n{content}"
+            ),
+        },
+    ]
     try:
-        return str(TOOL_FUNCTIONS[name](**args))
+        resp, _ = await _call(messages, use_tools=False)
+        summary = _visible_after_think(resp.choices[0].message.content or "")
+        if summary:
+            log.info("history-summary  %s  %d→%d chars", name, len(content), len(summary))
+            return f"[history summary of {name}]\n{summary}"
     except Exception as e:
-        return f"Error in {name}: {e}"
+        log.warning("history-summary failed  %s: %s", name, e)
+    return content[:_HISTORY_SUMMARIZE_THRESHOLD]
 
 
 # ── Non-streaming run (used by /chat endpoint) ────────────────────────────────
@@ -244,6 +239,7 @@ def _run_tool(name: str, args: dict) -> str:
 async def run(user_message: str, history: list[dict]) -> tuple[str, list[dict]]:
     """Returns (final_response, steps)."""
     steps: list[dict] = []
+    history = _sanitize_history(history)
     messages = [
         {"role": "system", "content": _build_system_prompt()},
         *history,
@@ -251,8 +247,19 @@ async def run(user_message: str, history: list[dict]) -> tuple[str, list[dict]]:
     ]
 
     provider_used = _clients[0]["name"] if _clients else "none"
+    # Pending background summarization tasks: (message_dict, asyncio.Task)
+    pending_summaries: list[tuple[dict, asyncio.Task]] = []
 
-    for _ in range(MAX_TOOL_ITERATIONS):
+    for iteration in range(MAX_TOOL_ITERATIONS):
+        # Resolve any background summaries from the previous iteration before
+        # the next LLM call, so history is compact going forward.
+        if pending_summaries:
+            results = await asyncio.gather(*(t for _, t in pending_summaries), return_exceptions=True)
+            for (msg_dict, _), summary in zip(pending_summaries, results):
+                if isinstance(summary, str):
+                    msg_dict["content"] = summary
+            pending_summaries.clear()
+
         response, provider = await _call(messages)
         provider_used = provider
         msg     = response.choices[0].message
@@ -269,34 +276,40 @@ async def run(user_message: str, history: list[dict]) -> tuple[str, list[dict]]:
 
         calls = _extract_calls(msg)
         if not calls:
-            final = _TOOL_CALL_RE.sub("", content)
-            final = _THINK_RE.sub("", final).strip() or content
-            log.info("run: done via %s (%d chars)", provider_used, len(final))
-            if provider_used != _clients[0]["name"]:
+            final = _visible_after_think(content)
+            if not final and content.strip():
+                messages.append({"role": "user", "content": _REPAIR_USER})
+                response2, provider2 = await _call(messages, use_tools=False)
+                provider_used = provider2
+                content2 = response2.choices[0].message.content or ""
+                final = _visible_after_think(content2) or content2.strip()
+            if not final:
+                final = "(No visible response from the model.)"
+            log.info("done  via=%s  len=%d", provider_used, len(final))
+            if _clients and provider_used != _clients[0]["name"]:
                 final = f"[{provider_used} fallback]\n{final}"
             return final, steps
 
         result_blocks = []
-        for call in calls:
+        n_tc = len(msg.tool_calls)
+        for i, call in enumerate(calls):
             name = call.get("name", "")
             args = call.get("args", {})
-            log.info("run: tool_call %s %s", name, args)
+            log.info("tool-call  %s  %s", name, str(args)[:120])
             steps.append({"type": "tool_call",   "name": name, "args": args})
-            result = _run_tool(name, args)
+            result = await _run_tool_async(name, args)
             log.debug("run: tool_result %s → %.120s", name, result)
             steps.append({"type": "tool_result", "name": name, "result": result})
 
-            if getattr(msg, "tool_calls", None):
-                tc_id = next((tc.id for tc in msg.tool_calls if tc.function.name == name), None)
-                if tc_id:
-                    result_blocks.append({"role": "tool", "tool_call_id": tc_id, "content": result})
-            else:
-                result_blocks.append(f'<tool_result name="{name}">{result}</tool_result>')
+            if i < n_tc:
+                tc_id = msg.tool_calls[i].id
+                msg_dict = {"role": "tool", "tool_call_id": tc_id, "content": result}
+                result_blocks.append(msg_dict)
+                if len(result) > _HISTORY_SUMMARIZE_THRESHOLD:
+                    task = asyncio.create_task(_summarize_for_history(name, args, user_message, result))
+                    pending_summaries.append((msg_dict, task))
 
-        if getattr(msg, "tool_calls", None):
-            messages.extend(result_blocks)
-        else:
-            messages.append({"role": "user", "content": "\n".join(result_blocks)})
+        messages.extend(result_blocks)
 
     return "Reached max tool iterations.", steps
 
@@ -312,6 +325,7 @@ async def run_stream(user_message: str, history: list[dict]):
       {"type": "done",        "provider": str}
       {"type": "error",       "detail": str}
     """
+    history = _sanitize_history(history)
     messages = [
         {"role": "system", "content": _build_system_prompt()},
         *history,
@@ -319,27 +333,33 @@ async def run_stream(user_message: str, history: list[dict]):
     ]
 
     provider_used = _clients[0]["name"] if _clients else "none"
+    # Pending background summarization tasks: (message_dict, asyncio.Task)
+    pending_summaries: list[tuple[dict, asyncio.Task]] = []
 
     for iteration in range(MAX_TOOL_ITERATIONS):
+        # Resolve summaries from the previous iteration before calling the LLM again.
+        # They run concurrently with the streaming response above, so by the time
+        # we loop back here they're usually already done.
+        if pending_summaries:
+            results = await asyncio.gather(*(t for _, t in pending_summaries), return_exceptions=True)
+            for (msg_dict, _), summary in zip(pending_summaries, results):
+                if isinstance(summary, str):
+                    msg_dict["content"] = summary
+            pending_summaries.clear()
+
         stream, provider = await _call_stream(messages)
         provider_used    = provider
-        log.info("stream[%d]: provider=%s", iteration, provider)
+        log.info("turn[%d]  provider=%s", iteration, provider)
 
-        # Collect the full stream, deciding mode on first meaningful delta
         content_parts   = []
-        tool_calls_acc  = {}   # index → {id, name, arguments}
-        native_tc_list  = []   # for building message history
-        tool_mode       = None  # None | "text" | "tools"
-        stripper        = _ThinkStripper()
+        tool_calls_acc  = {}
 
         async for chunk in stream:
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
 
-            # Tool call deltas
             if delta.tool_calls:
-                tool_mode = "tools"
                 for tc in delta.tool_calls:
                     idx = tc.index
                     if idx not in tool_calls_acc:
@@ -354,24 +374,13 @@ async def run_stream(user_message: str, history: list[dict]):
                         if tc.function.arguments:
                             tool_calls_acc[idx]["arguments"] += tc.function.arguments
 
-            # Content deltas — only forward if we haven't entered tool mode
-            if delta.content and tool_mode != "tools":
-                tool_mode = "text"
+            if delta.content:
                 content_parts.append(delta.content)
-                forwarded = stripper.feed(delta.content)
-                if forwarded:
-                    yield {"type": "text_chunk", "text": forwarded}
-
-        # Flush any remaining stripper buffer
-        tail = stripper.finalize()
-        if tail and tool_mode == "text":
-            yield {"type": "text_chunk", "text": tail}
-            content_parts.append(tail)
 
         full_content = "".join(content_parts)
 
         if tool_calls_acc:
-            # Build native tool_calls list for message history
+            native_tc_list = []
             for idx in sorted(tool_calls_acc.keys()):
                 tc = tool_calls_acc[idx]
                 native_tc_list.append({
@@ -386,7 +395,6 @@ async def run_stream(user_message: str, history: list[dict]):
                 "tool_calls": native_tc_list,
             })
 
-            # Execute tool calls and yield events
             result_messages = []
             for idx in sorted(tool_calls_acc.keys()):
                 tc   = tool_calls_acc[idx]
@@ -396,41 +404,43 @@ async def run_stream(user_message: str, history: list[dict]):
                 except json.JSONDecodeError:
                     args = {}
 
-                log.info("stream: tool_call %s %s", name, args)
+                log.info("tool-call  %s  %s", name, str(args)[:120])
                 yield {"type": "tool_call", "name": name, "args": args}
-                result = _run_tool(name, args)
+                result = await _run_tool_async(name, args)
                 log.debug("stream: tool_result %s → %.120s", name, result)
                 yield {"type": "tool_result", "name": name, "result": result}
 
-                result_messages.append({
-                    "role":        "tool",
+                msg_dict = {
+                    "role":         "tool",
                     "tool_call_id": tc["id"],
-                    "content":     result,
-                })
+                    "content":      result,
+                }
+                result_messages.append(msg_dict)
+                if len(result) > _HISTORY_SUMMARIZE_THRESHOLD:
+                    task = asyncio.create_task(_summarize_for_history(name, args, user_message, result))
+                    pending_summaries.append((msg_dict, task))
 
             messages.extend(result_messages)
-            # Loop for next LLM call
 
         else:
-            # No native tool calls — check XML fallback in accumulated content
-            xml_calls = _parse_tool_calls(full_content)
-            if xml_calls:
+            visible = _visible_after_think(full_content)
+            if not visible and full_content.strip():
                 messages.append({"role": "assistant", "content": full_content})
-                result_parts = []
-                for call in xml_calls:
-                    name = call.get("name", "")
-                    args = call.get("args", {})
-                    log.info("stream: xml tool_call %s %s", name, args)
-                    yield {"type": "tool_call", "name": name, "args": args}
-                    result = _run_tool(name, args)
-                    log.debug("stream: xml tool_result %s → %.120s", name, result)
-                    yield {"type": "tool_result", "name": name, "result": result}
-                    result_parts.append(f'<tool_result name="{name}">{result}</tool_result>')
-                messages.append({"role": "user", "content": "\n".join(result_parts)})
-                # Loop for next LLM call
-            else:
-                # Truly final text response
-                yield {"type": "done", "provider": provider_used}
+                messages.append({"role": "user", "content": _REPAIR_USER})
+                response2, provider2 = await _call(messages, use_tools=False)
+                provider_used = provider2
+                rtxt = response2.choices[0].message.content or ""
+                visible = _visible_after_think(rtxt) or rtxt.strip()
+                if not visible:
+                    yield {"type": "error", "detail": "Empty response after repair."}
+                    return
+            elif not visible:
+                yield {"type": "error", "detail": "Empty response from model."}
                 return
+
+            for piece in _chunk_text(visible):
+                yield {"type": "text_chunk", "text": piece}
+            yield {"type": "done", "provider": provider_used}
+            return
 
     yield {"type": "error", "detail": "Reached max tool iterations."}

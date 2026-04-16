@@ -16,6 +16,10 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(name)s  %(message)s",
     datefmt="%H:%M:%S",
 )
+# Suppress third-party noise; keep agent + tools logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
 @asynccontextmanager

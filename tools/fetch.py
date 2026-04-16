@@ -1,18 +1,42 @@
-"""Web fetch tool — retrieve a URL and return readable plain text."""
+"""Web fetch tool — retrieve a URL and return readable plain text.
+
+Default behaviour: the full page is passed to a fast long-context summarizer
+(gemini-2.0-flash, 1 M-token context) together with a caller-supplied prompt,
+so the model receives exactly the information it asked for rather than a
+truncated chunk of raw HTML text.
+
+Pass raw=True to get the unprocessed text with offset-based pagination instead.
+"""
+import logging
 import re
+import time
 from html.parser import HTMLParser
+
+_THINK_RE = re.compile(
+    r"<(thought|think|thinking)[\s>].*?</\1>",
+    re.DOTALL | re.IGNORECASE,
+)
 
 import httpx
 
+log = logging.getLogger(__name__)
+
 _SKIP_TAGS = {"script", "style", "nav", "header", "footer", "aside", "noscript"}
 _BLOCK_TAGS = {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "br", "tr", "article"}
+
+# Summarizer: gemma-4-26b — MoE (3.8B active params), fast, large context
+_SUMMARIZER_MODEL      = "gemma-4-26b-a4b-it"
+_SUMMARIZER_CHAR_LIMIT = 128_000   # chars fed to summarizer (well within model limit)
+_RAW_CHAR_LIMIT        = 8_000     # chars returned in raw/paginated mode
+_FETCH_RETRIES         = 4
+_FETCH_TIMEOUT_S       = 15
 
 
 class _TextExtractor(HTMLParser):
     def __init__(self):
         super().__init__()
         self._parts: list[str] = []
-        self._depth = 0   # nesting depth of skip tags
+        self._depth = 0
 
     def handle_starttag(self, tag, attrs):
         if tag in _SKIP_TAGS:
@@ -35,13 +59,107 @@ class _TextExtractor(HTMLParser):
         return raw.strip()
 
 
-def fetch_url(url: str) -> str:
-    """Fetch a URL and return its readable text content (max ~8 000 chars)."""
-    MAX = 8_000
+def _summarize_content(text: str, prompt: str) -> str:
+    """Send page text to gemini-2.0-flash with the caller's extraction prompt."""
+    from config import GEMINI_API_KEY, GEMINI_BASE_URL
+
+    if len(text) > _SUMMARIZER_CHAR_LIMIT:
+        text = (
+            text[:_SUMMARIZER_CHAR_LIMIT]
+            + f"\n[…content truncated at {_SUMMARIZER_CHAR_LIMIT:,} chars]"
+        )
+
+    payload = {
+        "model": _SUMMARIZER_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a precise document analyst. "
+                    "Extract and summarize exactly what the user requests from the provided content. "
+                    "Be comprehensive, accurate, and well-structured."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"{prompt}\n\n---\n\n{text}",
+            },
+        ],
+        "max_tokens": 8192,
+    }
+
+    log.info("fetch-summarize  %.80s", prompt)
+    headers = {
+        "Authorization": f"Bearer {GEMINI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    with httpx.Client(timeout=60) as client:
+        for attempt in range(3):
+            resp = client.post(
+                f"{GEMINI_BASE_URL}chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            if resp.status_code == 429 and attempt < 2:
+                wait = 2 ** attempt
+                log.warning("fetch summarizer: 429 rate limit, retrying in %ds (attempt %d)", wait, attempt + 1)
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"] or ""
+            return _THINK_RE.sub("", content).strip()
+
+    raise RuntimeError("fetch summarizer: all retries exhausted")
+
+
+def _fetch_with_retries(url: str, headers: dict) -> httpx.Response:
+    last_err = None
+    with httpx.Client(timeout=_FETCH_TIMEOUT_S, follow_redirects=True) as client:
+        for attempt in range(_FETCH_RETRIES):
+            try:
+                resp = client.get(url, headers=headers)
+                if resp.status_code == 429:
+                    retry_after = resp.headers.get("retry-after", "").strip()
+                    if retry_after.isdigit():
+                        wait_s = max(1, min(20, int(retry_after)))
+                    else:
+                        wait_s = min(20, 2 ** attempt)
+                    if attempt < _FETCH_RETRIES - 1:
+                        log.warning("fetch_url: 429 from %s, retry in %ss", url, wait_s)
+                        time.sleep(wait_s)
+                        continue
+                resp.raise_for_status()
+                return resp
+            except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.RequestError) as e:
+                last_err = e
+                if attempt < _FETCH_RETRIES - 1:
+                    wait_s = min(10, 2 ** attempt)
+                    time.sleep(wait_s)
+                    continue
+                raise
+    raise RuntimeError(f"request failed: {last_err}")
+
+
+def fetch_url(url: str, prompt: str = "", offset: int = 0, raw: bool = False) -> str:
+    """Fetch a URL and return its content.
+
+    With a prompt (default): passes the full page to a summarizer that extracts
+    exactly what was asked. Preferred — avoids context flooding from raw text.
+
+    With raw=True or no prompt: returns up to 4,000 chars starting from offset.
+    Use offset pagination when you need the raw text in chunks.
+    """
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; AgentFetch/1.0)"}
-        resp = httpx.get(url, headers=headers, follow_redirects=True, timeout=12)
-        resp.raise_for_status()
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/126.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        resp = _fetch_with_retries(url, headers)
 
         ct = resp.headers.get("content-type", "")
         if "html" in ct:
@@ -51,13 +169,30 @@ def fetch_url(url: str) -> str:
         else:
             text = resp.text.strip()
 
-        if len(text) > MAX:
-            text = text[:MAX] + f"\n\n[… {len(text) - MAX} more characters truncated]"
+        if not text:
+            return "(no readable content)"
 
-        return text or "(no readable content)"
+        # ── Summarizer mode (default when prompt given) ──────────────────────
+        if prompt and not raw:
+            try:
+                return _summarize_content(text, prompt)
+            except Exception as e:
+                log.warning("fetch_url: summarizer failed (%s), falling back to raw text", e)
+
+        # ── Raw / paginated mode ─────────────────────────────────────────────
+        total = len(text)
+        chunk = text[offset:]
+        if len(chunk) > _RAW_CHAR_LIMIT:
+            remaining  = total - offset - _RAW_CHAR_LIMIT
+            next_offset = offset + _RAW_CHAR_LIMIT
+            chunk = (
+                chunk[:_RAW_CHAR_LIMIT]
+                + f"\n\n[… {remaining:,} more chars — call fetch_url with offset={next_offset} to continue]"
+            )
+        return chunk
 
     except httpx.TimeoutException:
-        return f"Error: request to {url} timed out (12 s)"
+        return f"Error: request to {url} timed out ({_FETCH_TIMEOUT_S} s)"
     except httpx.HTTPStatusError as e:
         return f"Error: HTTP {e.response.status_code} from {url}"
     except Exception as e:
@@ -70,14 +205,41 @@ SCHEMAS = [
         "function": {
             "name": "fetch_url",
             "description": (
-                "Fetch the text content of a URL. Use when the user shares a link, "
-                "asks about a specific page, or wants you to read an article or document. "
-                "Returns readable plain text (up to ~8 000 characters)."
+                "Fetch a URL and extract specific information from it. "
+                "Always provide a `prompt` describing what to extract — the full page is "
+                "passed to a long-context summarizer which returns exactly what you need. "
+                "Use raw=true only when you need unprocessed text (e.g. code files, data, "
+                "or offset-based pagination)."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "The full URL to fetch"},
+                    "url": {
+                        "type": "string",
+                        "description": "The full URL to fetch.",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": (
+                            "What to extract or summarize from the page. "
+                            "E.g. 'List all albums in chronological order with type (EP/Studio/etc)'. "
+                            "Provide this whenever you want structured information from a page."
+                        ),
+                    },
+                    "raw": {
+                        "type": "boolean",
+                        "description": (
+                            f"Return raw text (up to {_RAW_CHAR_LIMIT:,} chars) instead of summarizing. "
+                            "Use with offset for pagination. Default: false."
+                        ),
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": (
+                            "Character offset for raw-mode pagination (default 0). "
+                            "Use the next_offset value from a truncated raw result."
+                        ),
+                    },
                 },
                 "required": ["url"],
             },

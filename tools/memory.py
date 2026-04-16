@@ -24,17 +24,24 @@ _config = {
     },
 }
 
-memory = Memory.from_config(_config)
 USER_ID = "user"
+_memory = None
+
+
+def _get_memory() -> Memory:
+    global _memory
+    if _memory is None:
+        _memory = Memory.from_config(_config)
+    return _memory
 
 
 def remember(content: str, category: str = "fact") -> str:
-    memory.add(content, user_id=USER_ID, metadata={"category": category})
+    _get_memory().add(content, user_id=USER_ID, metadata={"category": category})
     return f"Stored: {content}"
 
 
 def recall(query: str) -> str:
-    results = memory.search(query, user_id=USER_ID, limit=5)
+    results = _get_memory().search(query, user_id=USER_ID, limit=5)
     entries = results.get("results", [])
     if not entries:
         return "No relevant memories found."
@@ -42,7 +49,7 @@ def recall(query: str) -> str:
 
 
 def list_memories() -> str:
-    results = memory.get_all(user_id=USER_ID)
+    results = _get_memory().get_all(user_id=USER_ID)
     entries = results.get("results", [])
     if not entries:
         return "No memories stored."
@@ -50,13 +57,13 @@ def list_memories() -> str:
 
 
 def delete_memory(memory_id: str) -> str:
-    memory.delete(memory_id=memory_id)
+    _get_memory().delete(memory_id=memory_id)
     return f"Deleted memory {memory_id}"
 
 
 # Exposed for API endpoints (not a tool)
 def get_all() -> list[dict]:
-    results = memory.get_all(user_id=USER_ID)
+    results = _get_memory().get_all(user_id=USER_ID)
     return results.get("results", [])
 
 
