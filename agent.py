@@ -34,9 +34,65 @@ _REPAIR_USER = (
     "Reply again with ONLY the answer the user should see — no reasoning tags."
 )
 
-_STREAM_TEXT_CHUNK = 160
 # Tool results longer than this get summarized for history; shorter ones kept verbatim.
-_HISTORY_SUMMARIZE_THRESHOLD = 4000
+_HISTORY_SUMMARIZE_THRESHOLD = 8000
+
+
+class _ThinkStripper:
+    """Stream-safe removal of <thought/think/thinking> blocks.
+    State: scanning → buffering → passthrough.
+    Once past any thought block, all chunks are forwarded immediately.
+    """
+    _OPEN_RE  = re.compile(r"<(thought|think|thinking)[\s>]", re.IGNORECASE)
+    _CLOSE_RE = re.compile(r"</(thought|think|thinking)>",    re.IGNORECASE)
+    # Any suffix of the buffer that could be the start of an opening tag.
+    _PARTIAL_OPEN_RE = re.compile(
+        r"(?:<thought[\s>]?|<thinking[\s>]?|<think[\s>]?|<thinkin|<thinki"
+        r"|<thin|<thi|<tho(?:u(?:g(?:ht?)?)?)?|<th|<t|<)$",
+        re.IGNORECASE,
+    )
+
+    def __init__(self):
+        self._state = "scanning"
+        self._buf   = ""
+
+    def feed(self, chunk: str) -> str:
+        if self._state == "passthrough":
+            return chunk
+        self._buf += chunk
+        if self._state == "scanning":
+            m = self._OPEN_RE.search(self._buf)
+            if m:
+                pre         = self._buf[:m.start()]
+                self._buf   = self._buf[m.end():]
+                self._state = "buffering"
+                return pre + self._drain()
+            pm       = self._PARTIAL_OPEN_RE.search(self._buf)
+            safe_end = pm.start() if pm else len(self._buf)
+            out       = self._buf[:safe_end]
+            self._buf = self._buf[safe_end:]
+            return out
+        return self._drain()
+
+    def _drain(self) -> str:
+        m = self._CLOSE_RE.search(self._buf)
+        if m:
+            remaining   = self._buf[m.end():].lstrip("\n")
+            self._buf   = ""
+            self._state = "passthrough"
+            return remaining
+        return ""
+
+    def finalize(self) -> str:
+        if self._state == "buffering":
+            out = self._buf          # unclosed block — return it so response isn't empty
+        elif self._state == "scanning":
+            pm  = self._PARTIAL_OPEN_RE.search(self._buf)
+            out = self._buf[:pm.start()] if pm else self._buf
+        else:
+            out = self._buf
+        self._buf = ""
+        return out
 
 # Sync tools that do HTTP / long completions — run off the event loop.
 _BLOCKING_SYNC_TOOLS = frozenset({"fetch_url"})
@@ -81,10 +137,6 @@ def _visible_after_think(text: str) -> str:
     return _THINK_RE.sub("", text or "").strip()
 
 
-def _chunk_text(s: str) -> list[str]:
-    if not s:
-        return []
-    return [s[i : i + _STREAM_TEXT_CHUNK] for i in range(0, len(s), _STREAM_TEXT_CHUNK)]
 
 
 def _extract_calls(msg) -> list[dict]:
@@ -353,6 +405,8 @@ async def run_stream(user_message: str, history: list[dict]):
 
         content_parts   = []
         tool_calls_acc  = {}
+        stripper        = _ThinkStripper()
+        tool_mode       = False   # once True, suppress text forwarding
 
         async for chunk in stream:
             if not chunk.choices:
@@ -360,6 +414,7 @@ async def run_stream(user_message: str, history: list[dict]):
             delta = chunk.choices[0].delta
 
             if delta.tool_calls:
+                tool_mode = True
                 for tc in delta.tool_calls:
                     idx = tc.index
                     if idx not in tool_calls_acc:
@@ -374,8 +429,17 @@ async def run_stream(user_message: str, history: list[dict]):
                         if tc.function.arguments:
                             tool_calls_acc[idx]["arguments"] += tc.function.arguments
 
-            if delta.content:
+            if delta.content and not tool_mode:
                 content_parts.append(delta.content)
+                forwarded = stripper.feed(delta.content)
+                if forwarded:
+                    yield {"type": "text_chunk", "text": forwarded}
+
+        # Flush any partial thought buffer
+        tail = stripper.finalize()
+        if tail and not tool_mode:
+            yield {"type": "text_chunk", "text": tail}
+            content_parts.append(tail)
 
         full_content = "".join(content_parts)
 
@@ -423,23 +487,22 @@ async def run_stream(user_message: str, history: list[dict]):
             messages.extend(result_messages)
 
         else:
-            visible = _visible_after_think(full_content)
-            if not visible and full_content.strip():
+            # Text was already forwarded chunk-by-chunk during streaming.
+            # If nothing was yielded (model replied entirely inside thought tags),
+            # make a repair call.
+            if not full_content.strip():
+                yield {"type": "error", "detail": "Empty response from model."}
+                return
+            if not any(content_parts):
                 messages.append({"role": "assistant", "content": full_content})
                 messages.append({"role": "user", "content": _REPAIR_USER})
                 response2, provider2 = await _call(messages, use_tools=False)
                 provider_used = provider2
-                rtxt = response2.choices[0].message.content or ""
-                visible = _visible_after_think(rtxt) or rtxt.strip()
-                if not visible:
+                rtxt = _visible_after_think(response2.choices[0].message.content or "")
+                if not rtxt:
                     yield {"type": "error", "detail": "Empty response after repair."}
                     return
-            elif not visible:
-                yield {"type": "error", "detail": "Empty response from model."}
-                return
-
-            for piece in _chunk_text(visible):
-                yield {"type": "text_chunk", "text": piece}
+                yield {"type": "text_chunk", "text": rtxt}
             yield {"type": "done", "provider": provider_used}
             return
 

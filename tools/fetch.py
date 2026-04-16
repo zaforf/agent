@@ -206,8 +206,10 @@ SCHEMAS = [
             "name": "fetch_url",
             "description": (
                 "Fetch a URL and extract specific information from it. "
-                "Always provide a `prompt` describing what to extract — the full page is "
-                "passed to a long-context summarizer which returns exactly what you need. "
+                "Always provide a prompt describing what to extract. "
+                "Note: the summarizer may prioritize conciseness; use explicit constraints "
+                "(e.g. 'exhaustive', 'do not omit') when full detail is required. "
+                "The full page is passed to a long-context summarizer which returns the result. "
                 "Use raw=true only when you need unprocessed text (e.g. code files, data, "
                 "or offset-based pagination)."
             ),

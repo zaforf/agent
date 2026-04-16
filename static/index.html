@@ -26,12 +26,8 @@
       --user-bg:     #1a1917;
       --user-text:   #faf9f6;
       --accent:      #2563eb;
-      --call-bg:       #f0f3ff;
-      --call-border:   #b8c5f0;
-      --call-text:     #3730a3;
-      --result-bg:     #f0f8f6;
-      --result-border: #6bbdb3;
-      --result-text:   #0f4f45;
+      --call-accent:   #507a64;
+      --result-accent: #4a4f4d;
       --danger:      #dc2626;
       --radius:      8px;
       --font:        -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
@@ -188,7 +184,8 @@
     .row { display: flex; }
     .row.user  { justify-content: flex-end; }
     .row.agent { justify-content: flex-start; }
-    .row.step  { justify-content: flex-start; margin-top: -10px; }
+    .row.step                    { justify-content: flex-start; margin-top: -10px; }
+    .row:not(.step) + .row.step  { margin-top: 1px; }
 
     /* Bubbles */
     .bubble {
@@ -214,45 +211,50 @@
     }
 
     /* Tool steps — shared */
-    .step { margin-top: -8px; }
     .step .bubble {
-      font-family: var(--mono);
+      font-family: var(--font);
       font-size: 11.5px;
       padding: 5px 10px;
       max-width: 88%;
       cursor: pointer;
       user-select: none;
     }
-    /* Tool call (→) — warm amber */
-    .tool-call .bubble {
-      background: var(--call-bg);
-      border: 1px solid var(--call-border);
-      color: var(--call-text);
-    }
-    /* Tool result (←) — cool green */
+    /* Tool call / result */
+    .tool-call .bubble,
     .tool-result .bubble {
-      background: var(--result-bg);
-      border: 1px solid var(--result-border);
-      color: var(--result-text);
+      background: #f8f5f2;
+      border: 1px solid var(--border);
+      color: var(--text);
     }
-    /* Step header row (always visible) */
+
+    /* Direction chip — colored square with simple keyboard symbol */
+    .step-tag {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 17px;
+      height: 17px;
+      border-radius: 3px;
+      font-size: 11px;
+      font-weight: 700;
+      flex-shrink: 0;
+      color: #fff;
+      font-family: var(--mono);
+      line-height: 1;
+    }
+    .tool-call .step-tag   { background: var(--call-accent); }
+    .tool-result .step-tag { background: var(--result-accent); }
+
+    /* Step header row */
     .step-header {
       display: flex;
       align-items: center;
-      gap: 5px;
+      gap: 6px;
       font-weight: 500;
     }
-    .step-chevron {
-      font-size: 8px;
-      opacity: 0.5;
-      transition: transform 0.15s;
-      flex-shrink: 0;
-    }
-    .bubble.expanded .step-chevron { transform: rotate(90deg); }
     .step-meta {
       font-weight: normal;
-      opacity: 0.55;
-      margin-left: 4px;
+      opacity: 0.5;
       font-size: 10px;
     }
     /* Step body (collapsed by default) */
@@ -260,8 +262,10 @@
       display: none;
       margin-top: 5px;
       padding-top: 5px;
-      border-top: 1px solid currentColor;
-      opacity: 0.75;
+      border-top: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 10.5px;
+      color: var(--text-2);
       white-space: pre-wrap;
       word-break: break-word;
       user-select: text;
@@ -379,9 +383,28 @@
       max-width: 720px;
       margin: 0 auto;
       padding: 4px 0 0;
-      font-size: 11px;
-      color: var(--text-3);
       min-height: 18px;
+    }
+
+    #thinking-dots {
+      display: none;
+      gap: 5px;
+      align-items: center;
+      height: 18px;
+    }
+    #thinking-dots.active { display: inline-flex; }
+    #thinking-dots span {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--text-3);
+      animation: dot-pulse 1.4s ease-in-out infinite;
+    }
+    #thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+    #thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes dot-pulse {
+      0%, 60%, 100% { opacity: 0.25; transform: translateY(0);    }
+      30%           { opacity: 1;    transform: translateY(-2px); }
     }
 
     /* Buttons — all same height (36px) */
@@ -513,7 +536,9 @@
     <div class="msg-inner" id="msg-inner"></div>
   </div>
   <div id="bar-wrap">
-    <div id="status-line"></div>
+    <div id="status-line">
+      <div id="thinking-dots" aria-label="Thinking"><span></span><span></span><span></span></div>
+    </div>
     <div id="bar">
       <button class="btn btn-icon" id="btn-sessions" onclick="togglePanel('sessions-panel','btn-sessions')" title="Sessions">☰</button>
       <textarea id="input" placeholder="Message…" rows="1"></textarea>
@@ -593,7 +618,6 @@
   const feed    = document.getElementById('msg-inner');
   const input   = document.getElementById('input');
   const sendBtn = document.getElementById('send-btn');
-  const statusEl = document.getElementById('status-line');
 
   let sid = localStorage.getItem('sid') || newSid();
   localStorage.setItem('sid', sid);
@@ -678,7 +702,7 @@
     const bub = document.createElement('div');
     bub.className = 'bubble';
 
-    const arrow = type === 'tool-call' ? '→' : '←';
+    const sym = type === 'tool-call' ? '>' : '<';
 
     const header = document.createElement('div');
     header.className = 'step-header';
@@ -697,10 +721,9 @@
     }
 
     header.innerHTML =
-      `<span class="step-chevron">▶</span>` +
-      `<span>${arrow} <strong>${esc(name)}</strong>` +
-      (meta ? `<span class="step-meta">${esc(meta)}</span>` : '') +
-      `</span>`;
+      `<span class="step-tag">${sym}</span>` +
+      `<strong>${esc(name)}</strong>` +
+      (meta ? `<span class="step-meta">${esc(meta)}</span>` : '');
     bub.appendChild(header);
 
     const body = document.createElement('div');
@@ -881,7 +904,8 @@
     input.value = '';
     resetInputHeight();
     sendBtn.disabled = true;
-    statusEl.textContent = 'thinking…';
+    const dotsEl = document.getElementById('thinking-dots');
+    dotsEl.className = 'active';
 
     const hint = feed.querySelector('.empty-hint');
     if (hint) hint.remove();
@@ -935,9 +959,11 @@
             addStep('tool-result', event.name, event.result);
 
           } else if (event.type === 'text_chunk') {
-            if (!agentMd) agentMd = createAgentBubble(null);
+            if (!agentMd) {
+              agentMd = createAgentBubble(null);
+              dotsEl.className = '';   // hide once text starts flowing
+            }
             textBuffer += event.text;
-            // Use the streaming-safe renderer that patches unclosed code blocks
             agentMd.innerHTML = renderStreamingMarkdown(textBuffer);
             scrollFeed();
 
@@ -946,11 +972,9 @@
             console.debug('[agent] done, provider:', providerUsed,
               'response chars:', textBuffer.length);
             if (agentMd) {
-              // Final render: use regular markdown (text is now complete)
               agentMd.innerHTML = renderMarkdown(textBuffer);
               setTimeout(() => renderMath(agentMd), 0);
 
-              // Show fallback tag if not primary provider
               const primary = 'gemini-gemma4-31b';
               if (providerUsed && providerUsed !== primary) {
                 const tag = document.createElement('div');
@@ -975,7 +999,7 @@
       addAgentMsg('**Error:** ' + String(e));
     } finally {
       sendBtn.disabled = false;
-      statusEl.textContent = '';
+      dotsEl.className = '';
       input.focus();
     }
   }
