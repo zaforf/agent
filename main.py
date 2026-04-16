@@ -51,6 +51,7 @@ class ChatResponse(BaseModel):
     response:   str
     session_id: str
     steps:      list[dict] = []
+    provider:   str = ""
 
 
 # ── Chat (non-streaming, kept for compat / testing) ───────────────────────────
@@ -59,7 +60,7 @@ class ChatResponse(BaseModel):
 async def chat(req: ChatRequest):
     history = _get_history(req.session_id)
     try:
-        response, steps = await agent.run(req.message, history)
+        response, steps, provider = await agent.run(req.message, history)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -68,7 +69,7 @@ async def chat(req: ChatRequest):
     db.append(req.session_id, "user",      req.message)
     db.append(req.session_id, "assistant", response, steps=steps or None)
 
-    return ChatResponse(response=response, session_id=req.session_id, steps=steps)
+    return ChatResponse(response=response, session_id=req.session_id, steps=steps, provider=provider)
 
 
 # ── Chat (streaming SSE) ───────────────────────────────────────────────────────

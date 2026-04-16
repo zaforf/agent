@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import httpx
 from openai import AsyncOpenAI, RateLimitError, APIError, APIConnectionError
 from config import PROVIDERS
 from tools import TOOL_SCHEMAS, TOOL_FUNCTIONS
@@ -11,11 +12,26 @@ log = logging.getLogger(__name__)
 
 # ── Async clients — one per provider with a key ──────────────────────────────
 
+class _DropGoogKeyTransport(httpx.AsyncHTTPTransport):
+    """Strip x-goog-api-key injected by google-generativeai (mem0 dep) so that
+    only the Bearer token is sent — Google rejects requests with both."""
+    async def handle_async_request(self, request):
+        request.headers.pop("x-goog-api-key", None)
+        return await super().handle_async_request(request)
+
+
+def _make_client(p: dict) -> AsyncOpenAI:
+    kwargs: dict = {"api_key": p["api_key"], "base_url": p["base_url"]}
+    if "googleapis.com" in p["base_url"]:
+        kwargs["http_client"] = httpx.AsyncClient(transport=_DropGoogKeyTransport())
+    return AsyncOpenAI(**kwargs)
+
+
 _clients: list[dict] = [
     {
         "name":   p["name"],
         "model":  p["model"],
-        "client": AsyncOpenAI(api_key=p["api_key"], base_url=p["base_url"]),
+        "client": _make_client(p),
     }
     for p in PROVIDERS if p["api_key"]
 ]
@@ -344,9 +360,7 @@ async def run(user_message: str, history: list[dict]) -> tuple[str, list[dict]]:
             if not final:
                 final = "(No visible response from the model.)"
             log.info("done  via=%s  len=%d", provider_used, len(final))
-            if _clients and provider_used != _clients[0]["name"]:
-                final = f"[{provider_used} fallback]\n{final}"
-            return final, steps
+            return final, steps, provider_used
 
         result_blocks = []
         n_tc = len(msg.tool_calls)
@@ -369,7 +383,7 @@ async def run(user_message: str, history: list[dict]) -> tuple[str, list[dict]]:
 
         messages.extend(result_blocks)
 
-    return "Reached max tool iterations.", steps
+    return "Reached max tool iterations.", steps, provider_used
 
 
 # ── Streaming run (used by /chat/stream endpoint) ─────────────────────────────
