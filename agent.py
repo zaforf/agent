@@ -434,6 +434,8 @@ async def run_stream(user_message: str, history: list[dict]):
                 forwarded = stripper.feed(delta.content)
                 if forwarded:
                     yield {"type": "text_chunk", "text": forwarded}
+                elif stripper._state == "buffering":
+                    yield {"type": "thinking_chars", "count": len(stripper._buf)}
 
         # Flush any partial thought buffer
         tail = stripper.finalize()

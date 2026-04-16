@@ -350,6 +350,7 @@
       border-top: 1px solid var(--border);
       background: var(--surface);
       padding: 10px 16px;
+      position: relative;
     }
     #bar {
       max-width: 720px;
@@ -379,33 +380,19 @@
     #input:focus { border-color: var(--accent); }
     #input::placeholder { color: var(--text-3); }
 
-    #status-line {
+    #thinking-ind {
+      display: none;
+      position: absolute;
+      bottom: 100%;
+      left: 16px;
+      right: 16px;
       max-width: 720px;
       margin: 0 auto;
-      padding: 4px 0 0;
-      min-height: 18px;
+      padding: 5px 0;
+      font-size: 13px;
+      color: var(--text-3);
     }
-
-    #thinking-dots {
-      display: none;
-      gap: 5px;
-      align-items: center;
-      height: 18px;
-    }
-    #thinking-dots.active { display: inline-flex; }
-    #thinking-dots span {
-      width: 4px;
-      height: 4px;
-      border-radius: 50%;
-      background: var(--text-3);
-      animation: dot-pulse 1.4s ease-in-out infinite;
-    }
-    #thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
-    #thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes dot-pulse {
-      0%, 60%, 100% { opacity: 0.25; transform: translateY(0);    }
-      30%           { opacity: 1;    transform: translateY(-2px); }
-    }
+    #thinking-ind.active { display: block; }
 
     /* Buttons — all same height (36px) */
     .btn {
@@ -536,9 +523,7 @@
     <div class="msg-inner" id="msg-inner"></div>
   </div>
   <div id="bar-wrap">
-    <div id="status-line">
-      <div id="thinking-dots" aria-label="Thinking"><span></span><span></span><span></span></div>
-    </div>
+    <div id="thinking-ind"><span id="thinking-lbl"></span><span id="thinking-dots-txt"></span></div>
     <div id="bar">
       <button class="btn btn-icon" id="btn-sessions" onclick="togglePanel('sessions-panel','btn-sessions')" title="Sessions">☰</button>
       <textarea id="input" placeholder="Message…" rows="1"></textarea>
@@ -896,6 +881,35 @@
     document.getElementById('sp-overlay').classList.remove('open');
   }
 
+  // ── Thinking indicator ────────────────────────────────────
+
+  const thinkEl   = document.getElementById('thinking-ind');
+  const thinkLbl  = document.getElementById('thinking-lbl');
+  const thinkDots = document.getElementById('thinking-dots-txt');
+  const _DOT_FRAMES = ['.', '..', '...', '..', '.'];
+  let _dotIdx = 0, _dotTimer = null;
+
+  function _showThinking(label) {
+    thinkLbl.textContent = label || '';
+    thinkEl.className = 'active';
+    if (!_dotTimer) {
+      _dotIdx = 0;
+      thinkDots.textContent = _DOT_FRAMES[0];
+      _dotTimer = setInterval(() => {
+        _dotIdx = (_dotIdx + 1) % _DOT_FRAMES.length;
+        thinkDots.textContent = _DOT_FRAMES[_dotIdx];
+      }, 320);
+    }
+  }
+
+  function _hideThinking() {
+    thinkEl.className = '';
+    clearInterval(_dotTimer);
+    _dotTimer = null;
+    thinkLbl.textContent = '';
+    thinkDots.textContent = '';
+  }
+
   // ── Send (streaming) ──────────────────────────────────────
 
   async function send() {
@@ -904,8 +918,7 @@
     input.value = '';
     resetInputHeight();
     sendBtn.disabled = true;
-    const dotsEl = document.getElementById('thinking-dots');
-    dotsEl.className = 'active';
+    _showThinking('');
 
     const hint = feed.querySelector('.empty-hint');
     if (hint) hint.remove();
@@ -948,20 +961,25 @@
           try { event = JSON.parse(line.slice(6)); }
           catch { continue; }
 
-          if (event.type === 'tool_call') {
+          if (event.type === 'thinking_chars') {
+            _showThinking('received ' + event.count.toLocaleString() + ' chars');
+
+          } else if (event.type === 'tool_call') {
             console.debug('[agent] tool_call:', event.name, event.args);
             addStep('tool-call', event.name, event.args);
             if (event.name === 'remember') remembered = true;
+            _showThinking('');
 
           } else if (event.type === 'tool_result') {
             console.debug('[agent] tool_result:', event.name,
               String(event.result ?? '').slice(0, 120));
             addStep('tool-result', event.name, event.result);
+            _showThinking('');
 
           } else if (event.type === 'text_chunk') {
             if (!agentMd) {
               agentMd = createAgentBubble(null);
-              dotsEl.className = '';   // hide once text starts flowing
+              _hideThinking();
             }
             textBuffer += event.text;
             agentMd.innerHTML = renderStreamingMarkdown(textBuffer);
@@ -999,7 +1017,7 @@
       addAgentMsg('**Error:** ' + String(e));
     } finally {
       sendBtn.disabled = false;
-      dotsEl.className = '';
+      _hideThinking();
       input.focus();
     }
   }
