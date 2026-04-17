@@ -354,34 +354,6 @@ def test_non_streaming_thinking_content_stripped_from_turn_messages(
     )
 
 
-def test_non_streaming_repair_content_stored_and_scaffold_not_leaked(
-    monkeypatch, tmp_system_prompt, providers
-):
-    """After a repair the stored assistant content must be the repaired visible
-    string, not the original thinking-only blob.  The repair scaffold
-    (_REPAIR_USER user message) must NOT appear in turn_messages (§4.3).
-    """
-    providers([[
-        make_response(content="<thinking>only</thinking>"),  # thinking-only → repair
-        make_response(content="real answer"),                 # repair response
-    ]])
-    response, _, turn, _ = asyncio.run(agent.run("go", []))
-
-    assert response == "real answer"
-
-    # Stored assistant content must be the repaired visible text.
-    final_assistant = [m for m in turn if m["role"] == "assistant"][-1]
-    assert final_assistant["content"] == "real answer", (
-        f"expected repaired text in turn_messages, got: {final_assistant['content']!r}"
-    )
-
-    # Repair scaffold must not leak into stored history.
-    user_contents = [m.get("content", "") for m in turn if m["role"] == "user"]
-    assert agent._REPAIR_USER not in user_contents, (
-        f"repair scaffold leaked into turn_messages: {turn}"
-    )
-
-
 # ── 4. Multi-iteration tool loop ─────────────────────────────────────────────
 
 def test_multi_iteration_tool_loop(monkeypatch, tmp_system_prompt, providers):

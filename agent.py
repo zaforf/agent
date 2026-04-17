@@ -430,10 +430,8 @@ async def run(
         if not calls:
             final = _visible_after_think(content)
             if not final and content.strip():
-                # Use a scratch list so the repair scaffold does not leak into
-                # stored history — mirrors the streaming repair path (§4.3).
-                repair_messages = messages + [{"role": "user", "content": _REPAIR_USER}]
-                response2, provider2 = await _call(repair_messages, use_tools=False)
+                messages.append({"role": "user", "content": _REPAIR_USER})
+                response2, provider2 = await _call(messages, use_tools=False)
                 provider_used = provider2
                 content2 = response2.choices[0].message.content or ""
                 final = _visible_after_think(content2) or content2.strip()
