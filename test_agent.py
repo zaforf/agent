@@ -175,7 +175,52 @@ def test_db_sessions_preview_is_latest_user():
     assert "older" not in prev, f"Preview should not be first user: {prev!r}"
     db.clear(sid)
 
-for fn in [test_db_round_trip, test_db_sessions_list, test_db_sessions_preview_is_latest_user]:
+def test_db_history_tool_call_reload():
+    """After a tool-call turn, get_display_history() must return display-friendly messages
+    with no empty agent bubbles — i.e. exactly one user and one assistant (with steps).
+    """
+    import db, json
+    sid = f"test-tc-{uuid.uuid4().hex[:8]}"
+    db.init()
+    try:
+        turn_messages = [
+            {"role": "user", "content": "search for something"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "tc_1", "type": "function",
+                 "function": {"name": "fetch_url", "arguments": '{"url":"http://example.com","prompt":"extract info"}'}}
+            ]},
+            {"role": "tool", "name": "fetch_url", "tool_call_id": "tc_1",
+             "content": "Example page content."},
+            {"role": "assistant", "content": "Here is the info from the page."},
+        ]
+        db.append_turn(sid, "search for something", turn_messages)
+
+        # get_display_history() returns display-friendly messages for the frontend
+        display = db.get_display_history(sid)
+
+        assert len(display) == 2, f"Expected 2 display messages (user + assistant), got {len(display)}: {display}"
+
+        assert display[0]["role"] == "user"
+        assert display[0]["content"] == "search for something"
+
+        assert display[1]["role"] == "assistant"
+        assert display[1]["content"] == "Here is the info from the page.", \
+            f"Wrong assistant content: {display[1]['content']!r}"
+
+        # Tool call steps should be attached to the assistant message
+        steps = display[1].get("steps", [])
+        step_types = [s["type"] for s in steps]
+        assert "tool_call"   in step_types, f"Missing tool_call step: {steps}"
+        assert "tool_result" in step_types, f"Missing tool_result step: {steps}"
+
+        # No empty content on any displayed message
+        for msg in display:
+            assert msg.get("content"), f"Display message has empty content: {msg}"
+    finally:
+        db.clear(sid)
+
+for fn in [test_db_round_trip, test_db_sessions_list, test_db_sessions_preview_is_latest_user,
+           test_db_history_tool_call_reload]:
     run_test(fn.__name__, fn)
 
 # ── 4. Memory (Qdrant) ────────────────────────────────────────────────────────
@@ -294,13 +339,13 @@ print("\n== 7. End-to-end chat ==")
 
 def test_e2e_simple():
     import asyncio, agent
-    response, steps, provider = asyncio.run(agent.run("Reply with exactly: PING_OK", []))
+    response, steps, provider, turn_messages = asyncio.run(agent.run("Reply with exactly: PING_OK", []))
     assert isinstance(response, str) and len(response) > 0, "Empty response"
     assert "PING_OK" in response, f"Expected 'PING_OK' in response, got: {response!r}"
 
 def test_e2e_with_tool_call():
     import asyncio, agent
-    response, steps, provider = asyncio.run(agent.run(
+    response, steps, provider, turn_messages = asyncio.run(agent.run(
         "Use recall to look up anything about Zafir, then give a one-sentence answer about what you found or didn't find.",
         []
     ))
@@ -330,7 +375,7 @@ def test_history_with_steps_sanitized_in_run():
         {"role": "user", "content": "ping"},
         {"role": "assistant", "content": "pong", "steps": []},
     ]
-    response, _, _provider = asyncio.run(agent.run("Say exactly: SANITIZED_OK", history))
+    response, _, _provider, _turn_messages = asyncio.run(agent.run("Say exactly: SANITIZED_OK", history))
     assert "SANITIZED_OK" in response, response
 
 for fn in [test_e2e_simple, test_e2e_with_tool_call, test_e2e_streaming,

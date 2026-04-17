@@ -925,8 +925,9 @@
 
     addUserMsg(text);
 
-    let agentMd       = null;   // md-content div, created on first text_chunk
-    let textBuffer    = '';
+    let agentMd       = null;   // md-content div for the current text segment
+    let textBuffer    = '';     // full response text (all segments)
+    let bubbleBuffer  = '';     // text for the current bubble only
     let remembered    = false;
     let providerUsed  = null;
 
@@ -966,6 +967,14 @@
 
           } else if (event.type === 'tool_call') {
             console.debug('[agent] tool_call:', event.name, event.args);
+            // Finalize the current text bubble before appending tool steps,
+            // then reset so the next text_chunk creates a new bubble after them.
+            if (agentMd) {
+              agentMd.innerHTML = renderMarkdown(bubbleBuffer);
+              setTimeout(() => renderMath(agentMd), 0);
+              agentMd = null;
+              bubbleBuffer = '';
+            }
             addStep('tool-call', event.name, event.args);
             if (event.name === 'remember') remembered = true;
             _showThinking('');
@@ -981,8 +990,9 @@
               agentMd = createAgentBubble(null);
               _hideThinking();
             }
-            textBuffer += event.text;
-            agentMd.innerHTML = renderStreamingMarkdown(textBuffer);
+            textBuffer   += event.text;
+            bubbleBuffer += event.text;
+            agentMd.innerHTML = renderStreamingMarkdown(bubbleBuffer);
             scrollFeed();
 
           } else if (event.type === 'done') {
@@ -990,7 +1000,7 @@
             console.debug('[agent] done, provider:', providerUsed,
               'response chars:', textBuffer.length);
             if (agentMd) {
-              agentMd.innerHTML = renderMarkdown(textBuffer);
+              agentMd.innerHTML = renderMarkdown(bubbleBuffer);
               setTimeout(() => renderMath(agentMd), 0);
 
               const primary = 'gemini-gemma4-31b';

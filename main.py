@@ -60,14 +60,12 @@ class ChatResponse(BaseModel):
 async def chat(req: ChatRequest):
     history = _get_history(req.session_id)
     try:
-        response, steps, provider = await agent.run(req.message, history)
+        response, steps, provider, turn_messages = await agent.run(req.message, history)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    history.append({"role": "user",      "content": req.message})
-    history.append({"role": "assistant", "content": response})
-    db.append(req.session_id, "user",      req.message)
-    db.append(req.session_id, "assistant", response, steps=steps or None)
+    history.extend(turn_messages)
+    db.append_turn(req.session_id, req.message, turn_messages, steps=steps or None)
 
     return ChatResponse(response=response, session_id=req.session_id, steps=steps, provider=provider)
 
@@ -79,8 +77,9 @@ async def chat_stream(req: ChatRequest):
     history = _get_history(req.session_id)
 
     async def generate():
-        full_response = ""
+        full_response  = ""
         steps: list[dict] = []
+        turn_messages: list[dict] = []
 
         try:
             async for event in agent.run_stream(req.message, history):
@@ -88,6 +87,8 @@ async def chat_stream(req: ChatRequest):
                     full_response += event["text"]
                 elif event["type"] in ("tool_call", "tool_result"):
                     steps.append(event)
+                elif event["type"] == "done":
+                    turn_messages = event.get("turn_messages", [])
 
                 yield f"data: {json.dumps(event)}\n\n"
 
@@ -96,12 +97,10 @@ async def chat_stream(req: ChatRequest):
             return
 
         # Persist once stream is complete
-        if full_response:
-            history.append({"role": "user",      "content": req.message})
-            history.append({"role": "assistant", "content": full_response})
-            db.append(req.session_id, "user",      req.message)
-            db.append(req.session_id, "assistant", full_response,
-                      steps=steps if steps else None)
+        if full_response and turn_messages:
+            history.extend(turn_messages)
+            db.append_turn(req.session_id, req.message, turn_messages,
+                           steps=steps if steps else None)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -110,7 +109,7 @@ async def chat_stream(req: ChatRequest):
 
 @app.get("/sessions/{session_id}/history")
 def session_history(session_id: str):
-    return {"messages": db.get_history(session_id)}
+    return {"messages": db.get_display_history(session_id)}
 
 
 @app.delete("/sessions/{session_id}")

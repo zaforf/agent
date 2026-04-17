@@ -135,6 +135,8 @@ def _sanitize_message(m: dict) -> dict | None:
     if role == "tool":
         o["tool_call_id"] = m.get("tool_call_id", "")
         o["content"] = m.get("content", "")
+        if m.get("name"):
+            o["name"] = m["name"]
     return o
 
 
@@ -269,8 +271,21 @@ async def _run_tool_async(name: str, args: dict) -> str:
     return _invoke_sync()
 
 
+_PAGINATION_RE = re.compile(
+    r'\[…[^\]]*call fetch_url with offset=(\d+)[^\]]*\]'
+)
+
+
 async def _summarize_for_history(name: str, args: dict, user_message: str, content: str) -> str:
     """Summarize a large tool result for storage in conversation history."""
+    # For fetch_url, preserve pagination note — the summarizer would drop it,
+    # but the agent needs it to know the next offset to request.
+    pagination_note = None
+    if name == "fetch_url":
+        m = _PAGINATION_RE.search(content)
+        if m:
+            pagination_note = m.group(0)
+
     messages = [
         {
             "role": "system",
@@ -294,6 +309,8 @@ async def _summarize_for_history(name: str, args: dict, user_message: str, conte
         resp, _ = await _call(messages, use_tools=False)
         summary = _visible_after_think(resp.choices[0].message.content or "")
         if summary:
+            if pagination_note:
+                summary = f"{summary}\n\n{pagination_note}"
             log.info("history-summary  %s  %d→%d chars", name, len(content), len(summary))
             return f"[history summary of {name}]\n{summary}"
     except Exception as e:
@@ -303,8 +320,14 @@ async def _summarize_for_history(name: str, args: dict, user_message: str, conte
 
 # ── Non-streaming run (used by /chat endpoint) ────────────────────────────────
 
-async def run(user_message: str, history: list[dict]) -> tuple[str, list[dict]]:
-    """Returns (final_response, steps)."""
+async def run(user_message: str, history: list[dict]) -> tuple[str, list[dict], str, list[dict]]:
+    """Returns (final_response, steps, provider, turn_messages).
+
+    turn_messages is the full slice of messages added this turn — starting from
+    the user message through to the final assistant reply, including all
+    intermediate tool-call and tool-result messages. Store this in history so
+    the model sees its own tool usage on the next turn.
+    """
     steps: list[dict] = []
     history = _sanitize_history(history)
     messages = [
@@ -312,22 +335,24 @@ async def run(user_message: str, history: list[dict]) -> tuple[str, list[dict]]:
         *history,
         {"role": "user", "content": user_message},
     ]
+    turn_start = 1 + len(history)   # index of the user message; everything from here is new
 
     provider_used = _clients[0]["name"] if _clients else "none"
     # Pending background summarization tasks: (message_dict, asyncio.Task)
     pending_summaries: list[tuple[dict, asyncio.Task]] = []
 
     for iteration in range(MAX_TOOL_ITERATIONS):
-        # Resolve any background summaries from the previous iteration before
-        # the next LLM call, so history is compact going forward.
+        response, provider = await _call(messages)
+
+        # Resolve summaries AFTER the LLM call so the model always sees the full
+        # tool output for the turn it is responding to. Summaries only apply to
+        # turns the model has already responded to (i.e. future iterations).
         if pending_summaries:
             results = await asyncio.gather(*(t for _, t in pending_summaries), return_exceptions=True)
             for (msg_dict, _), summary in zip(pending_summaries, results):
                 if isinstance(summary, str):
                     msg_dict["content"] = summary
             pending_summaries.clear()
-
-        response, provider = await _call(messages)
         provider_used = provider
         msg     = response.choices[0].message
         content = msg.content or ""
@@ -353,7 +378,7 @@ async def run(user_message: str, history: list[dict]) -> tuple[str, list[dict]]:
             if not final:
                 final = "(No visible response from the model.)"
             log.info("done  via=%s  len=%d", provider_used, len(final))
-            return final, steps, provider_used
+            return final, steps, provider_used, messages[turn_start:]
 
         result_blocks = []
         n_tc = len(msg.tool_calls)
@@ -368,7 +393,7 @@ async def run(user_message: str, history: list[dict]) -> tuple[str, list[dict]]:
 
             if i < n_tc:
                 tc_id = msg.tool_calls[i].id
-                msg_dict = {"role": "tool", "tool_call_id": tc_id, "content": result}
+                msg_dict = {"role": "tool", "name": name, "tool_call_id": tc_id, "content": result}
                 result_blocks.append(msg_dict)
                 if len(result) > _HISTORY_SUMMARIZE_THRESHOLD:
                     task = asyncio.create_task(_summarize_for_history(name, args, user_message, result))
@@ -376,7 +401,7 @@ async def run(user_message: str, history: list[dict]) -> tuple[str, list[dict]]:
 
         messages.extend(result_blocks)
 
-    return "Reached max tool iterations.", steps, provider_used
+    return "Reached max tool iterations.", steps, provider_used, messages[turn_start:]
 
 
 # ── Streaming run (used by /chat/stream endpoint) ─────────────────────────────
@@ -396,27 +421,19 @@ async def run_stream(user_message: str, history: list[dict]):
         *history,
         {"role": "user", "content": user_message},
     ]
+    turn_start = 1 + len(history)   # index of the user message; everything from here is new
 
     provider_used = _clients[0]["name"] if _clients else "none"
     # Pending background summarization tasks: (message_dict, asyncio.Task)
     pending_summaries: list[tuple[dict, asyncio.Task]] = []
 
     for iteration in range(MAX_TOOL_ITERATIONS):
-        # Resolve summaries from the previous iteration before calling the LLM again.
-        # They run concurrently with the streaming response above, so by the time
-        # we loop back here they're usually already done.
-        if pending_summaries:
-            results = await asyncio.gather(*(t for _, t in pending_summaries), return_exceptions=True)
-            for (msg_dict, _), summary in zip(pending_summaries, results):
-                if isinstance(summary, str):
-                    msg_dict["content"] = summary
-            pending_summaries.clear()
-
         stream, provider = await _call_stream(messages)
         provider_used    = provider
         log.info("turn[%d]  provider=%s", iteration, provider)
 
-        content_parts   = []
+        raw_parts       = []   # raw stream content including thinking tags
+        visible_parts   = []   # stripped visible content for history storage
         tool_calls_acc  = {}
         stripper        = _ThinkStripper()
         tool_mode       = False   # once True, suppress text forwarding
@@ -443,9 +460,10 @@ async def run_stream(user_message: str, history: list[dict]):
                             tool_calls_acc[idx]["arguments"] += tc.function.arguments
 
             if delta.content and not tool_mode:
-                content_parts.append(delta.content)
+                raw_parts.append(delta.content)
                 forwarded = stripper.feed(delta.content)
                 if forwarded:
+                    visible_parts.append(forwarded)
                     yield {"type": "text_chunk", "text": forwarded}
                 elif stripper._state == "buffering":
                     yield {"type": "thinking_chars", "count": len(stripper._buf)}
@@ -453,10 +471,22 @@ async def run_stream(user_message: str, history: list[dict]):
         # Flush any partial thought buffer
         tail = stripper.finalize()
         if tail and not tool_mode:
+            visible_parts.append(tail)
             yield {"type": "text_chunk", "text": tail}
-            content_parts.append(tail)
+            raw_parts.append(tail)
 
-        full_content = "".join(content_parts)
+        full_content    = "".join(raw_parts)
+        visible_content = "".join(visible_parts)
+
+        # Resolve summaries AFTER the stream is consumed — the LLM already received
+        # the full content when the request was made; replacing now only affects the
+        # next iteration's call.
+        if pending_summaries:
+            results = await asyncio.gather(*(t for _, t in pending_summaries), return_exceptions=True)
+            for (msg_dict, _), summary in zip(pending_summaries, results):
+                if isinstance(summary, str):
+                    msg_dict["content"] = summary
+            pending_summaries.clear()
 
         if tool_calls_acc:
             native_tc_list = []
@@ -470,7 +500,7 @@ async def run_stream(user_message: str, history: list[dict]):
 
             messages.append({
                 "role":       "assistant",
-                "content":    full_content or None,
+                "content":    visible_content or None,
                 "tool_calls": native_tc_list,
             })
 
@@ -491,6 +521,7 @@ async def run_stream(user_message: str, history: list[dict]):
 
                 msg_dict = {
                     "role":         "tool",
+                    "name":         name,
                     "tool_call_id": tc["id"],
                     "content":      result,
                 }
@@ -508,7 +539,7 @@ async def run_stream(user_message: str, history: list[dict]):
             if not full_content.strip():
                 yield {"type": "error", "detail": "Empty response from model."}
                 return
-            if not any(content_parts):
+            if not any(raw_parts):
                 messages.append({"role": "assistant", "content": full_content})
                 messages.append({"role": "user", "content": _REPAIR_USER})
                 response2, provider2 = await _call(messages, use_tools=False)
@@ -517,8 +548,12 @@ async def run_stream(user_message: str, history: list[dict]):
                 if not rtxt:
                     yield {"type": "error", "detail": "Empty response after repair."}
                     return
+                messages.append({"role": "assistant", "content": rtxt})
                 yield {"type": "text_chunk", "text": rtxt}
-            yield {"type": "done", "provider": provider_used}
+            else:
+                # Append the final assistant message for history reconstruction
+                messages.append({"role": "assistant", "content": visible_content})
+            yield {"type": "done", "provider": provider_used, "turn_messages": messages[turn_start:]}
             return
 
     yield {"type": "error", "detail": "Reached max tool iterations."}

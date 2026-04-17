@@ -60,8 +60,8 @@ class _TextExtractor(HTMLParser):
 
 
 def _summarize_content(text: str, prompt: str) -> str:
-    """Send page text to gemini-2.0-flash with the caller's extraction prompt."""
-    from config import GEMINI_API_KEY, GEMINI_BASE_URL
+    """Send page text to the Gemini native API with the caller's extraction prompt."""
+    from config import GEMINI_API_KEY
 
     if len(text) > _SUMMARIZER_CHAR_LIMIT:
         text = (
@@ -69,45 +69,39 @@ def _summarize_content(text: str, prompt: str) -> str:
             + f"\n[…content truncated at {_SUMMARIZER_CHAR_LIMIT:,} chars]"
         )
 
+    # Use native Gemini endpoint with ?key= — new AI Studio keys (AQ. prefix)
+    # don't work with Bearer auth on the OpenAI compat endpoint.
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{_SUMMARIZER_MODEL}:generateContent"
     payload = {
-        "model": _SUMMARIZER_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a precise document analyst. "
-                    "Extract and summarize exactly what the user requests from the provided content. "
-                    "Be comprehensive, accurate, and well-structured."
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"{prompt}\n\n---\n\n{text}",
-            },
+        "systemInstruction": {
+            "parts": [{"text": (
+                "You are a precise document analyst. "
+                "Extract and summarize exactly what the user requests from the provided content. "
+                "Be comprehensive, accurate, and well-structured."
+            )}],
+        },
+        "contents": [
+            {"role": "user", "parts": [{"text": f"{prompt}\n\n---\n\n{text}"}]},
         ],
-        "max_tokens": 8192,
+        "generationConfig": {"maxOutputTokens": 8192},
     }
 
     log.info("fetch-summarize  %.80s", prompt)
-    headers = {
-        "Authorization": f"Bearer {GEMINI_API_KEY}",
-        "Content-Type": "application/json",
-    }
     with httpx.Client(timeout=60) as client:
         for attempt in range(3):
-            resp = client.post(
-                f"{GEMINI_BASE_URL}chat/completions",
-                headers=headers,
-                json=payload,
-            )
+            resp = client.post(url, params={"key": GEMINI_API_KEY}, json=payload)
             if resp.status_code == 429 and attempt < 2:
                 wait = 2 ** attempt
                 log.warning("fetch summarizer: 429 rate limit, retrying in %ds (attempt %d)", wait, attempt + 1)
                 time.sleep(wait)
                 continue
             resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"] or ""
-            return _THINK_RE.sub("", content).strip()
+            candidates = resp.json().get("candidates", [])
+            if not candidates:
+                raise RuntimeError("no candidates in summarizer response")
+            parts = candidates[0].get("content", {}).get("parts", [])
+            content = "".join(p["text"] for p in parts if "text" in p and not p.get("thought"))
+            return content.strip()
 
     raise RuntimeError("fetch summarizer: all retries exhausted")
 
