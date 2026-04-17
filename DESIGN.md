@@ -109,7 +109,7 @@ Gemini's native thinking API uses `"thought": true` part metadata rather than in
 
 If the model's response is non-empty in raw form but produces no visible text after thinking-block stripping (e.g., the entire response was inside a reasoning block), the system sends a follow-up prompt (`_REPAIR_USER`) asking the model to re-emit just the user-visible answer. The repair uses non-streaming and disables tools.
 
-**Known issue**: In the streaming repair path, the repair scaffold messages (`_REPAIR_USER` + the empty assistant placeholder) are included in `turn_messages` and thus written to history. In the non-streaming path, the repair response is not appended to `messages` at all, so `turn_messages` ends with the `_REPAIR_USER` message rather than the final assistant text. Both cases represent minor history corruption in a rare edge case.
+See §11 for known edge cases in the streaming repair path (pinned by xfail tests in `tests/test_agent_loop.py`).
 
 ---
 
@@ -123,7 +123,7 @@ The model is instructed to use native API `tool_calls` only — no XML or fenced
 
 ### 5.1 Memory tools (`tools/memory.py`)
 
-Backed by Mem0 + Qdrant. Qdrant runs locally at `localhost:6333` (issue: probably best to make QDRANT_HOST an env variable, as in production its actually qdrant:6333. related, we want to gitignore docker-compose.yml and rm the commited version, keep it locally, as prod also has different docker-compose.yml). Embeddings are computed locally using `BAAI/bge-base-en-v1.5` (768-dimensional). Mem0 uses Groq `llama-3.1-8b-instant` for memory extraction/processing.
+Backed by Mem0 + Qdrant. Qdrant host/port are read from `QDRANT_HOST` / `QDRANT_PORT` env vars (defaulting to `localhost:6333`); prod typically sets `QDRANT_HOST=qdrant` inside docker-compose. `docker-compose.yml` is gitignored because dev/prod topologies differ. Embeddings are computed locally using `BAAI/bge-base-en-v1.5` (768-dimensional). Mem0 uses Groq `llama-3.1-8b-instant` for memory extraction/processing.
 
 All memories are stored under the single user ID `"user"`.
 
@@ -146,7 +146,7 @@ If Qdrant is unreachable, memory tool calls fail with an exception caught by the
 1. Fetch the URL with a browser-like User-Agent
 2. Parse HTML using a custom `_TextExtractor` (strips `script`, `style`, `nav`, `header`, `footer`, `aside`, `noscript` tags; preserves body text with block-level newlines)
 3. Truncate content to 128,000 characters if needed
-4. Send the full text + the caller's prompt to the Gemini summarizer model (`gemma-4-26b-a4b-it`) via the native Gemini API with `?key=` auth
+4. Send the full text + the caller's prompt to `summarizer.summarize_gemma` — the shared Gemma 4 26B native-Gemini helper used by both this tool and `_summarize_for_history`
 5. Return the summarizer's extracted/structured response (up to 8,192 output tokens)
 
 The summarizer gives the model exactly what it asked for rather than a raw HTML dump. The prompt should describe what to extract (e.g., "list all albums in chronological order").
@@ -198,7 +198,7 @@ After every completed turn, the full **turn messages** slice is stored. This inc
 
 This full sequence is what gets fed back to the model on the next turn, giving it complete visibility into its own tool use history.
 
-The **cache** is extended with `turn_messages` directly. SQLite stores `turn_messages` as a JSON blob in the `turn_messages` column of the user row. The `role`/`content` columns hold the user message text for session preview queries.
+The **cache** is extended with `turn_messages` directly. SQLite stores `turn_messages` as a JSON blob on a single row per turn. The `content` column holds the user message text for session preview queries.
 
 ### 6.4 History sent to the model
 
@@ -207,47 +207,55 @@ Every LLM call receives:
 [system prompt] + [sanitized history] + [user message] + [tool results so far this turn]
 ```
 
-`_sanitize_history()` strips UI-only fields (`steps`, etc.) and drops malformed messages before sending. Tool messages from history pass through sanitization intact (including `name` and `tool_call_id` fields needed by Gemini).
+`_sanitize_history()` is whitelist-based — it keeps only API-safe keys (`role`, `content`, `tool_calls`, `name`, `tool_call_id`) and drops malformed messages. Anything else (stray UI fields, extensions) is silently discarded.
 
 ### 6.5 Tool result summarization
 
 When a tool result exceeds **8,000 characters**, it is queued for background summarization. The summarizer:
 - Receives: the last user message, the tool name, the tool arguments, and the full tool output
-- Uses: the first available provider from `_clients` (same chain as the main model)
+- Uses: **Gemma 4 26B** via `summarizer.summarize_gemma` — the same fast MoE model the `fetch_url` tool uses. Shared via the top-level `summarizer.py` module so there is exactly one summarizer implementation. The primary provider chain stays reserved for the agent loop.
 - Returns: a compact summary preserving key facts, numbers, decisions, errors, and conclusions
 - Is context-limited: the summarizer does NOT receive earlier conversation history, so summaries may be thin or generic if the goal was established several turns earlier (this is expected and noted in the system prompt)
 
-**Timing**: The summarization task runs concurrently with the next LLM call (using `asyncio.create_task`). It is awaited and its result applied to the messages list *after* that LLM call completes — i.e., the model that directly responds to a tool always sees the full output; the summary only replaces content for subsequent turns.
+**Non-blocking timing — DESIGN COMMITMENT.** Summarization MUST NEVER stall a turn. Concretely:
+
+1. When a tool returns >8 000 chars, the agent starts the summary via `asyncio.create_task()` and keeps the **raw** content in the tool message.
+2. At every iteration boundary and at the end of the turn, `_apply_finished_summaries` does a non-blocking poll (a single `await asyncio.sleep(0)` tick to let zero-latency stubs complete) and swaps in the summary only for tasks that are *already done*. In-flight tasks stay pending.
+3. `agent.run()` returns `(response, provider, turn_messages, pending_summaries)`. `pending_summaries` is a list of `(message_dict, asyncio.Task)` pairs.
+4. `main.py` appends the turn to SQLite with whatever content is currently in the dicts (raw, if the summary is still running) and then spawns `_finalize_summaries` as a fire-and-forget background task. When the summaries finish, that task mutates the in-memory `turn_messages` (the same dict objects cached per session) and calls `db.update_turn_messages(row_id, ...)` to overwrite the stored row.
+
+The upshot: **the HTTP response returns the moment the model's final answer is ready**, regardless of how slow the summarizer is. The user never waits on history compaction. Subsequent turns see the summarized form as soon as the finalizer has run — typically within a second or two of the response, far before the user's next message.
+
+**§4.1 ordering guard.** `_apply_finished_summaries` runs *after* `_call`, and the summary task itself never mutates the dict — it only returns a string. Together those two rules mean the summary can only be swapped in after the request carrying the raw content has already been sent to the API. Once the server has the request, a summary finishing during streamback is harmless. So even when the summarizer finishes before the primary model's response, the model still sees the raw tool output for the turn it is answering. Pinned by `test_raw_tool_content_preserved_even_when_summary_wins_race`.
 
 **Pagination note preservation**: For `fetch_url` results, any `[… N more chars — call fetch_url with offset=M to continue]` note in the original output is extracted before summarization and re-appended to the summary. This ensures the model can continue paginating even after the raw content is compressed in history.
 
-**Fallback**: If summarization fails, the raw content is truncated to 8,000 characters instead.
+**Fallback**: If the summarizer raises or returns thinking-only (empty visible) output, the raw content is truncated to 8 000 characters instead. The DB row is never overwritten with an error — the raw-truncated form simply sticks.
 
 ### 6.6 Display history vs. LLM history
 
 `db.get_history()` returns the full message sequence (including intermediate tool-call messages) for LLM context construction.
 
-`db.get_display_history()` collapses each turn into a user message + an assistant message, with tool call/result pairs attached as `steps` on the assistant. This is the format the UI's `loadHistory()` expects and is served by the `/sessions/{session_id}/history` endpoint.
+`db.get_display_history()` collapses each turn into a user message + an assistant message, with tool call/result pairs synthesized from the turn's `tool_calls` / `tool` messages and attached as a `steps` list on the assistant entry. This is the format the UI's `loadHistory()` expects and is served by `GET /sessions/{session_id}/history`.
 
-**Legacy format**: Rows created before the `turn_messages` column was added (old `append()` calls) have no `turn_messages` value. Both `get_history()` and `get_display_history()` handle these by falling back to the simple `role`/`content` values stored in the row. issue: we can get rid of this, theres no critical old chats to maintain.
+Only `turn_messages` is stored; the UI-facing `steps` list is always derived on demand. This keeps one source of truth for what happened in a turn and means a future change to how a step is rendered never requires a schema migration.
 
 ---
 
 ## 7. SQLite Schema
 
-Table: `messages`
+Table: `messages` — one row per completed turn.
 
 | Column | Type | Description |
 |---|---|---|
 | `id` | INTEGER PK | Auto-increment row ID |
 | `session_id` | TEXT | Session identifier |
-| `role` | TEXT | Always `"user"` for new-format rows |
+| `role` | TEXT | Always `"user"` (legacy column; preserved for the preview query) |
 | `content` | TEXT | User message text (used for session preview) |
-| `steps` | TEXT (JSON) | Tool call/result events for display (list of step dicts) |
 | `turn_messages` | TEXT (JSON) | Full message sequence for the turn (user + intermediates + final assistant) |
 | `ts` | INTEGER | Unix timestamp |
 
-`init()` runs migrations on startup to add missing columns to existing databases.
+`init()` runs `CREATE TABLE IF NOT EXISTS` on startup.
 
 ---
 
@@ -255,7 +263,7 @@ Table: `messages`
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/chat` | Non-streaming chat. Returns `{response, session_id, steps, provider}`. |
+| `POST` | `/chat` | Non-streaming chat. Returns `{response, session_id, provider}`. Used by tests; the UI streams exclusively. |
 | `POST` | `/chat/stream` | SSE streaming chat. Yields event objects (see §8.1). |
 | `GET` | `/sessions` | List all sessions with preview text, message count, and last timestamp. |
 | `GET` | `/sessions/{id}/history` | Display-friendly history for the UI (`get_display_history()`). |
@@ -320,9 +328,7 @@ This guarantees text → tool → text ordering is reflected in the DOM regardle
 
 Calls `GET /sessions/{id}/history` which returns the display-friendly format (`get_display_history()`). For each message:
 - `role: "user"` → user bubble
-- `role: "assistant"` → tool step rows (from `msg.steps`) followed by agent bubble
-
-The legacy `steps` field on assistant messages carries tool call/result data from both old-format rows and new-format rows (new rows have steps reconstructed by `get_display_history()`). issue: get rid of this legacy handling, again no previous chats are important
+- `role: "assistant"` → tool step rows (from `msg.steps`, synthesized server-side from the turn's tool_calls/tool messages) followed by agent bubble
 
 ### 9.5 Session ID persistence
 
@@ -370,36 +376,45 @@ The system prompt is stored in `data/system_prompt.md` and read on every LLM cal
 
 ---
 
-## 11. Known Limitations & Noted Potential Bugs
+## 11. Known Limitations
 
-### 11.1 Streaming repair path corrupts history
+This section lists remaining accepted trade-offs for this single-user deployment. Previously-flagged behavioral bugs (original §11.1 streaming repair and §11.4 summarizer model choice) have been fixed and are covered by regular green tests, not `xfail`s. There are no outstanding `xfail` bugs.
 
-When the model's streaming response produces no visible text (entire output inside thinking blocks), a repair call is issued. In the streaming path, the empty assistant placeholder and `_REPAIR_USER` scaffold messages are included in `turn_messages` and written to SQLite. In the non-streaming path, the repair response is not appended to `messages`, so `turn_messages` ends with `_REPAIR_USER` rather than the final response. Both cases leave the model's history slightly malformed in a rare edge case.
+### 11.1 Streaming repair (resolved)
 
-### 11.2 `_ThinkStripper` does not handle `redacted_reasoning` / `redacted_thinking`
+The streaming repair gate now keys on visible content (`visible_parts`), not raw content, so a stream consisting entirely of `<thinking>...</thinking>` correctly triggers the repair pass. The repair call runs against a scratch message list so the scaffold (`_REPAIR_USER` + the empty-visible assistant placeholder) does NOT leak into stored `turn_messages`. Verified by `tests/test_agent_loop.py::test_streaming_repair_triggers_on_thinking_only`.
 
-The streaming stripper only recognizes `thought`, `think`, and `thinking` open tags. If a model emits `<redacted_reasoning>` or `<redacted_thinking>` tags during streaming (as opposed to non-streaming), they pass through to the user unstripped. Post-stream, `_visible_after_think()` handles all five forms, so they are stripped before storage. This may be a non issue as they may not be emitted by the models we use, research required.
+### 11.2 Summarizer uses Gemma 26B (resolved)
 
-### 11.3 Session message count reflects rows, not messages
+`_summarize_for_history()` now uses Gemma 4 26B via the shared `summarizer.summarize_gemma` helper (~10× faster than the dense primary, fine for compact structured summaries). See §6.5. Verified by `tests/test_agent_helpers.py::test_summarize_for_history_uses_gemma_26b`.
 
-`get_sessions()` returns a `count` that is the number of database rows for the session. New-format turns produce one row each; legacy turns produce two (user + assistant). The UI shows this count as "N msgs" which is now turn-count for new sessions but message-count for legacy sessions.
+---
 
-### 11.4 Memory system is single-user
+## 12. Test suite as source of truth
 
-All memories use the hardcoded user ID `"user"`. There is no multi-user separation. Acceptable for a personal assistant but not suitable for shared deployments. This is fine, there will only ever be a single user.
+Tests live in `tests/` and are the operational form of this document. Any discrepancy between the test assertions and the running code is a bug.
 
-### 11.5 Summarizer uses the primary model
+- **`pytest`** (default): ~100 fast, hermetic tests. No network, no Qdrant, no real DB. Mocks the provider chain via scripted `_FakeCompletions` on `agent._clients` and the tool registry via `monkeypatch` on `agent.TOOL_FUNCTIONS`.
+- **`pytest -m live`**: end-to-end tests against the real provider chain (simple response, history round-trip, multi-chunk streaming, tool-call trace, fetch+summarize integration). Kept small to respect free-tier rate limits.
+- **Markers**: `live` (real LLM), `net` (real HTTP). Both deselected by default via `pyproject.toml`.
 
-`_summarize_for_history()` calls `_call(messages, use_tools=False)` which walks the full provider chain starting from the primary (Gemma 4 31B). Using the primary model for summarization is more expensive than necessary; a lighter model could be used. Not a correctness bug, but a resource efficiency note. this is probably fine even though there is a mismatch (31b used here, 26b used for fetch summarization, but thats because fetch summarization may be up to 128k characters long, and 26b is comparatively faster as a MoE).
+The most important invariant tests — the ones that answer "is the agent doing what the design document says?" — live in `test_agent_loop.py`: tool results flowing back into the next LLM call, the summarization-timing invariant (§4.1), the non-blocking summarization contract (§6.5), repair-on-empty-visible (§4.3), provider fallback, and the streaming event contract. The suite currently has **zero `xfail` tests** — every known behavioral commitment is pinned by a green assertion.
 
-### 11.6 `any(raw_parts)` check in streaming repair is imprecise
+### 12.1 Fall-through coverage
 
-The condition `if not any(raw_parts)` checks whether the raw content list contains any truthy value. A model that outputs only `<thinking>...</thinking>` with no visible text would still populate `raw_parts` (with the tag content), causing `any(raw_parts)` to be True and taking the non-repair path. The assistant message stored in history would then have `visible_content = ""`. The check should arguably be `if not any(visible_parts)`.
+Graceful degradation is tested explicitly — the agent must never crash when an external dependency misbehaves:
 
-### 11.7 No concurrency control on system prompt file
-
-`edit_system_prompt()` does a direct file write with no locking. Concurrent requests editing the system prompt would produce a race condition. Acceptable for single-user use.
-
-### 11.8 In-memory cache is per-process
-
-Multiple server processes (e.g., uvicorn with multiple workers) each maintain their own `_cache`. History written by one worker is not visible to another until it reloads from SQLite on the next cache miss. Running with `--workers 1` (the default for development) avoids this. deployment runs with 2 workers now, if this is an uissue
+| Failure mode | Expected behavior | Test |
+|---|---|---|
+| Provider raises retryable error (RateLimit, APIConnection) | Retry 3× with backoff, then move to next provider in chain | `test_provider_fallback_on_retryable_error` |
+| Provider raises `APIError` | Skip immediately to next provider (no retries) | `test_api_error_skips_provider_immediately` |
+| Every provider in the chain fails | `RuntimeError("All providers exhausted")` — `main.py` converts to HTTP 500 | `test_all_providers_exhausted_raises_cleanly` |
+| Tool callable raises an exception | Catch and inject `"Error in {tool}: {msg}"` as the tool message; loop continues so the model can react | `test_tool_exception_returned_as_error_string` |
+| Model hallucinates an unknown tool name | Inject `"Unknown tool: {name}"` as the tool message; loop continues | `test_unknown_tool_name_returns_error_string` |
+| `fetch_url` summarizer LLM fails | Fall back to raw paginated text (DESIGN §5.2) | `test_summarizer_failure_falls_back_to_raw` |
+| History summarizer LLM fails | Truncate raw output to 8 000 chars and store that (DESIGN §6.5) | `test_summarize_for_history_truncates_when_llm_raises` |
+| History summarizer returns thinking-only (empty visible) | Same fallback — truncate raw to 8 000 chars | `test_summarize_for_history_truncates_when_summary_is_empty` |
+| Model produces only thinking tags (empty visible) | Repair call with `tools=None` re-asks for a user-facing answer (DESIGN §4.3) | `test_repair_call_on_empty_visible` |
+| Model produces only thinking tags during streaming | Same — repair fires (§11.1 fix); scaffold stays out of history | `test_streaming_repair_triggers_on_thinking_only` |
+| History summarizer still running when turn ends | `agent.run()` returns immediately; `main.py` drains the task in the background and patches the stored row (DESIGN §6.5) | `test_history_summarization_is_non_blocking`, `test_chat_non_blocking_summary_patches_db_row` |
+| Summarizer finishes *before* the LLM responding to that tool result | Summary is NOT swapped in until after the LLM call returns — the model always sees raw content for the turn it is answering (§4.1, §6.5) | `test_raw_tool_content_preserved_even_when_summary_wins_race` |

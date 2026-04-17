@@ -1,0 +1,269 @@
+"""FastAPI endpoint tests with mocked agent so no LLM calls fire.
+
+Exercise:
+- /health
+- /sessions + /sessions/{id}/history + DELETE /sessions/{id}
+- /chat (non-streaming): persists turn_messages + updates cache
+- /chat/stream (SSE): emits events + persists on done
+- The in-memory _cache short-circuits repeat DB reads
+"""
+from __future__ import annotations
+
+import json
+from collections.abc import AsyncIterator
+
+import pytest
+from fastapi.testclient import TestClient
+
+import main
+import db
+import agent
+
+
+@pytest.fixture
+def client(tmp_db, monkeypatch):
+    # Isolate the per-process cache between tests
+    monkeypatch.setattr(main, "_cache", {})
+    with TestClient(main.app) as c:
+        yield c
+
+
+# ── Health & basic endpoints ──────────────────────────────────────────────────
+
+def test_health(client):
+    r = client.get("/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+
+
+def test_sessions_empty(client):
+    r = client.get("/sessions")
+    assert r.status_code == 200
+    assert r.json() == {"sessions": []}
+
+
+def test_history_empty_for_unknown_session(client):
+    r = client.get("/sessions/unknown-id/history")
+    assert r.status_code == 200
+    assert r.json() == {"messages": []}
+
+
+# ── /chat (non-streaming) ────────────────────────────────────────────────────
+
+def test_chat_persists_turn_messages(client, monkeypatch):
+    async def fake_run(user_message, history):
+        turn = [
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": "from-fake"},
+        ]
+        return "from-fake", "fake-provider", turn, []
+
+    monkeypatch.setattr(agent, "run", fake_run)
+
+    r = client.post("/chat", json={"message": "hi", "session_id": "s1"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["response"] == "from-fake"
+    assert body["provider"] == "fake-provider"
+
+    # Persisted in DB
+    hist = db.get_history("s1")
+    assert [m["role"] for m in hist] == ["user", "assistant"]
+    assert hist[1]["content"] == "from-fake"
+
+    # And visible on display endpoint
+    r2 = client.get("/sessions/s1/history")
+    msgs = r2.json()["messages"]
+    assert msgs[0]["role"] == "user"
+    assert msgs[1]["content"] == "from-fake"
+
+
+def test_chat_uses_cache_on_second_request(client, monkeypatch):
+    """Second request for the same session should not re-read the DB."""
+    async def fake_run(user_message, history):
+        return "ok", "p", [
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": "ok"},
+        ], []
+    monkeypatch.setattr(agent, "run", fake_run)
+
+    reads = []
+    orig = db.get_history
+    def _spy(sid):
+        reads.append(sid)
+        return orig(sid)
+    monkeypatch.setattr(db, "get_history", _spy)
+
+    client.post("/chat", json={"message": "one", "session_id": "c1"})
+    client.post("/chat", json={"message": "two", "session_id": "c1"})
+
+    assert reads == ["c1"], f"DB should be read exactly once per session, got {reads}"
+
+
+def test_chat_non_blocking_summary_patches_db_row(tmp_db, monkeypatch):
+    """DESIGN §6.5 end-to-end: when agent.run returns pending summary tasks,
+    main.py must (a) return the response to the user immediately with raw
+    content stored, (b) drain the pending tasks in the background, (c)
+    overwrite the stored turn with the summary once the tasks finish.
+
+    Calls `main.chat()` directly instead of going through TestClient so the
+    whole scenario shares one event loop — pending tasks, Events, and the
+    background finalizer all need to be on the same loop.
+    """
+    import asyncio
+
+    import main as main_module
+
+    async def _scenario():
+        # Isolate per-test state in the shared main module.
+        monkeypatch.setattr(main_module, "_cache", {})
+        monkeypatch.setattr(main_module, "_background_tasks", set())
+
+        release = asyncio.Event()
+
+        async def _delayed_summary():
+            await release.wait()
+            return "[history summary of big_tool]\nDELAYED_SUMMARY"
+
+        async def fake_run(user_message, history):
+            tool_msg = {
+                "role": "tool",
+                "name": "big_tool",
+                "tool_call_id": "tc_1",
+                "content": "X" * 9000,
+            }
+            turn = [
+                {"role": "user", "content": user_message},
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "tc_1", "type": "function",
+                                 "function": {"name": "big_tool", "arguments": "{}"}}]},
+                tool_msg,
+                {"role": "assistant", "content": "done"},
+            ]
+            pending = [(tool_msg, asyncio.create_task(_delayed_summary()))]
+            return "done", "fake", turn, pending
+
+        monkeypatch.setattr(agent, "run", fake_run)
+
+        # 1. Handler returns immediately — summary still in flight.
+        req = main_module.ChatRequest(message="hi", session_id="bg1")
+        resp = await main_module.chat(req)
+        assert resp.response == "done"
+        assert len(main_module._background_tasks) == 1, (
+            "finalizer task should be registered and still running"
+        )
+
+        # 2. DB row holds the raw content at this point.
+        hist_before = db.get_history("bg1")
+        tool_row_before = [m for m in hist_before if m["role"] == "tool"][0]
+        assert tool_row_before["content"] == "X" * 9000, (
+            "DB should initially hold raw content — summary is still pending"
+        )
+
+        # 3. Release the summary and wait for the finalizer to fire.
+        release.set()
+        for _ in range(100):
+            await asyncio.sleep(0)
+            if not main_module._background_tasks:
+                break
+        else:
+            raise AssertionError("background finalizer never completed")
+
+        # 4. DB row was patched.
+        hist_after = db.get_history("bg1")
+        tool_row_after = [m for m in hist_after if m["role"] == "tool"][0]
+        assert "DELAYED_SUMMARY" in tool_row_after["content"], (
+            f"DB row was not updated with the summary: "
+            f"{tool_row_after['content'][:100]!r}"
+        )
+
+    asyncio.run(_scenario())
+
+
+def test_chat_propagates_agent_error(client, monkeypatch):
+    async def boom(*a, **kw):
+        raise RuntimeError("provider exhausted")
+    monkeypatch.setattr(agent, "run", boom)
+
+    r = client.post("/chat", json={"message": "x", "session_id": "err1"})
+    assert r.status_code == 500
+    assert "provider exhausted" in r.json()["detail"]
+
+
+# ── /chat/stream (SSE) ───────────────────────────────────────────────────────
+
+def test_chat_stream_events_and_persist(client, monkeypatch):
+    async def fake_stream(user_message, history):
+        yield {"type": "text_chunk", "text": "hel"}
+        yield {"type": "text_chunk", "text": "lo"}
+        yield {"type": "done", "provider": "fake",
+               "turn_messages": [
+                   {"role": "user", "content": user_message},
+                   {"role": "assistant", "content": "hello"},
+               ]}
+
+    monkeypatch.setattr(agent, "run_stream", fake_stream)
+
+    with client.stream("POST", "/chat/stream",
+                       json={"message": "go", "session_id": "s-stream"}) as r:
+        assert r.status_code == 200
+        lines = [ln for ln in r.iter_lines() if ln.startswith("data: ")]
+
+    events = [json.loads(ln[6:]) for ln in lines]
+    types = [e["type"] for e in events]
+    assert types == ["text_chunk", "text_chunk", "done"]
+    assert "".join(e["text"] for e in events if e["type"] == "text_chunk") == "hello"
+
+    # Persisted
+    hist = db.get_history("s-stream")
+    assert [m["role"] for m in hist] == ["user", "assistant"]
+    assert hist[1]["content"] == "hello"
+
+
+def test_chat_stream_handles_error_event(client, monkeypatch):
+    async def fake_stream(user_message, history):
+        yield {"type": "text_chunk", "text": "partial"}
+        raise RuntimeError("boom midway")
+
+    monkeypatch.setattr(agent, "run_stream", fake_stream)
+
+    with client.stream("POST", "/chat/stream",
+                       json={"message": "x", "session_id": "err-stream"}) as r:
+        data = b"".join(r.iter_bytes()).decode()
+
+    assert "boom midway" in data
+    # Nothing should have been persisted on error
+    assert db.get_history("err-stream") == []
+
+
+# ── DELETE /sessions/{id} ────────────────────────────────────────────────────
+
+def test_delete_session_clears_cache_and_db(client, monkeypatch):
+    async def fake_run(msg, h):
+        return "ok", "p", [
+            {"role": "user", "content": msg},
+            {"role": "assistant", "content": "ok"},
+        ], []
+    monkeypatch.setattr(agent, "run", fake_run)
+
+    client.post("/chat", json={"message": "x", "session_id": "dl"})
+    assert db.get_history("dl")
+    assert "dl" in main._cache
+
+    r = client.delete("/sessions/dl")
+    assert r.status_code == 200
+    assert "dl" not in main._cache
+    assert db.get_history("dl") == []
+
+
+# ── /system-prompt ───────────────────────────────────────────────────────────
+
+def test_get_and_put_system_prompt(client, tmp_system_prompt):
+    r = client.get("/system-prompt")
+    assert r.status_code == 200
+    assert "Test system prompt" in r.json()["content"]
+
+    r2 = client.put("/system-prompt", json={"content": "# replaced\n"})
+    assert r2.status_code == 200
+
+    assert tmp_system_prompt.read_text() == "# replaced\n"

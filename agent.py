@@ -5,6 +5,7 @@ import re
 from openai import AsyncOpenAI, RateLimitError, APIError, APIConnectionError
 from gemini_client import GeminiClient
 from config import PROVIDERS
+from summarizer import summarize_gemma
 from tools import TOOL_SCHEMAS, TOOL_FUNCTIONS
 from tools.self_modify import get_system_prompt
 
@@ -108,7 +109,7 @@ _BLOCKING_SYNC_TOOLS = frozenset({"fetch_url"})
 
 
 def _sanitize_message(m: dict) -> dict | None:
-    """Keep only API-safe keys. Drops UI-only fields like `steps`."""
+    """Keep only API-safe keys. Whitelist-based — any extra fields are dropped."""
     role = m.get("role")
     if role not in ("user", "assistant", "system", "tool"):
         return None
@@ -276,8 +277,23 @@ _PAGINATION_RE = re.compile(
 )
 
 
+_HISTORY_SUMMARY_SYSTEM = (
+    "You are a precise summarizer. Given a tool call and its output, produce a compact "
+    "summary that retains everything relevant to the user's request and the tool's purpose. "
+    "Keep key facts, numbers, decisions, errors, and conclusions. Omit boilerplate and repetition."
+)
+
+
 async def _summarize_for_history(name: str, args: dict, user_message: str, content: str) -> str:
-    """Summarize a large tool result for storage in conversation history."""
+    """Summarize a large tool result for storage in conversation history.
+
+    Uses Gemma 26B (same model the fetch tool uses) — ~10x faster than the
+    primary and fine-grained enough for compact structured summaries. This
+    keeps `_clients` (the primary provider chain) reserved for the agent loop.
+
+    Falls back to truncating the raw content to `_HISTORY_SUMMARIZE_THRESHOLD`
+    chars if the summarizer fails or returns nothing visible.
+    """
     # For fetch_url, preserve pagination note — the summarizer would drop it,
     # but the agent needs it to know the next offset to request.
     pagination_note = None
@@ -286,28 +302,18 @@ async def _summarize_for_history(name: str, args: dict, user_message: str, conte
         if m:
             pagination_note = m.group(0)
 
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are a precise summarizer. Given a tool call and its output, produce a compact "
-                "summary that retains everything relevant to the user's request and the tool's purpose. "
-                "Keep key facts, numbers, decisions, errors, and conclusions. Omit boilerplate and repetition."
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"User request: {user_message}\n"
-                f"Tool called: {name}\n"
-                f"Tool args: {json.dumps(args)}\n\n"
-                f"Tool output:\n{content}"
-            ),
-        },
-    ]
+    user_prompt = (
+        f"User request: {user_message}\n"
+        f"Tool called: {name}\n"
+        f"Tool args: {json.dumps(args)}\n\n"
+        f"Tool output:\n{content}"
+    )
+
     try:
-        resp, _ = await _call(messages, use_tools=False)
-        summary = _visible_after_think(resp.choices[0].message.content or "")
+        summary = await asyncio.to_thread(
+            summarize_gemma, _HISTORY_SUMMARY_SYSTEM, user_prompt
+        )
+        summary = _visible_after_think(summary)
         if summary:
             if pagination_note:
                 summary = f"{summary}\n\n{pagination_note}"
@@ -318,17 +324,57 @@ async def _summarize_for_history(name: str, args: dict, user_message: str, conte
     return content[:_HISTORY_SUMMARIZE_THRESHOLD]
 
 
+# ── Non-blocking summary application ─────────────────────────────────────────
+
+async def _apply_finished_summaries(
+    pending: list[tuple[dict, asyncio.Task]]
+) -> None:
+    """Opportunistically apply any summary tasks that have already completed.
+
+    This is the mechanism that enforces DESIGN §6.5's non-blocking guarantee:
+    a slow summarizer MUST NOT stall a turn. Tasks still in flight are left in
+    `pending` for the caller to drain after the turn is persisted.
+
+    A single `asyncio.sleep(0)` tick gives zero-I/O summarizers (used in tests
+    and as the "cache hit" fast path) a chance to run to completion before we
+    check, so the common case still applies summaries before the turn returns.
+    """
+    if not pending:
+        return
+    await asyncio.sleep(0)
+    remaining: list[tuple[dict, asyncio.Task]] = []
+    for msg_dict, task in pending:
+        if task.done():
+            try:
+                result = task.result()
+                if isinstance(result, str):
+                    msg_dict["content"] = result
+            except Exception as e:
+                log.warning("pending summary raised: %s", e)
+        else:
+            remaining.append((msg_dict, task))
+    pending[:] = remaining
+
+
 # ── Non-streaming run (used by /chat endpoint) ────────────────────────────────
 
-async def run(user_message: str, history: list[dict]) -> tuple[str, list[dict], str, list[dict]]:
-    """Returns (final_response, steps, provider, turn_messages).
+async def run(
+    user_message: str, history: list[dict]
+) -> tuple[str, str, list[dict], list[tuple[dict, asyncio.Task]]]:
+    """Returns (final_response, provider, turn_messages, pending_summaries).
 
-    turn_messages is the full slice of messages added this turn — starting from
-    the user message through to the final assistant reply, including all
+    `turn_messages` is the full slice of messages added this turn — starting
+    from the user message through to the final assistant reply, including all
     intermediate tool-call and tool-result messages. Store this in history so
     the model sees its own tool usage on the next turn.
+
+    `pending_summaries` is a list of (message_dict, asyncio.Task) pairs for
+    tool-result summaries that had not finished by the time the turn returned.
+    The caller may await the tasks after persisting the turn and then update
+    the stored row with the summarized content — see `main.py`. Under the
+    non-blocking contract, callers MUST NOT await these in a path that stalls
+    the user's response.
     """
-    steps: list[dict] = []
     history = _sanitize_history(history)
     messages = [
         {"role": "system", "content": _build_system_prompt()},
@@ -344,15 +390,12 @@ async def run(user_message: str, history: list[dict]) -> tuple[str, list[dict], 
     for iteration in range(MAX_TOOL_ITERATIONS):
         response, provider = await _call(messages)
 
-        # Resolve summaries AFTER the LLM call so the model always sees the full
-        # tool output for the turn it is responding to. Summaries only apply to
-        # turns the model has already responded to (i.e. future iterations).
-        if pending_summaries:
-            results = await asyncio.gather(*(t for _, t in pending_summaries), return_exceptions=True)
-            for (msg_dict, _), summary in zip(pending_summaries, results):
-                if isinstance(summary, str):
-                    msg_dict["content"] = summary
-            pending_summaries.clear()
+        # Non-blocking: apply any summaries that finished during the LLM call.
+        # The model just saw the raw tool output for the turn it is responding
+        # to (§4.1), so it's safe to swap in summaries for subsequent turns now.
+        # Unfinished tasks stay pending — the caller drains them post-turn.
+        await _apply_finished_summaries(pending_summaries)
+
         provider_used = provider
         msg     = response.choices[0].message
         content = msg.content or ""
@@ -378,7 +421,7 @@ async def run(user_message: str, history: list[dict]) -> tuple[str, list[dict], 
             if not final:
                 final = "(No visible response from the model.)"
             log.info("done  via=%s  len=%d", provider_used, len(final))
-            return final, steps, provider_used, messages[turn_start:]
+            return final, provider_used, messages[turn_start:], pending_summaries
 
         result_blocks = []
         n_tc = len(msg.tool_calls)
@@ -386,10 +429,8 @@ async def run(user_message: str, history: list[dict]) -> tuple[str, list[dict], 
             name = call.get("name", "")
             args = call.get("args", {})
             log.info("tool-call  %s  %s", name, str(args)[:120])
-            steps.append({"type": "tool_call",   "name": name, "args": args})
             result = await _run_tool_async(name, args)
             log.debug("run: tool_result %s → %.120s", name, result)
-            steps.append({"type": "tool_result", "name": name, "result": result})
 
             if i < n_tc:
                 tc_id = msg.tool_calls[i].id
@@ -401,7 +442,7 @@ async def run(user_message: str, history: list[dict]) -> tuple[str, list[dict], 
 
         messages.extend(result_blocks)
 
-    return "Reached max tool iterations.", steps, provider_used, messages[turn_start:]
+    return "Reached max tool iterations.", provider_used, messages[turn_start:], pending_summaries
 
 
 # ── Streaming run (used by /chat/stream endpoint) ─────────────────────────────
@@ -412,8 +453,14 @@ async def run_stream(user_message: str, history: list[dict]):
       {"type": "tool_call",   "name": str, "args": dict}
       {"type": "tool_result", "name": str, "result": str}
       {"type": "text_chunk",  "text": str}
-      {"type": "done",        "provider": str}
+      {"type": "done",        "provider": str, "turn_messages": list, "pending_summaries": list}
       {"type": "error",       "detail": str}
+
+    The `done` event's `pending_summaries` is a list of (message_dict,
+    asyncio.Task) pairs for tool-result summaries not yet finished. The caller
+    (main.py) drains them in the background after persisting the turn — see
+    DESIGN §6.5. `pending_summaries` MUST be popped by the caller before the
+    event is JSON-serialized onto the SSE stream.
     """
     history = _sanitize_history(history)
     messages = [
@@ -478,15 +525,11 @@ async def run_stream(user_message: str, history: list[dict]):
         full_content    = "".join(raw_parts)
         visible_content = "".join(visible_parts)
 
-        # Resolve summaries AFTER the stream is consumed — the LLM already received
-        # the full content when the request was made; replacing now only affects the
-        # next iteration's call.
-        if pending_summaries:
-            results = await asyncio.gather(*(t for _, t in pending_summaries), return_exceptions=True)
-            for (msg_dict, _), summary in zip(pending_summaries, results):
-                if isinstance(summary, str):
-                    msg_dict["content"] = summary
-            pending_summaries.clear()
+        # Non-blocking: apply any summaries that finished while streaming. The
+        # model for this turn already saw the raw tool output (§4.1), so it is
+        # safe to swap in summaries for future turns now. Unfinished tasks
+        # stay pending — the caller drains them post-turn.
+        await _apply_finished_summaries(pending_summaries)
 
         if tool_calls_acc:
             native_tc_list = []
@@ -533,16 +576,22 @@ async def run_stream(user_message: str, history: list[dict]):
             messages.extend(result_messages)
 
         else:
-            # Text was already forwarded chunk-by-chunk during streaming.
-            # If nothing was yielded (model replied entirely inside thought tags),
-            # make a repair call.
-            if not full_content.strip():
-                yield {"type": "error", "detail": "Empty response from model."}
-                return
-            if not any(raw_parts):
-                messages.append({"role": "assistant", "content": full_content})
-                messages.append({"role": "user", "content": _REPAIR_USER})
-                response2, provider2 = await _call(messages, use_tools=False)
+            # Text was already forwarded chunk-by-chunk during streaming. The
+            # repair gate keys on VISIBLE content, not raw — a stream that is
+            # entirely <thinking>...</thinking> has non-empty raw content but
+            # zero visible content, and the user still saw nothing. §4.3.
+            if not visible_content.strip():
+                if not full_content.strip():
+                    yield {"type": "error", "detail": "Empty response from model."}
+                    return
+                # Thinking-only reply → repair. Run the repair against a scratch
+                # message list so the scaffold (`_REPAIR_USER` + the empty-visible
+                # assistant placeholder) does NOT leak into stored history.
+                repair_messages = messages + [
+                    {"role": "assistant", "content": full_content},
+                    {"role": "user", "content": _REPAIR_USER},
+                ]
+                response2, provider2 = await _call(repair_messages, use_tools=False)
                 provider_used = provider2
                 rtxt = _visible_after_think(response2.choices[0].message.content or "")
                 if not rtxt:
@@ -551,9 +600,13 @@ async def run_stream(user_message: str, history: list[dict]):
                 messages.append({"role": "assistant", "content": rtxt})
                 yield {"type": "text_chunk", "text": rtxt}
             else:
-                # Append the final assistant message for history reconstruction
                 messages.append({"role": "assistant", "content": visible_content})
-            yield {"type": "done", "provider": provider_used, "turn_messages": messages[turn_start:]}
+            yield {
+                "type": "done",
+                "provider": provider_used,
+                "turn_messages": messages[turn_start:],
+                "pending_summaries": pending_summaries,
+            }
             return
 
     yield {"type": "error", "detail": "Reached max tool iterations."}

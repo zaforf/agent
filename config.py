@@ -4,10 +4,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-CEREBRAS_API_KEY   = os.environ.get("CEREBRAS_API_KEY", "")
-GROQ_API_KEY       = os.environ.get("GROQ_API_KEY", "")
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
+CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY", "")
+GROQ_API_KEY     = os.environ.get("GROQ_API_KEY", "")
+GEMINI_API_KEY   = os.environ.get("GEMINI_API_KEY", "")
 
 # Provider chain — tried in order on rate-limit/failure.
 #
@@ -47,11 +46,11 @@ PROVIDERS: list[dict] = [
     },
 ]
 
-# Paths
 DATA_DIR           = Path(__file__).parent / "data"
 SYSTEM_PROMPT_PATH = DATA_DIR / "system_prompt.md"
 
-# Memory (Mem0 + Qdrant)
-QDRANT_HOST  = "localhost"
-QDRANT_PORT  = 6333
+# Memory (Mem0 + Qdrant). Host is configurable so dev/prod can differ
+# (dev: localhost; prod docker-compose: `qdrant`).
+QDRANT_HOST  = os.environ.get("QDRANT_HOST", "localhost")
+QDRANT_PORT  = int(os.environ.get("QDRANT_PORT", "6333"))
 MEM0_USER_ID = "user"

@@ -8,5 +8,7 @@ sentence-transformers
 groq
 python-dotenv
 pydantic
-aiofiles
 gunicorn
+
+# Dev / test
+pytest

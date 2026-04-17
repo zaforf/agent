@@ -1,9 +1,9 @@
 """Web fetch tool — retrieve a URL and return readable plain text.
 
 Default behaviour: the full page is passed to a fast long-context summarizer
-(gemini-2.0-flash, 1 M-token context) together with a caller-supplied prompt,
-so the model receives exactly the information it asked for rather than a
-truncated chunk of raw HTML text.
+(Gemma 4 26B, 1M-token context) together with a caller-supplied prompt, so the
+model receives exactly the information it asked for rather than a truncated
+chunk of raw HTML text.
 
 Pass raw=True to get the unprocessed text with offset-based pagination instead.
 """
@@ -12,20 +12,15 @@ import re
 import time
 from html.parser import HTMLParser
 
-_THINK_RE = re.compile(
-    r"<(thought|think|thinking)[\s>].*?</\1>",
-    re.DOTALL | re.IGNORECASE,
-)
-
 import httpx
+
+from summarizer import summarize_gemma
 
 log = logging.getLogger(__name__)
 
 _SKIP_TAGS = {"script", "style", "nav", "header", "footer", "aside", "noscript"}
 _BLOCK_TAGS = {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "br", "tr", "article"}
 
-# Summarizer: gemma-4-26b — MoE (3.8B active params), fast, large context
-_SUMMARIZER_MODEL      = "gemma-4-26b-a4b-it"
 _SUMMARIZER_CHAR_LIMIT = 128_000   # chars fed to summarizer (well within model limit)
 _RAW_CHAR_LIMIT        = 8_000     # chars returned in raw/paginated mode
 _FETCH_RETRIES         = 4
@@ -59,51 +54,25 @@ class _TextExtractor(HTMLParser):
         return raw.strip()
 
 
-def _summarize_content(text: str, prompt: str) -> str:
-    """Send page text to the Gemini native API with the caller's extraction prompt."""
-    from config import GEMINI_API_KEY
+_FETCH_SYSTEM_INSTRUCTION = (
+    "You are a precise document analyst. "
+    "Extract and summarize exactly what the user requests from the provided content. "
+    "Be comprehensive, accurate, and well-structured."
+)
 
+
+def _summarize_content(text: str, prompt: str) -> str:
+    """Send page text to Gemma 26B with the caller's extraction prompt."""
     if len(text) > _SUMMARIZER_CHAR_LIMIT:
         text = (
             text[:_SUMMARIZER_CHAR_LIMIT]
             + f"\n[…content truncated at {_SUMMARIZER_CHAR_LIMIT:,} chars]"
         )
-
-    # Use native Gemini endpoint with ?key= — new AI Studio keys (AQ. prefix)
-    # don't work with Bearer auth on the OpenAI compat endpoint.
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{_SUMMARIZER_MODEL}:generateContent"
-    payload = {
-        "systemInstruction": {
-            "parts": [{"text": (
-                "You are a precise document analyst. "
-                "Extract and summarize exactly what the user requests from the provided content. "
-                "Be comprehensive, accurate, and well-structured."
-            )}],
-        },
-        "contents": [
-            {"role": "user", "parts": [{"text": f"{prompt}\n\n---\n\n{text}"}]},
-        ],
-        "generationConfig": {"maxOutputTokens": 8192},
-    }
-
     log.info("fetch-summarize  %.80s", prompt)
-    with httpx.Client(timeout=60) as client:
-        for attempt in range(3):
-            resp = client.post(url, params={"key": GEMINI_API_KEY}, json=payload)
-            if resp.status_code == 429 and attempt < 2:
-                wait = 2 ** attempt
-                log.warning("fetch summarizer: 429 rate limit, retrying in %ds (attempt %d)", wait, attempt + 1)
-                time.sleep(wait)
-                continue
-            resp.raise_for_status()
-            candidates = resp.json().get("candidates", [])
-            if not candidates:
-                raise RuntimeError("no candidates in summarizer response")
-            parts = candidates[0].get("content", {}).get("parts", [])
-            content = "".join(p["text"] for p in parts if "text" in p and not p.get("thought"))
-            return content.strip()
-
-    raise RuntimeError("fetch summarizer: all retries exhausted")
+    return summarize_gemma(
+        _FETCH_SYSTEM_INSTRUCTION,
+        f"{prompt}\n\n---\n\n{text}",
+    )
 
 
 def _fetch_with_retries(url: str, headers: dict) -> httpx.Response:
@@ -140,8 +109,8 @@ def fetch_url(url: str, prompt: str = "", offset: int = 0, raw: bool = False) ->
     With a prompt (default): passes the full page to a summarizer that extracts
     exactly what was asked. Preferred — avoids context flooding from raw text.
 
-    With raw=True or no prompt: returns up to 4,000 chars starting from offset.
-    Use offset pagination when you need the raw text in chunks.
+    With raw=True or no prompt: returns up to _RAW_CHAR_LIMIT chars starting
+    from offset. Use offset pagination when you need the raw text in chunks.
     """
     try:
         headers = {

@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: requires a real LLM provider (hits the network, slower, rate-limited)",
+    "net: requires external HTTP (non-LLM, e.g. a live URL)",
+]
+addopts = "-m 'not live and not net' -q"
