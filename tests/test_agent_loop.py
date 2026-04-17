@@ -85,7 +85,8 @@ def test_turn_messages_contain_full_tool_trace(monkeypatch, tmp_system_prompt, p
 def test_summarization_runs_after_llm_sees_raw_output(monkeypatch, tmp_system_prompt, providers):
     """The CRITICAL invariant from DESIGN §4.1:
     - The model responding to a tool call must see the FULL tool output.
-    - Summarization only replaces content for SUBSEQUENT turns.
+    - Summarization replaces content at turn end (and in later replay), not
+      before the next in-turn LLM call.
     """
     raw = "X" * (agent._HISTORY_SUMMARIZE_THRESHOLD + 500)
     _install_fake_tool(monkeypatch, "big_tool", lambda: raw)
@@ -109,11 +110,61 @@ def test_summarization_runs_after_llm_sees_raw_output(monkeypatch, tmp_system_pr
         "model responding to the tool must see RAW output, not the summary"
     )
 
-    # After run() returns, turn_messages reflects the post-resolve state —
-    # the tool message content has been replaced with the summary so later
-    # turns don't re-send the raw blob.
+    # After run() returns, turn_messages reflects post-turn-end resolve —
+    # the tool message has been replaced with the summary for storage / replay.
     tool_msg_final = [m for m in turn if m.get("role") == "tool"][0]
     assert tool_msg_final["content"] == "<SUMMARY>"
+
+
+def test_multi_iteration_tools_prior_results_stay_raw_until_turn_end(
+    monkeypatch, tmp_system_prompt, providers
+):
+    """DESIGN §4.1: With tool A then tool B in one user turn, the LLM call that
+    runs after B is appended must still see A's full raw output. Summarization
+    must not swap A to a history summary mid-turn — only after the final
+    no-tools reply (so the model can chain reasoning on all raw tool data).
+    """
+    raw_a = "A" * (agent._HISTORY_SUMMARIZE_THRESHOLD + 500)
+
+    def _tool_a():
+        return raw_a
+
+    monkeypatch.setattr(
+        agent,
+        "TOOL_FUNCTIONS",
+        {"tool_a": _tool_a, "tool_b": lambda: "B_RESULT"},
+    )
+
+    async def _instant_hist(name, args, user_message, content):
+        """Avoid thread timing — turn-end apply must see task.done() after sleep(0)."""
+        return (
+            f"[history summary of {name}]\n"
+            "This tool response was summarized for context efficiency. Takeaways:\n"
+            "COMPACT_A"
+        )
+
+    monkeypatch.setattr(agent, "_summarize_for_history", _instant_hist)
+
+    p = providers([[
+        make_response(content="", tool_calls=[{"id": "t1", "name": "tool_a"}]),
+        make_response(content="", tool_calls=[{"id": "t2", "name": "tool_b"}]),
+        make_response(content="done"),
+    ]])
+
+    _, _, turn, _ = asyncio.run(agent.run("chain", []))
+
+    assert len(p.calls) == 3
+    call3_msgs = p.calls[2]["messages"]
+    tool_msgs = [m for m in call3_msgs if m.get("role") == "tool"]
+    assert len(tool_msgs) == 2, tool_msgs
+    assert tool_msgs[0]["content"] == raw_a, (
+        "call after tool_b must still see full tool_a — not summarized mid-turn"
+    )
+    assert tool_msgs[1]["content"] == "B_RESULT"
+
+    tool_a_row = [m for m in turn if m.get("role") == "tool" and m.get("name") == "tool_a"][0]
+    assert tool_a_row["content"].startswith("[history summary of tool_a]")
+    assert "COMPACT_A" in tool_a_row["content"]
 
 
 def test_raw_tool_content_preserved_even_when_summary_wins_race(

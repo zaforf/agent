@@ -8,6 +8,10 @@ Both paths want the same thing: a fast, cheap, long-context model that isn't
 the primary agent. `gemma-4-26b-a4b-it` is an MoE with 3.8B active params —
 latency in the ~1-2s range at 8k output tokens, ~10x faster than the primary.
 
+History summarization (`agent._summarize_for_history`) passes its own
+`systemInstruction` — takeaways-only, no echo of user/tool metadata — while
+`fetch_url` uses an extraction-oriented instruction.
+
 This module is dependency-light (only `httpx` + stdlib) and does a blocking
 HTTP call. Call from async contexts via `asyncio.to_thread(summarize_gemma, ...)`.
 """

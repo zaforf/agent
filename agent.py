@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import json
 import logging
 import re
@@ -251,7 +252,13 @@ def _tool_docs() -> str:
 
 
 def _build_system_prompt() -> str:
-    return f"{get_system_prompt()}\n\n{_tool_docs()}"
+    # Inject today's date so the model has a concrete present to reason
+    # against its January 2025 training cutoff. Without this anchor,
+    # "post-cutoff" stays abstract and the model's RLHF-trained reflex to
+    # disclaim recent info as possible hallucination tends to fire even on
+    # tool-grounded data. See DESIGN §10.
+    today = datetime.date.today().isoformat()
+    return f"Today's date: {today}\n\n{get_system_prompt()}\n\n{_tool_docs()}"
 
 
 # ── Tool execution helper ─────────────────────────────────────────────────────
@@ -278,9 +285,15 @@ _PAGINATION_RE = re.compile(
 
 
 _HISTORY_SUMMARY_SYSTEM = (
-    "You are a precise summarizer. Given a tool call and its output, produce a compact "
-    "summary that retains everything relevant to the user's request and the tool's purpose. "
-    "Keep key facts, numbers, decisions, errors, and conclusions. Omit boilerplate and repetition."
+    "You compress large tool outputs for conversation history storage. "
+    "Reply with substantive takeaways from the TOOL OUTPUT section only: key facts, numbers, "
+    "names, dates, errors, and actionable conclusions. Short bullets or tight prose — no preamble. "
+    "Do NOT restate or summarize the user's request, tool name, or tool arguments in your reply "
+    "(the reader already has that from the message). Do NOT write meta lines like 'The user asked…' "
+    "or 'Given this tool call…'. Do NOT narrate what anyone expected or wanted (e.g. 'looking for "
+    "albums') — that is not data. DO report factual outcomes that appear in the tool output: "
+    "successful extractions, empty or missing sections, no matches, not found, partial results, "
+    "and explicit errors — all grounded in the output text itself."
 )
 
 
@@ -302,11 +315,16 @@ async def _summarize_for_history(name: str, args: dict, user_message: str, conte
         if m:
             pagination_note = m.group(0)
 
+    # Context blocks are for the summarizer's reasoning only; _HISTORY_SUMMARY_SYSTEM
+    # forbids echoing them in the model's reply.
     user_prompt = (
+        "Use the following only to decide what matters in the tool output. "
+        "Do not repeat them in your reply.\n\n"
         f"User request: {user_message}\n"
-        f"Tool called: {name}\n"
-        f"Tool args: {json.dumps(args)}\n\n"
-        f"Tool output:\n{content}"
+        f"Tool: {name}\n"
+        f"Args: {json.dumps(args)}\n\n"
+        "---\n\n"
+        f"TOOL OUTPUT:\n{content}"
     )
 
     try:
@@ -318,7 +336,11 @@ async def _summarize_for_history(name: str, args: dict, user_message: str, conte
             if pagination_note:
                 summary = f"{summary}\n\n{pagination_note}"
             log.info("history-summary  %s  %d→%d chars", name, len(content), len(summary))
-            return f"[history summary of {name}]\n{summary}"
+            return (
+                f"[history summary of {name}]\n"
+                "This tool response was summarized for context efficiency. Takeaways:\n"
+                f"{summary}"
+            )
     except Exception as e:
         log.warning("history-summary failed  %s: %s", name, e)
     return content[:_HISTORY_SUMMARIZE_THRESHOLD]
@@ -331,13 +353,14 @@ async def _apply_finished_summaries(
 ) -> None:
     """Opportunistically apply any summary tasks that have already completed.
 
-    This is the mechanism that enforces DESIGN §6.5's non-blocking guarantee:
-    a slow summarizer MUST NOT stall a turn. Tasks still in flight are left in
-    `pending` for the caller to drain after the turn is persisted.
+    Called only when **no further LLM tool rounds** will run in this user turn
+    (final text path, max-iter exit, or stream `done`), or from `main.py` after
+    persist — never between tool rounds — so every `_call` within the turn still
+    sees full prior tool outputs (DESIGN §4.1).
 
-    A single `asyncio.sleep(0)` tick gives zero-I/O summarizers (used in tests
-    and as the "cache hit" fast path) a chance to run to completion before we
-    check, so the common case still applies summaries before the turn returns.
+    A slow summarizer MUST NOT stall a turn: tasks still in flight stay in
+    `pending` for the caller to drain post-persist. A single `asyncio.sleep(0)`
+    tick lets fast summarizers apply before return when this runs at turn end.
     """
     if not pending:
         return
@@ -390,12 +413,6 @@ async def run(
     for iteration in range(MAX_TOOL_ITERATIONS):
         response, provider = await _call(messages)
 
-        # Non-blocking: apply any summaries that finished during the LLM call.
-        # The model just saw the raw tool output for the turn it is responding
-        # to (§4.1), so it's safe to swap in summaries for subsequent turns now.
-        # Unfinished tasks stay pending — the caller drains them post-turn.
-        await _apply_finished_summaries(pending_summaries)
-
         provider_used = provider
         msg     = response.choices[0].message
         content = msg.content or ""
@@ -421,6 +438,7 @@ async def run(
             if not final:
                 final = "(No visible response from the model.)"
             log.info("done  via=%s  len=%d", provider_used, len(final))
+            await _apply_finished_summaries(pending_summaries)
             return final, provider_used, messages[turn_start:], pending_summaries
 
         result_blocks = []
@@ -442,6 +460,7 @@ async def run(
 
         messages.extend(result_blocks)
 
+    await _apply_finished_summaries(pending_summaries)
     return "Reached max tool iterations.", provider_used, messages[turn_start:], pending_summaries
 
 
@@ -525,12 +544,6 @@ async def run_stream(user_message: str, history: list[dict]):
         full_content    = "".join(raw_parts)
         visible_content = "".join(visible_parts)
 
-        # Non-blocking: apply any summaries that finished while streaming. The
-        # model for this turn already saw the raw tool output (§4.1), so it is
-        # safe to swap in summaries for future turns now. Unfinished tasks
-        # stay pending — the caller drains them post-turn.
-        await _apply_finished_summaries(pending_summaries)
-
         if tool_calls_acc:
             native_tc_list = []
             for idx in sorted(tool_calls_acc.keys()):
@@ -601,6 +614,7 @@ async def run_stream(user_message: str, history: list[dict]):
                 yield {"type": "text_chunk", "text": rtxt}
             else:
                 messages.append({"role": "assistant", "content": visible_content})
+            await _apply_finished_summaries(pending_summaries)
             yield {
                 "type": "done",
                 "provider": provider_used,
@@ -609,4 +623,5 @@ async def run_stream(user_message: str, history: list[dict]):
             }
             return
 
+    await _apply_finished_summaries(pending_summaries)
     yield {"type": "error", "detail": "Reached max tool iterations."}

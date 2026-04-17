@@ -146,6 +146,7 @@ def test_summarize_for_history_returns_labelled_summary_on_success(monkeypatch):
         agent._summarize_for_history("recall", {}, "user msg", raw)
     )
     assert result.startswith("[history summary of recall]")
+    assert "Takeaways:" in result
     assert "compact summary" in result
     assert len(result) < len(raw)
 
@@ -229,7 +230,8 @@ def test_summarize_for_history_uses_gemma_26b(monkeypatch):
         agent._summarize_for_history("recall", {"q": "x"}, "user msg", raw)
     )
     assert "compact summary" in result
+    assert "Takeaways:" in result
     # Verify the prompt carried the structured tool metadata
-    assert "Tool called: recall" in captured["user"]
+    assert "Tool: recall" in captured["user"]
     assert "User request: user msg" in captured["user"]
-    assert "Tool output:" in captured["user"]
+    assert "TOOL OUTPUT:" in captured["user"]

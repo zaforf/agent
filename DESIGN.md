@@ -73,23 +73,28 @@ Both `/chat` (non-streaming) and `/chat/stream` (SSE streaming) share the same l
 
 ```
 1. Call LLM with current messages (system prompt + full history + user message + any tool results so far)
-2. AFTER the LLM response is received/streamed:
-   - Resolve any pending history-summarization tasks from the PREVIOUS iteration
-     (replacing old tool-result message content in-place with the summary)
-3. If the LLM response contains tool calls:
-   a. Execute each tool call sequentially
-   b. Append tool results to messages (with full content)
-   c. If a tool result exceeds 8,000 chars, start a background summarization task
-      (does NOT block — runs concurrently during the next LLM call)
-   d. Continue to next iteration
-4. If the LLM response has no tool calls:
-   - Strip thinking blocks from the response
-   - If visible text is empty but raw content exists, issue a repair call
-     (non-tool, single call asking the model to re-emit visible text only)
-   - Return/emit the final response
+2. If the LLM response contains tool calls:
+   a. Append the assistant message (with tool_calls)
+   b. Execute each tool call sequentially
+   c. Append tool results to messages (with full content)
+   d. If a tool result exceeds 8,000 chars, start a background summarization task
+       (does NOT block — runs concurrently during later LLM calls in this turn)
+   e. Continue to next iteration (go to step 1)
+3. If the LLM response has no tool calls:
+   a. Strip thinking blocks / streaming finalize; repair if needed
+   b. Resolve any finished history-summarization tasks (in-place swap to
+      `[history summary of …]` for completed tasks only) — see §6.5
+   c. Return/emit the final response
+4. If max tool iterations exceeded: resolve finished summaries, then return error
 ```
 
-**Critical invariant**: The model always receives the full, unsummarized tool output for the turn it is directly responding to. Summarization only replaces the content in the messages list *after* the model has responded to that tool — i.e., it only affects subsequent turns. This is achieved by resolving summaries at step 2, after the LLM call, not before.
+**Critical invariant (precise):** For each tool-result message, **every** LLM call in the **same user turn** that runs **after** that message was appended sees the **full, unsummarized** text. In-place summary swaps run **only** when the turn is finishing (no more tool rounds in step 3, or step 4) — **not** between tool iterations. Therefore:
+
+- **Same assistant `tool_calls` batch:** Unchanged — all results from that batch are full on the next `_call`.
+- **Chained tools across iterations (A then B):** The `_call` after B is appended still sees **A and B both raw**. After the final text reply, finished summaries may replace large tool rows before persist; unfinished tasks stay pending for `main.py`'s finalizer.
+- **Across user turns:** Replay may show `[history summary of …]` for prior turns as before.
+
+The ordering guarantee that must never regress: `_apply_finished_summaries` must **not** run between step 1 and the next tool execution round — only at turn end (or from `main.py` after persist). The model must never receive a summary **instead of** raw text for a tool result on a `_call` that happens **before** the turn's final no-tools reply. Pinned by `test_raw_tool_content_preserved_even_when_summary_wins_race` and `test_multi_iteration_tools_prior_results_stay_raw_until_turn_end`.
 
 ### 4.2 Thinking blocks
 
@@ -156,6 +161,8 @@ The summarizer gives the model exactly what it asked for rather than a raw HTML 
 - Appends a pagination note: `[… N more chars — call fetch_url with offset=M to continue]`
 - The model can call `fetch_url` with an increasing offset to walk through large documents
 
+**Verification pitfall:** prompt mode exposes the summarizer to up to 128,000 characters of extracted text; raw mode exposes only 8,000 characters per call from a given `offset`. The first raw chunk is often intro/nav/infobox. The system prompt therefore instructs the agent not to treat "fact X missing from the first raw window" as evidence that prompt-mode output was hallucinated — the likelier explanation is that X appears deeper in the page and requires pagination or a second prompt-mode extraction.
+
 The model can always paginate regardless of whether a pagination note is visible. The note exists only as a convenience hint; it is preserved through history summarization specifically so the model doesn't lose track of where it left off.
 
 Retry behavior: up to 4 retries on timeout or connection errors with exponential backoff; up to 3 retries on HTTP 429 (rate limit) with `Retry-After` header respect.
@@ -212,21 +219,21 @@ Every LLM call receives:
 ### 6.5 Tool result summarization
 
 When a tool result exceeds **8,000 characters**, it is queued for background summarization. The summarizer:
-- Receives: the last user message, the tool name, the tool arguments, and the full tool output
+- Receives: the last user message, the tool name, the tool arguments, and the full tool output (context for disambiguation only — the model is instructed not to echo these in its reply)
 - Uses: **Gemma 4 26B** via `summarizer.summarize_gemma` — the same fast MoE model the `fetch_url` tool uses. Shared via the top-level `summarizer.py` module so there is exactly one summarizer implementation. The primary provider chain stays reserved for the agent loop.
-- Returns: a compact summary preserving key facts, numbers, decisions, errors, and conclusions
+- Returns: takeaways-only text (facts, numbers, names, errors, conclusions) — no restatement of the user request or tool args. The stored message is wrapped as `[history summary of <tool>]` + a one-line notice that the response was summarized for context efficiency + `Takeaways:` + that body (pagination notes for `fetch_url` are re-appended after the body when present)
 - Is context-limited: the summarizer does NOT receive earlier conversation history, so summaries may be thin or generic if the goal was established several turns earlier (this is expected and noted in the system prompt)
 
 **Non-blocking timing — DESIGN COMMITMENT.** Summarization MUST NEVER stall a turn. Concretely:
 
-1. When a tool returns >8 000 chars, the agent starts the summary via `asyncio.create_task()` and keeps the **raw** content in the tool message.
-2. At every iteration boundary and at the end of the turn, `_apply_finished_summaries` does a non-blocking poll (a single `await asyncio.sleep(0)` tick to let zero-latency stubs complete) and swaps in the summary only for tasks that are *already done*. In-flight tasks stay pending.
+1. When a tool returns >8 000 chars, the agent starts the summary via `asyncio.create_task()` and keeps the **raw** content in the tool message for **all further LLM calls in that user turn**.
+2. When the turn ends (final assistant reply with no tool calls, or max-iterations exit), `_apply_finished_summaries` runs once: a non-blocking poll (`await asyncio.sleep(0)`) swaps in the summary for tasks *already done*. It is **not** run between tool iterations — so chained tools always see prior raw results. In-flight tasks stay pending.
 3. `agent.run()` returns `(response, provider, turn_messages, pending_summaries)`. `pending_summaries` is a list of `(message_dict, asyncio.Task)` pairs.
 4. `main.py` appends the turn to SQLite with whatever content is currently in the dicts (raw, if the summary is still running) and then spawns `_finalize_summaries` as a fire-and-forget background task. When the summaries finish, that task mutates the in-memory `turn_messages` (the same dict objects cached per session) and calls `db.update_turn_messages(row_id, ...)` to overwrite the stored row.
 
 The upshot: **the HTTP response returns the moment the model's final answer is ready**, regardless of how slow the summarizer is. The user never waits on history compaction. Subsequent turns see the summarized form as soon as the finalizer has run — typically within a second or two of the response, far before the user's next message.
 
-**§4.1 ordering guard.** `_apply_finished_summaries` runs *after* `_call`, and the summary task itself never mutates the dict — it only returns a string. Together those two rules mean the summary can only be swapped in after the request carrying the raw content has already been sent to the API. Once the server has the request, a summary finishing during streamback is harmless. So even when the summarizer finishes before the primary model's response, the model still sees the raw tool output for the turn it is answering. Pinned by `test_raw_tool_content_preserved_even_when_summary_wins_race`.
+**§4.1 ordering guard.** `_apply_finished_summaries` runs only at **turn end** (not between tool rounds), and the summary task never mutates the dict directly. Every in-turn `_call` therefore already sent the raw tool content to the API before any swap. Pinned by `test_raw_tool_content_preserved_even_when_summary_wins_race` and `test_multi_iteration_tools_prior_results_stay_raw_until_turn_end`.
 
 **Pagination note preservation**: For `fetch_url` results, any `[… N more chars — call fetch_url with offset=M to continue]` note in the original output is extracted before summarization and re-appended to the summary. This ensures the model can continue paginating even after the raw content is compressed in history.
 
@@ -338,41 +345,25 @@ Session ID is stored in `localStorage` as `"sid"`. Survives page reloads and bro
 
 ## 10. System Prompt
 
-The system prompt is stored in `data/system_prompt.md` and read on every LLM call via `_build_system_prompt()` (so edits take effect immediately). It is prepended to the tool documentation section generated from `TOOL_SCHEMAS`.
+The system prompt is stored in `data/system_prompt.md` and read on every LLM call via `_build_system_prompt()` (so edits take effect immediately). The build step assembles three pieces:
+
+1. `Today's date: YYYY-MM-DD` — prepended at request time so the model has a concrete present to reason against its January 2025 training cutoff. This is the structural anchor that makes the Trust & calibration section actually bind: without a known "today", post-cutoff stays abstract and the model's RLHF-trained reflex to disclaim recent info as possible hallucination tends to fire even on tool-grounded data.
+2. The contents of `data/system_prompt.md` — the editable behavioral spec.
+3. The tool documentation section generated from `TOOL_SCHEMAS`.
 
 ### 10.1 Current behavioral directives
 
-**Persona**: Personal AI assistant for Zafir. Highly efficient and concise. No hedging, no over-explaining, no trailing summaries.
+The prompt is organized into nine sections; each one is short and independent so the file stays scannable and hackable. Section headings (in order):
 
-**Preferences**:
-- Concise technical answers by default
-- No padding or question restatement
-- Visible answer must always appear outside reasoning blocks
-- Use native API `tool_calls` only (no XML or fenced-code tool invocations)
-
-**Source grounding**:
-- If a URL is provided, prioritize `fetch_url` for requests implying deep analysis or source-specific perspective
-- Reserve internal knowledge for trivial facts or when the URL is clearly supplementary
-
-**Grounding & tool trust**:
-- Training cutoff is January 2025; anything after that is unknown — tool results are almost certainly more accurate
-- Do not flag tool results as suspicious just because they conflict with internal knowledge; the more likely explanation is that internal knowledge is outdated
-
-**Tool history trust**:
-- History summaries (`[history summary of tool_name]`) are produced by a capable model with access to the full original output — treat them as accurate
-- The current turn's tool result is always passed in full; summarization only affects older turns
-- Sparse summaries are a compression artifact (the summarizer only receives the last user message and tool args, not full history) — a sparse summary is not evidence the tool was unhelpful or that a past response came from internal knowledge
-- Pagination: the model can always call `fetch_url` again with an offset; when a pagination note survived summarization it will be visible
-
-**Memory discipline**:
-- Use `recall()` before answering anything where past context or knowledge level is relevant
-- Store: concepts mastered, depth of understanding, successful analogies
-- Never store: what was asked, what was answered, trivial temporary context
-
-**Self-modification rules**:
-- Always call `get_system_prompt()` before `edit_system_prompt()`
-- Surgical edits only — preserve everything else
-- Only modify for permanent behavior changes, not one-off requests
+- **Identity** — Zafir's personal AI assistant; optimize for correct + useful per minute of attention; direct, honest engagement over performed politeness; no hedging, no over-explaining, no trailing self-narration.
+- **Today** — pointer to the dynamically injected date line; restates the January 2025 cutoff and that anything later comes from tools or this conversation, never from weights.
+- **Trust & calibration** — the section that fixes the disclaim-as-hallucination bug. Names three distinct concepts that the model otherwise conflates (hallucination vs post-cutoff vs source error), explicitly acknowledges the RLHF training pull and tells the model to override it when it has tool data, frames tool results as "primary, not infallible" so source skepticism is preserved, adds the **`fetch_url` geometry rule** (128k summarizer window vs 8k-per-call raw chunks — missing facts in chunk 0 imply depth/pagination, not summarizer fabrication), forbids retroactively blanket-disclaiming past tool-grounded answers, and includes one worked before/after example.
+- **Quality bar** — the general behavioral standard, modeled on what top-lab system prompts emphasize. One line each: calibration over hedging, no filler openers, honesty over compliance, no fabrication, verify before committing, finish what you start, reasoning depth proportional to task, format proportional to content, self-consistency within a turn.
+- **Response style** — rendering specifics only: visible answer outside `<thought>/<thinking>/<redacted_*>` blocks, Markdown + KaTeX rendering, native `tool_calls` only.
+- **System context** — one paragraph telling the model the runtime it operates in (multi-turn loop, streaming UI, tool-step rows, full history replay, repair call on empty visible output).
+- **Context, turns, and tool results** — unified mental model: what a *turn* is; all tool results stay **raw for every LLM call in that turn**; compaction to `[history summary of <tool_name>]` after the turn ends (or via `main.py` finalizer); prior turns in replay show summaries; re-call the tool for verbatim raw on a new turn; `Takeaways:` body and summary accuracy / sparsity / `fetch_url` pagination hints.
+- **Tool strategy** — concrete per-tool decision rules: `fetch_url` (prompt vs raw with explicit 128k vs 8k semantics, pagination, invalid verification: impeaching prompt output from raw chunk 0 alone), `recall` (silent on miss), `remember` (categories and what to store / not store), `list_memories` / `delete_memory`, `get_system_prompt` then `edit_system_prompt` (read first, surgical edits, permanent changes only).
+- **Failure handling** — tool errors are data; retry, switch strategy, or report concisely; don't loop on a failing approach.
 
 ---
 
@@ -417,4 +408,4 @@ Graceful degradation is tested explicitly — the agent must never crash when an
 | Model produces only thinking tags (empty visible) | Repair call with `tools=None` re-asks for a user-facing answer (DESIGN §4.3) | `test_repair_call_on_empty_visible` |
 | Model produces only thinking tags during streaming | Same — repair fires (§11.1 fix); scaffold stays out of history | `test_streaming_repair_triggers_on_thinking_only` |
 | History summarizer still running when turn ends | `agent.run()` returns immediately; `main.py` drains the task in the background and patches the stored row (DESIGN §6.5) | `test_history_summarization_is_non_blocking`, `test_chat_non_blocking_summary_patches_db_row` |
-| Summarizer finishes *before* the LLM responding to that tool result | Summary is NOT swapped in until after the LLM call returns — the model always sees raw content for the turn it is answering (§4.1, §6.5) | `test_raw_tool_content_preserved_even_when_summary_wins_race` |
+| Summarizer finishes *before* the next in-turn LLM call | Summary is NOT swapped in until **turn end** — every in-turn `_call` sees full prior tool output; mid-turn swap would regress §4.1 | `test_raw_tool_content_preserved_even_when_summary_wins_race`, `test_multi_iteration_tools_prior_results_stay_raw_until_turn_end` |
