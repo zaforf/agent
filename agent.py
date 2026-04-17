@@ -430,13 +430,18 @@ async def run(
         if not calls:
             final = _visible_after_think(content)
             if not final and content.strip():
-                messages.append({"role": "user", "content": _REPAIR_USER})
-                response2, provider2 = await _call(messages, use_tools=False)
+                # Use a scratch list so the repair scaffold does not leak into
+                # stored history — mirrors the streaming repair path (§4.3).
+                repair_messages = messages + [{"role": "user", "content": _REPAIR_USER}]
+                response2, provider2 = await _call(repair_messages, use_tools=False)
                 provider_used = provider2
                 content2 = response2.choices[0].message.content or ""
                 final = _visible_after_think(content2) or content2.strip()
             if not final:
                 final = "(No visible response from the model.)"
+            # Store stripped visible content in history, consistent with
+            # the streaming path and DESIGN §6.3 (thinking blocks stripped).
+            messages[-1]["content"] = final
             log.info("done  via=%s  len=%d", provider_used, len(final))
             await _apply_finished_summaries(pending_summaries)
             return final, provider_used, messages[turn_start:], pending_summaries
