@@ -278,8 +278,8 @@ def test_no_summarize_tool_registered():
 def test_auto_summary_returns_short_for_long_text():
     import asyncio
     import agent
-    long_text = "A" * (agent._TOOL_SUMMARY_THRESHOLD + 200)
-    out = asyncio.run(agent._summarize_tool_result_if_needed("fetch_url", long_text, "test"))
+    long_text = "A" * (agent._HISTORY_SUMMARIZE_THRESHOLD + 200)
+    out = asyncio.run(agent._summarize_for_history("fetch_url", {}, "test", long_text))
     assert isinstance(out, str) and len(out) > 0
     assert len(out) < len(long_text), "Expected summarized output to be shorter"
 
@@ -294,13 +294,13 @@ print("\n== 7. End-to-end chat ==")
 
 def test_e2e_simple():
     import asyncio, agent
-    response, steps = asyncio.run(agent.run("Reply with exactly: PING_OK", []))
+    response, steps, provider = asyncio.run(agent.run("Reply with exactly: PING_OK", []))
     assert isinstance(response, str) and len(response) > 0, "Empty response"
     assert "PING_OK" in response, f"Expected 'PING_OK' in response, got: {response!r}"
 
 def test_e2e_with_tool_call():
     import asyncio, agent
-    response, steps = asyncio.run(agent.run(
+    response, steps, provider = asyncio.run(agent.run(
         "Use recall to look up anything about Zafir, then give a one-sentence answer about what you found or didn't find.",
         []
     ))
@@ -330,7 +330,7 @@ def test_history_with_steps_sanitized_in_run():
         {"role": "user", "content": "ping"},
         {"role": "assistant", "content": "pong", "steps": []},
     ]
-    response, _ = asyncio.run(agent.run("Say exactly: SANITIZED_OK", history))
+    response, _, _provider = asyncio.run(agent.run("Say exactly: SANITIZED_OK", history))
     assert "SANITIZED_OK" in response, response
 
 for fn in [test_e2e_simple, test_e2e_with_tool_call, test_e2e_streaming,

@@ -2,8 +2,8 @@ import asyncio
 import json
 import logging
 import re
-import httpx
 from openai import AsyncOpenAI, RateLimitError, APIError, APIConnectionError
+from gemini_client import GeminiClient
 from config import PROVIDERS
 from tools import TOOL_SCHEMAS, TOOL_FUNCTIONS
 from tools.self_modify import get_system_prompt
@@ -12,19 +12,12 @@ log = logging.getLogger(__name__)
 
 # ── Async clients — one per provider with a key ──────────────────────────────
 
-class _DropGoogKeyTransport(httpx.AsyncHTTPTransport):
-    """Strip x-goog-api-key injected by google-generativeai (mem0 dep) so that
-    only the Bearer token is sent — Google rejects requests with both."""
-    async def handle_async_request(self, request):
-        request.headers.pop("x-goog-api-key", None)
-        return await super().handle_async_request(request)
-
-
-def _make_client(p: dict) -> AsyncOpenAI:
-    kwargs: dict = {"api_key": p["api_key"], "base_url": p["base_url"]}
+def _make_client(p: dict):
     if "googleapis.com" in p["base_url"]:
-        kwargs["http_client"] = httpx.AsyncClient(transport=_DropGoogKeyTransport())
-    return AsyncOpenAI(**kwargs)
+        # Native Gemini API — new AI Studio keys (AQ. prefix) don't work with
+        # the OpenAI compat endpoint's Bearer auth. Native endpoint accepts ?key=.
+        return GeminiClient(api_key=p["api_key"], model=p["model"])
+    return AsyncOpenAI(api_key=p["api_key"], base_url=p["base_url"])
 
 
 _clients: list[dict] = [
