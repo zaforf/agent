@@ -336,6 +336,24 @@ def test_repair_not_triggered_when_visible_text_present(monkeypatch, tmp_system_
     assert len(p.calls) == 1, "no repair should fire when visible text is present"
 
 
+def test_non_streaming_thinking_content_stripped_from_turn_messages(
+    monkeypatch, tmp_system_prompt, providers
+):
+    """DESIGN §6.3: the final assistant entry in turn_messages must hold only
+    visible text — thinking blocks must be stripped before persistence.
+    """
+    providers([[make_response(content="<thinking>secret</thinking>hello")]])
+    _, _, turn, _ = asyncio.run(agent.run("go", []))
+
+    final_assistant = [m for m in turn if m["role"] == "assistant"][-1]
+    assert final_assistant["content"] == "hello", (
+        f"turn_messages stored raw thinking content: {final_assistant['content']!r}"
+    )
+    assert "<thinking>" not in (final_assistant["content"] or ""), (
+        "thinking tags must be stripped from stored assistant content (§6.3)"
+    )
+
+
 # ── 4. Multi-iteration tool loop ─────────────────────────────────────────────
 
 def test_multi_iteration_tool_loop(monkeypatch, tmp_system_prompt, providers):

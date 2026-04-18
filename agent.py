@@ -437,6 +437,9 @@ async def run(
                 final = _visible_after_think(content2) or content2.strip()
             if not final:
                 final = "(No visible response from the model.)"
+            # Store stripped visible content in history, consistent with
+            # the streaming path and DESIGN §6.3 (thinking blocks stripped).
+            messages[-1]["content"] = final
             log.info("done  via=%s  len=%d", provider_used, len(final))
             await _apply_finished_summaries(pending_summaries)
             return final, provider_used, messages[turn_start:], pending_summaries
