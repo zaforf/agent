@@ -1,0 +1,26 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main  # Triggers when code is merged to main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Execute Remote SSH Commands
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd agent
+            git pull origin main
+            
+            # Rebuild and restart the container with the new code
+            docker compose up -d --build
+            
+            # Critical: Clean up old Docker images to prevent the VPS disk from filling up
+            docker image prune -f
