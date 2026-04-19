@@ -241,36 +241,42 @@ def test_summarize_for_history_uses_gemma_26b(monkeypatch):
 
 # ── GEMINI_API_KEY_FREE_RESOLVED (summarizer HTTP only) ──────────────────────
 
+
+class _FakeSummarizerHttpResponse:
+    """Stand-in for httpx.Response from Gemini generateContent."""
+
+    status_code = 200
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"candidates": [{"content": {"parts": [{"text": "x"}]}}]}
+
+
+class _FakeHttpxClient:
+    """Captures the `key` query param from POST (summarizer API key)."""
+
+    def __init__(self, captured: dict):
+        self._captured = captured
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return None
+
+    def post(self, url, params=None, json=None):
+        self._captured["key"] = (params or {}).get("key")
+        return _FakeSummarizerHttpResponse()
+
+
 def test_summarize_gemma_uses_gemini_api_key_free_resolved(monkeypatch):
     captured = {}
-
-    class R:
-        status_code = 200
-
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"candidates": [{"content": {"parts": [{"text": "x"}]}}]}
-
     monkeypatch.setattr(config, "GEMINI_API_KEY_FREE_RESOLVED", "kfree")
 
     import httpx
 
-    class C:
-        def __init__(self, *a, **k):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            pass
-
-        def post(self, url, params=None, json=None):
-            captured["key"] = (params or {}).get("key")
-            return R()
-
-    monkeypatch.setattr(httpx, "Client", C)
+    monkeypatch.setattr(httpx, "Client", lambda *a, **k: _FakeHttpxClient(captured))
     assert summarizer.summarize_gemma("s", "u") == "x"
     assert captured["key"] == "kfree"
