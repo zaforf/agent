@@ -336,6 +336,24 @@ def test_repair_not_triggered_when_visible_text_present(monkeypatch, tmp_system_
     assert len(p.calls) == 1, "no repair should fire when visible text is present"
 
 
+def test_non_streaming_thinking_content_stripped_from_turn_messages(
+    monkeypatch, tmp_system_prompt, providers
+):
+    """DESIGN §6.3: the final assistant entry in turn_messages must hold only
+    visible text — thinking blocks must be stripped before persistence.
+    """
+    providers([[make_response(content="<thinking>secret</thinking>hello")]])
+    _, _, turn, _ = asyncio.run(agent.run("go", []))
+
+    final_assistant = [m for m in turn if m["role"] == "assistant"][-1]
+    assert final_assistant["content"] == "hello", (
+        f"turn_messages stored raw thinking content: {final_assistant['content']!r}"
+    )
+    assert "<thinking>" not in (final_assistant["content"] or ""), (
+        "thinking tags must be stripped from stored assistant content (§6.3)"
+    )
+
+
 # ── 4. Multi-iteration tool loop ─────────────────────────────────────────────
 
 def test_multi_iteration_tool_loop(monkeypatch, tmp_system_prompt, providers):
@@ -526,7 +544,28 @@ def test_streaming_tool_call_event_fires_and_result_feeds_next_iter(
     assert roles == ["user", "assistant", "tool", "assistant"]
 
 
-# ── 8. Streaming repair path (DESIGN §4.3) ───────────────────────────────────
+# ── 8. Repair path (DESIGN §4.3) ────────────────────────────────────────────
+
+def test_non_streaming_repair_scaffold_not_in_turn_messages(
+    monkeypatch, tmp_system_prompt, providers
+):
+    """Non-streaming repair must mirror streaming: scaffold stays out of history."""
+    providers([[
+        make_response("<thinking>hidden</thinking>"),
+        make_response("real answer"),
+    ]])
+
+    final, _, turn, _ = asyncio.run(agent.run("go", []))
+
+    assert final == "real answer"
+    user_contents = [m.get("content", "") for m in turn if m["role"] == "user"]
+    assert agent._REPAIR_USER not in user_contents, (
+        f"repair scaffold leaked into history: {turn}"
+    )
+    assistants = [m for m in turn if m["role"] == "assistant"]
+    assert len(assistants) == 1, f"expected one assistant message, got {assistants}"
+    assert (assistants[0].get("content") or "").strip() == "real answer"
+
 
 def test_streaming_repair_triggers_on_thinking_only(monkeypatch, tmp_system_prompt, providers):
     """A stream consisting entirely of <thinking>...</thinking> produces zero

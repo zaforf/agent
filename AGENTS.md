@@ -28,6 +28,15 @@ python -m pytest                                  # default: fast, no network
 
 After behavior changes, run the default suite at minimum. CI runs the same (`.github/workflows/ci.yml`).
 
+## Issue / fix workflow (“go” on an issue)
+
+1. **Branch + PR** — Open a focused branch and a PR when the maintainer approves (not before, unless they say otherwise).
+2. **Test first** — Add the smallest test that pins the bug or the new contract. It should **fail** on current `main` / pre-fix behavior.
+3. **Minimal fix** — Implement the smallest change that makes that test pass; avoid scope creep.
+4. **Verify** — Run **`python -m pytest`** (default suite: fast, no `live`/`net`) and ensure it’s green.
+
+Update `DESIGN.md` when behavior is part of the documented contract.
+
 ## Conventions
 
 - **Focused diffs** — Fix what you were asked to fix; don’t refactor unrelated code or add docs the user didn’t request.
