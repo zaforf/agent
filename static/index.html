@@ -60,6 +60,14 @@
       z-index: 50;
       transition: transform 0.2s ease;
     }
+    #panel-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.2);
+      z-index: 45;
+      display: none;
+    }
+    #panel-backdrop.open { display: block; }
     #sessions-panel {
       left: 0;
       transform: translateX(-100%);
@@ -504,15 +512,37 @@
     ::-webkit-scrollbar { width: 5px; height: 5px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; }
+
+    @media (max-width: 760px) {
+      .side-panel {
+        width: 100vw;
+        max-width: 100vw;
+        z-index: 60;
+      }
+      .panel-header { padding: 10px 12px; }
+      #messages { padding: 14px 10px; }
+      .msg-inner { gap: 12px; }
+      #bar-wrap { padding: 8px 10px; }
+      #bar { gap: 6px; }
+      .btn { padding: 0 10px; }
+      .btn-icon { padding: 0 8px; }
+      .agent .bubble { max-width: 94%; }
+      .user .bubble { max-width: 86%; }
+    }
   </style>
 </head>
 <body>
+
+<div id="panel-backdrop" onclick="closePanels()"></div>
 
 <!-- Sessions panel -->
 <div id="sessions-panel" class="side-panel">
   <div class="panel-header">
     <span class="panel-header-title">Sessions</span>
-    <button class="btn btn-sm" onclick="newSession()">+ New</button>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-sm" onclick="newSession()">+ New</button>
+      <button class="btn btn-sm" onclick="closePanels()">✕</button>
+    </div>
   </div>
   <div id="sess-list" class="panel-body"></div>
 </div>
@@ -538,7 +568,10 @@
 <div id="mem-panel" class="side-panel">
   <div class="panel-header">
     <span class="panel-header-title">Memories</span>
-    <button class="btn btn-sm" onclick="loadMemories()">↺ Refresh</button>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-sm" onclick="loadMemories()">↺ Refresh</button>
+      <button class="btn btn-sm" onclick="closePanels()">✕</button>
+    </div>
   </div>
   <div id="mem-list" class="panel-body"></div>
 </div>
@@ -601,8 +634,11 @@
   // ── State ─────────────────────────────────────────────────
 
   const feed    = document.getElementById('msg-inner');
+  const messagesEl = document.getElementById('messages');
   const input   = document.getElementById('input');
   const sendBtn = document.getElementById('send-btn');
+  let stickToBottom = true;
+  let mathRenderTimer = null;
 
   let sid = localStorage.getItem('sid') || newSid();
   localStorage.setItem('sid', sid);
@@ -627,20 +663,57 @@
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
   }
 
+  function closePanels() {
+    document.getElementById('sessions-panel').classList.remove('open');
+    document.getElementById('mem-panel').classList.remove('open');
+    document.getElementById('btn-sessions').classList.remove('active');
+    document.getElementById('btn-mem').classList.remove('active');
+    document.getElementById('panel-backdrop').classList.remove('open');
+  }
+
   function togglePanel(id, btnId) {
     const panel = document.getElementById(id);
     const opening = !panel.classList.contains('open');
-    panel.classList.toggle('open');
-    if (btnId) document.getElementById(btnId).classList.toggle('active', opening);
-    if (opening) {
-      if (id === 'sessions-panel') loadSessions();
-      if (id === 'mem-panel')      loadMemories();
+    closePanels();
+    if (!opening) return;
+    panel.classList.add('open');
+    if (btnId) document.getElementById(btnId).classList.add('active');
+    document.getElementById('panel-backdrop').classList.add('open');
+    if (id === 'sessions-panel') loadSessions();
+    if (id === 'mem-panel')      loadMemories();
+  }
+
+  function isNearBottom(el) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }
+
+  function scheduleMathRender(el) {
+    if (!el || mathRenderTimer) return;
+    mathRenderTimer = setTimeout(() => {
+      renderMath(el);
+      mathRenderTimer = null;
+    }, 80);
+  }
+
+  messagesEl.addEventListener('scroll', () => {
+    stickToBottom = isNearBottom(messagesEl);
+  });
+
+  function scrollToLastAssistant() {
+    const assistants = feed.querySelectorAll('.row.agent');
+    if (!assistants.length) {
+      scrollFeed(true);
+      return;
     }
+    const last = assistants[assistants.length - 1];
+    const target = Math.max(0, last.offsetTop - (messagesEl.clientHeight - last.offsetHeight - 16));
+    messagesEl.scrollTop = target;
+    stickToBottom = isNearBottom(messagesEl);
   }
 
   // ── Message rendering ─────────────────────────────────────
 
-  function addUserMsg(text) {
+  function addUserMsg(text, shouldScroll = true) {
     const row = document.createElement('div');
     row.className = 'row user';
     const bub = document.createElement('div');
@@ -648,11 +721,11 @@
     bub.textContent = text;
     row.appendChild(bub);
     feed.appendChild(row);
-    scrollFeed();
+    if (shouldScroll) scrollFeed();
   }
 
   /** Create an agent bubble and return its md-content div for streaming into. */
-  function createAgentBubble(fallbackProvider) {
+  function createAgentBubble(fallbackProvider, shouldScroll = true) {
     const row = document.createElement('div');
     row.className = 'row agent';
     const bub = document.createElement('div');
@@ -668,19 +741,19 @@
     bub.appendChild(md);
     row.appendChild(bub);
     feed.appendChild(row);
-    scrollFeed();
+    if (shouldScroll) scrollFeed();
     return md;
   }
 
   /** Render a complete agent message (used when loading history). */
-  function addAgentMsg(text) {
-    const md = createAgentBubble(null);
+  function addAgentMsg(text, shouldScroll = true) {
+    const md = createAgentBubble(null, shouldScroll);
     md.innerHTML = renderMarkdown(text);
     setTimeout(() => renderMath(md), 0);
   }
 
   /** Add a collapsible tool step row. */
-  function addStep(type, name, payload) {
+  function addStep(type, name, payload, shouldScroll = true) {
     const row = document.createElement('div');
     row.className = `row step ${type}`;
 
@@ -733,12 +806,14 @@
 
     row.appendChild(bub);
     feed.appendChild(row);
-    scrollFeed();
+    if (shouldScroll) scrollFeed();
     return row;
   }
 
-  function scrollFeed() {
-    feed.parentElement.scrollTop = feed.parentElement.scrollHeight;
+  function scrollFeed(force = false) {
+    if (!force && !stickToBottom && !isNearBottom(messagesEl)) return;
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    stickToBottom = true;
   }
 
   // ── History ───────────────────────────────────────────────
@@ -749,21 +824,22 @@
     const data = await res.json();
     for (const msg of data.messages) {
       if (msg.role === 'user') {
-        addUserMsg(msg.content);
+        addUserMsg(msg.content, false);
       } else {
         // Render stored tool steps before the assistant message
         for (const step of (msg.steps || [])) {
           if (step.type === 'tool_call')
-            addStep('tool-call', step.name, step.args);
+            addStep('tool-call', step.name, step.args, false);
           else if (step.type === 'tool_result')
-            addStep('tool-result', step.name, step.result);
+            addStep('tool-result', step.name, step.result, false);
         }
-        addAgentMsg(msg.content);
+        addAgentMsg(msg.content, false);
       }
     }
     if (!data.messages.length) {
       feed.innerHTML = '<div class="empty-hint">New session — say something.</div>';
     }
+    scrollToLastAssistant();
     highlightSession();
   }
 
@@ -924,6 +1000,7 @@
     if (hint) hint.remove();
 
     addUserMsg(text);
+    stickToBottom = true;
 
     let agentMd       = null;   // md-content div for the current text segment
     let textBuffer    = '';     // full response text (all segments)
@@ -993,6 +1070,7 @@
             textBuffer   += event.text;
             bubbleBuffer += event.text;
             agentMd.innerHTML = renderStreamingMarkdown(bubbleBuffer);
+            scheduleMathRender(agentMd);
             scrollFeed();
 
           } else if (event.type === 'done') {
