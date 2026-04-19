@@ -7,7 +7,6 @@ import types
 import pytest
 
 import agent
-import config
 import summarizer
 
 
@@ -273,7 +272,7 @@ class _FakeHttpxClient:
 
 def test_summarize_gemma_uses_gemini_api_key_free_resolved(monkeypatch):
     captured = {}
-    monkeypatch.setattr(config, "GEMINI_API_KEY_FREE_RESOLVED", "kfree")
+    monkeypatch.setattr(summarizer, "GEMINI_API_KEY_FREE_RESOLVED", "kfree")
 
     import httpx
 

@@ -4,7 +4,6 @@ import json
 import logging
 import re
 from openai import AsyncOpenAI, RateLimitError, APIError, APIConnectionError
-from gemini_client import GeminiClient
 from config import PROVIDERS
 from summarizer import summarize_gemma
 from tools import TOOL_SCHEMAS, TOOL_FUNCTIONS
@@ -14,19 +13,11 @@ log = logging.getLogger(__name__)
 
 # ── Async clients — one per provider with a key ──────────────────────────────
 
-def _make_client(p: dict):
-    if "googleapis.com" in p["base_url"]:
-        # Native Gemini API — new AI Studio keys (AQ. prefix) don't work with
-        # the OpenAI compat endpoint's Bearer auth. Native endpoint accepts ?key=.
-        return GeminiClient(api_key=p["api_key"], model=p["model"])
-    return AsyncOpenAI(api_key=p["api_key"], base_url=p["base_url"])
-
-
 _clients: list[dict] = [
     {
         "name":   p["name"],
         "model":  p["model"],
-        "client": _make_client(p),
+        "client": AsyncOpenAI(api_key=p["api_key"], base_url=p["base_url"]),
     }
     for p in PROVIDERS if p["api_key"]
 ]

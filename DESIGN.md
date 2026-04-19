@@ -23,8 +23,7 @@ This is a personal AI assistant for Zafir, exposed as a web application. It runs
 | Server | FastAPI (Python), served via uvicorn (gunicorn in prod) |
 | LLM providers | Google AI Studio (Gemma 4), Cerebras, Groq |
 | Gemini keys | **Tier-1** (`GEMINI_API_KEY`) — agent loop / `_clients`. **Free tier** (`GEMINI_API_KEY_FREE`) — Gemma 26B only; resolved at import to `config.GEMINI_API_KEY_FREE_RESOLVED` (fallback: `GEMINI_API_KEY`, one warning if free unset). |
-| Primary API adapter | `gemini_client.py` — native Gemini REST API, currently Gemini API has a bug where recently generated keys results in 400 "Multiple authentication credentials received", if this is fixed we should revert to the system used for the other models to improve code reuse |
-| Fallback API adapter | OpenAI Python SDK (`AsyncOpenAI`) |
+| API adapter (all providers) | OpenAI Python SDK (`AsyncOpenAI`); Gemini uses Google's OpenAI-compatibility endpoint (`/v1beta/openai/`) |
 | Conversation storage | SQLite (`data/history.db`) |
 | Long-term memory | Mem0 + Qdrant (localhost:6333) |
 | Memory embeddings | `BAAI/bge-base-en-v1.5` (local HuggingFace) |
@@ -55,16 +54,9 @@ If all providers are exhausted without success, the server raises `RuntimeError(
 
 ### 3.1 Gemini Authentication
 
-Google AI Studio keys with the `AQ.` prefix (current format) are incompatible with Bearer auth on the OpenAI-compatibility endpoint (`/v1beta/openai/`). The system uses the native Gemini REST API (`/v1beta/models/`) with `?key=` query-parameter authentication instead.
+All Gemini calls use Google's OpenAI-compatibility endpoint (`/v1beta/openai/`) via `AsyncOpenAI` with the API key as a Bearer token — same pattern as Cerebras and Groq. AI Studio keys (`AIza…`) authenticate this way.
 
-`gemini_client.py` is a full drop-in replacement for `AsyncOpenAI` that translates between OpenAI message format and the native Gemini REST API. It handles:
-- `system` messages → `systemInstruction`
-- `assistant` messages with `tool_calls` → `functionCall` parts
-- `tool` messages → `functionResponse` parts (grouped under `user` role)
-- Gemini `"thought": true` parts → wrapped in `<thinking>...</thinking>` tags for the stream stripper
-- Streaming via `streamGenerateContent?alt=sse`
-
-Cerebras and Groq use the standard `AsyncOpenAI` client pointed at their OpenAI-compatible endpoints.
+> Historical note: an earlier `gemini_client.py` translated to/from the native `/v1beta/models/` REST API (`?key=` param) when AI Studio's `AQ.`-prefix keys could not authenticate via Bearer. That adapter has been removed; if a future key format breaks compat again, reintroduce a thin native client behind a flag rather than silently regressing.
 
 ---
 
@@ -111,7 +103,7 @@ In **streaming mode**, `_ThinkStripper` processes chunks in real-time:
 - Emits `thinking_chars` events to the UI while buffering (drives the animated thinking indicator)
 - Note: `_ThinkStripper` handles `thought|think|thinking` tags only; `redacted_reasoning` and `redacted_thinking` are only handled post-stream by `_visible_after_think`. Streaming models that emit those longer forms may pass them through raw. (Known limitation.)
 
-Gemini's native thinking API uses `"thought": true` part metadata rather than inline tags. `gemini_client.py` wraps these in `<thinking>...</thinking>` tags so the stream stripper handles them uniformly.
+Gemini's reasoning is exposed via the OpenAI-compat endpoint as inline `<thinking>` (or equivalent) text in the response, so the same stream stripper handles all providers uniformly.
 
 ### 4.3 Repair call
 
