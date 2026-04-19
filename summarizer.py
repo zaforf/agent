@@ -21,7 +21,7 @@ import time
 
 import httpx
 
-from config import gemini_summarizer_api_key
+from config import gemini_free_api_key
 
 MODEL = "gemma-4-26b-a4b-it"
 _URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
@@ -46,7 +46,7 @@ def summarize_gemma(
         "generationConfig": {"maxOutputTokens": max_output_tokens},
     }
 
-    key = gemini_summarizer_api_key()
+    key = gemini_free_api_key()
     with httpx.Client(timeout=_HTTP_TIMEOUT_S) as client:
         for attempt in range(_RETRIES):
             resp = client.post(_URL, params={"key": key}, json=payload)

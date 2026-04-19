@@ -9,31 +9,16 @@ log = logging.getLogger(__name__)
 
 CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY", "")
 GROQ_API_KEY     = os.environ.get("GROQ_API_KEY", "")
-# Tier-1 / primary — agent loop (`agent._clients`), full user + tool context.
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 
-def gemini_summarizer_api_key() -> str:
-    """API key for Gemma 26B summarizer HTTP calls only (`summarizer.summarize_gemma`).
-
-    Reads the environment at call time so tests can monkeypatch `os.environ`.
-
-    Prefer ``GEMINI_SUMMARIZER_API_KEY`` or ``GEMINI_API_KEY_FREE``; if both are
-    unset, falls back to ``GEMINI_API_KEY`` with a log warning.
-    """
-    free = os.environ.get("GEMINI_SUMMARIZER_API_KEY", "") or os.environ.get(
-        "GEMINI_API_KEY_FREE", ""
-    )
-    if free:
-        return free
-    tier1 = os.environ.get("GEMINI_API_KEY", "")
-    if tier1:
-        log.warning(
-            "GEMINI_SUMMARIZER_API_KEY / GEMINI_API_KEY_FREE unset — using GEMINI_API_KEY "
-            "for summarizer (fetch_url, history). Set a dedicated free-tier key to avoid "
-            "sharing tier-1 quota with summarization."
-        )
-        return tier1
+def gemini_free_api_key() -> str:
+    """Gemma 26B summarizer (`summarize_gemma` only). Reads env at call time for tests."""
+    if k := os.environ.get("GEMINI_API_KEY_FREE", ""):
+        return k
+    if k := os.environ.get("GEMINI_API_KEY", ""):
+        log.warning("GEMINI_API_KEY_FREE unset; using GEMINI_API_KEY for summarizer")
+        return k
     return ""
 
 # Provider chain — tried in order on rate-limit/failure.
