@@ -27,8 +27,7 @@ else:
 #   3. Cerebras Q3  (Qwen3-235B, 1M tok/day free, strong fallback)
 #   4. Groq L3.3    (last resort — proven reliable, no daily cap)
 #
-# Gemini key is sent as ?key= query param (not Bearer) — required for
-# the new AI Studio key format (AQ. prefix).
+# All Gemini calls go through the OpenAI-compat endpoint via AsyncOpenAI.
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 PROVIDERS: list[dict] = [

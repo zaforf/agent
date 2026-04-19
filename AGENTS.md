@@ -11,7 +11,7 @@ Short orientation so dispatched agents don’t thrash.
 
 - Python **3.12+** (project runs on newer 3.x as well).
 - **FastAPI** entry: `main.py`. Core loop: `agent.py`. SQLite history: `db.py`. Tools registry: `tools/__init__.py`.
-- LLM adapters: `gemini_client.py` (native Gemini), OpenAI-compatible clients for other providers (`config.PROVIDERS`).
+- LLM adapter: OpenAI Python SDK (`AsyncOpenAI`) for all providers, including Gemini via Google's OpenAI-compat endpoint (`config.PROVIDERS`).
 
 ## Tests
 
