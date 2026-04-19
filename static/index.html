@@ -692,6 +692,7 @@
     mathRenderTimer = setTimeout(() => {
       renderMath(el);
       mathRenderTimer = null;
+      if (stickToBottom) scrollFeed(true);
     }, 80);
   }
 
@@ -699,16 +700,19 @@
     stickToBottom = isNearBottom(messagesEl);
   });
 
-  function scrollToLastAssistant() {
-    const assistants = feed.querySelectorAll('.row.agent');
-    if (!assistants.length) {
-      scrollFeed(true);
-      return;
-    }
-    const last = assistants[assistants.length - 1];
-    const target = Math.max(0, last.offsetTop - (messagesEl.clientHeight - last.offsetHeight - 16));
-    messagesEl.scrollTop = target;
-    stickToBottom = isNearBottom(messagesEl);
+  /** Run after history DOM + KaTeX so heights match rendered math (Bugbot: defer scroll past setTimeout math). */
+  function scrollToLastAssistantAfterLayout() {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const assistants = feed.querySelectorAll('.row.agent');
+        if (!assistants.length) {
+          scrollFeed(true);
+          return;
+        }
+        assistants[assistants.length - 1].scrollIntoView({ block: 'end', behavior: 'auto' });
+        stickToBottom = isNearBottom(messagesEl);
+      });
+    });
   }
 
   // ── Message rendering ─────────────────────────────────────
@@ -745,11 +749,12 @@
     return md;
   }
 
-  /** Render a complete agent message (used when loading history). */
-  function addAgentMsg(text, shouldScroll = true) {
+  /** Render a complete agent message. `syncMath`: history load renders KaTeX before scroll anchor runs. */
+  function addAgentMsg(text, shouldScroll = true, syncMath = false) {
     const md = createAgentBubble(null, shouldScroll);
     md.innerHTML = renderMarkdown(text);
-    setTimeout(() => renderMath(md), 0);
+    if (syncMath) renderMath(md);
+    else setTimeout(() => renderMath(md), 0);
   }
 
   /** Add a collapsible tool step row. */
@@ -833,13 +838,13 @@
           else if (step.type === 'tool_result')
             addStep('tool-result', step.name, step.result, false);
         }
-        addAgentMsg(msg.content, false);
+        addAgentMsg(msg.content, false, true);
       }
     }
     if (!data.messages.length) {
       feed.innerHTML = '<div class="empty-hint">New session — say something.</div>';
     }
-    scrollToLastAssistant();
+    scrollToLastAssistantAfterLayout();
     highlightSession();
   }
 
