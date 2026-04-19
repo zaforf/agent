@@ -1,12 +1,24 @@
+import logging
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
 
+log = logging.getLogger(__name__)
+
 CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY", "")
 GROQ_API_KEY     = os.environ.get("GROQ_API_KEY", "")
-GEMINI_API_KEY   = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
+_free = os.environ.get("GEMINI_API_KEY_FREE", "")
+if _free:
+    GEMINI_API_KEY_FREE_RESOLVED = _free
+elif GEMINI_API_KEY:
+    GEMINI_API_KEY_FREE_RESOLVED = GEMINI_API_KEY
+    log.warning("GEMINI_API_KEY_FREE unset; using GEMINI_API_KEY for summarizer")
+else:
+    GEMINI_API_KEY_FREE_RESOLVED = ""
 
 # Provider chain — tried in order on rate-limit/failure.
 #

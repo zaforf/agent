@@ -22,6 +22,7 @@ This is a personal AI assistant for Zafir, exposed as a web application. It runs
 |---|---|
 | Server | FastAPI (Python), served via uvicorn (gunicorn in prod) |
 | LLM providers | Google AI Studio (Gemma 4), Cerebras, Groq |
+| Gemini keys | **Tier-1** (`GEMINI_API_KEY`) — agent loop / `_clients`. **Free tier** (`GEMINI_API_KEY_FREE`) — Gemma 26B only; resolved at import to `config.GEMINI_API_KEY_FREE_RESOLVED` (fallback: `GEMINI_API_KEY`, one warning if free unset). |
 | Primary API adapter | `gemini_client.py` — native Gemini REST API, currently Gemini API has a bug where recently generated keys results in 400 "Multiple authentication credentials received", if this is fixed we should revert to the system used for the other models to improve code reuse |
 | Fallback API adapter | OpenAI Python SDK (`AsyncOpenAI`) |
 | Conversation storage | SQLite (`data/history.db`) |
@@ -45,6 +46,8 @@ Providers are tried in order. On rate-limit (`RateLimitError`, `APIConnectionErr
 | 4 | `groq` | `llama-3.3-70b-versatile` | Last resort — no daily cap, always available |
 
 A provider is only added to the active client list if its API key is present in the environment. Missing-key providers are silently skipped at startup.
+
+The **Gemma 26B summarizer** (`summarizer.summarize_gemma`) is not part of that chain: HTTP calls use `config.GEMINI_API_KEY_FREE_RESOLVED` (from `GEMINI_API_KEY_FREE` or fallback — see table above). That keeps summarization on a separate key/quota when configured.
 
 If all providers are exhausted without success, the server raises `RuntimeError("All providers exhausted")`.
 
@@ -151,7 +154,7 @@ If Qdrant is unreachable, memory tool calls fail with an exception caught by the
 1. Fetch the URL with a browser-like User-Agent
 2. Parse HTML using a custom `_TextExtractor` (strips `script`, `style`, `nav`, `header`, `footer`, `aside`, `noscript` tags; preserves body text with block-level newlines)
 3. Truncate content to 128,000 characters if needed
-4. Send the full text + the caller's prompt to `summarizer.summarize_gemma` — the shared Gemma 4 26B native-Gemini helper used by both this tool and `_summarize_for_history`
+4. Send the full text + the caller's prompt to `summarizer.summarize_gemma` — the shared Gemma 4 26B native-Gemini helper used by both this tool and `_summarize_for_history` (uses `config.GEMINI_API_KEY_FREE_RESOLVED` — see §2)
 5. Return the summarizer's extracted/structured response (up to 8,192 output tokens)
 
 The summarizer gives the model exactly what it asked for rather than a raw HTML dump. The prompt should describe what to extract (e.g., "list all albums in chronological order").
@@ -220,7 +223,7 @@ Every LLM call receives:
 
 When a tool result exceeds **8,000 characters**, it is queued for background summarization. The summarizer:
 - Receives: the last user message, the tool name, the tool arguments, and the full tool output (context for disambiguation only — the model is instructed not to echo these in its reply)
-- Uses: **Gemma 4 26B** via `summarizer.summarize_gemma` — the same fast MoE model the `fetch_url` tool uses. Shared via the top-level `summarizer.py` module so there is exactly one summarizer implementation. The primary provider chain stays reserved for the agent loop.
+- Uses: **Gemma 4 26B** via `summarizer.summarize_gemma` — the same fast MoE model the `fetch_url` tool uses, authenticated with `GEMINI_API_KEY_FREE_RESOLVED` (see §2). Shared via the top-level `summarizer.py` module so there is exactly one summarizer implementation. The primary provider chain stays reserved for the agent loop.
 - Returns: takeaways-only text (facts, numbers, names, errors, conclusions) — no restatement of the user request or tool args. The stored message is wrapped as `[history summary of <tool>]` + a one-line notice that the response was summarized for context efficiency + `Takeaways:` + that body (pagination notes for `fetch_url` are re-appended after the body when present)
 - Is context-limited: the summarizer does NOT receive earlier conversation history, so summaries may be thin or generic if the goal was established several turns earlier (this is expected and noted in the system prompt)
 
