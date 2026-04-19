@@ -1,5 +1,8 @@
 # Continuous integration — fast hermetic tests (no API keys, no live/net).
 # Branch protection / required checks are configured in GitHub repo settings.
+#
+# PRs get a comment + check run from publish-unit-test-result-action (pass/fail,
+# counts, and comparison vs base when applicable).
 
 name: CI
 
@@ -15,6 +18,8 @@ concurrency:
 
 permissions:
   contents: read
+  checks: write
+  pull-requests: write
 
 jobs:
   test:
@@ -37,4 +42,15 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run tests
-        run: python -m pytest
+        run: python -m pytest --junitxml=test-results.xml
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: test-results.xml
+          check_name: pytest
+          comment_mode: always
+          job_summary: true
+          # Highlights added/removed tests vs earlier commits on PRs (default on)
+          compare_to_earlier_commit: true
