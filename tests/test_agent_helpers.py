@@ -4,8 +4,6 @@ from __future__ import annotations
 import asyncio
 import types
 
-import logging
-
 import pytest
 
 import agent
@@ -241,20 +239,9 @@ def test_summarize_for_history_uses_gemma_26b(monkeypatch):
     assert "TOOL OUTPUT:" in captured["user"]
 
 
-# ── GEMINI_API_KEY_FREE (summarizer HTTP only) ───────────────────────────────
+# ── GEMINI_API_KEY_FREE_RESOLVED (summarizer HTTP only) ──────────────────────
 
-def test_gemini_free_api_key(monkeypatch, caplog):
-    monkeypatch.setenv("GEMINI_API_KEY", "tier1")
-    monkeypatch.setenv("GEMINI_API_KEY_FREE", "free")
-    assert config.gemini_free_api_key() == "free"
-
-    monkeypatch.delenv("GEMINI_API_KEY_FREE", raising=False)
-    caplog.set_level(logging.WARNING)
-    assert config.gemini_free_api_key() == "tier1"
-    assert any("GEMINI_API_KEY_FREE" in r.message for r in caplog.records)
-
-
-def test_summarize_gemma_uses_free_key_in_request(monkeypatch):
+def test_summarize_gemma_uses_gemini_api_key_free_resolved(monkeypatch):
     captured = {}
 
     class R:
@@ -266,8 +253,7 @@ def test_summarize_gemma_uses_free_key_in_request(monkeypatch):
         def json(self):
             return {"candidates": [{"content": {"parts": [{"text": "x"}]}}]}
 
-    monkeypatch.setenv("GEMINI_API_KEY", "k1")
-    monkeypatch.setenv("GEMINI_API_KEY_FREE", "kfree")
+    monkeypatch.setattr(config, "GEMINI_API_KEY_FREE_RESOLVED", "kfree")
 
     import httpx
 
