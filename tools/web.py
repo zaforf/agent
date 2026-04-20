@@ -1,11 +1,13 @@
-"""Web fetch tool — retrieve a URL and return readable plain text.
+"""Web tools — `fetch_url` (retrieve and summarize a URL) and `web_search`
+(Brave Search API for ranked links + snippets when the model has no URL yet).
 
-Default behaviour: the full page is passed to a fast long-context summarizer
+`fetch_url` default: the full page is passed to a fast long-context summarizer
 (Gemma 4 26B, 1M-token context) together with a caller-supplied prompt, so the
 model receives exactly the information it asked for rather than a truncated
-chunk of raw HTML text.
+chunk of raw HTML text. Pass raw=True for offset-based pagination.
 
-Pass raw=True to get the unprocessed text with offset-based pagination instead.
+`web_search` is additive — it produces URLs + short snippets the model can
+then `fetch_url` for depth. Free tier of the Brave Search API; key optional.
 """
 import logging
 import re
@@ -14,6 +16,7 @@ from html.parser import HTMLParser
 
 import httpx
 
+from config import BRAVE_SEARCH_API_KEY
 from summarizer import summarize_gemma
 
 log = logging.getLogger(__name__)
@@ -25,6 +28,15 @@ _SUMMARIZER_CHAR_LIMIT = 128_000   # chars fed to summarizer (well within model 
 _RAW_CHAR_LIMIT        = 8_000     # chars returned in raw/paginated mode
 _FETCH_RETRIES         = 4
 _FETCH_TIMEOUT_S       = 15
+
+# ── Brave Search ─────────────────────────────────────────────────────────────
+
+_BRAVE_URL              = "https://api.search.brave.com/res/v1/web/search"
+_BRAVE_TIMEOUT_S        = 10
+_SEARCH_DEFAULT_RESULTS = 5
+_SEARCH_MAX_RESULTS     = 10
+_SEARCH_SNIPPET_CHARS   = 240
+_SEARCH_TOTAL_CHARS     = 4000
 
 
 class _TextExtractor(HTMLParser):
@@ -162,6 +174,72 @@ def fetch_url(url: str, prompt: str = "", offset: int = 0, raw: bool = False) ->
         return f"Error fetching {url}: {e}"
 
 
+def _strip_html(s: str) -> str:
+    """Brave snippets/titles often contain `<strong>` highlight tags — drop them."""
+    return re.sub(r"<[^>]+>", "", s or "").strip()
+
+
+def _clean_search_text(s: str) -> str:
+    """Keep tool output API-safe for provider round-trips (strip controls/surrogates)."""
+    s = _strip_html(s or "")
+    s = s.encode("utf-8", "replace").decode("utf-8")
+    s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", s)
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
+
+
+def web_search(query: str, max_results: int = _SEARCH_DEFAULT_RESULTS) -> str:
+    """Brave Search — return a numbered markdown list of title, URL, snippet.
+
+    Use to discover URLs for `fetch_url` when none is at hand. `max_results`
+    is clamped to [1, _SEARCH_MAX_RESULTS]. Returns a stable error string when
+    the API key is missing or the request fails (so the model can react).
+    """
+    if not BRAVE_SEARCH_API_KEY:
+        return "Error: web_search disabled — set BRAVE_SEARCH_API_KEY in .env"
+
+    q = (query or "").strip()
+    if not q:
+        return "Error: web_search needs a non-empty query"
+
+    n = max(1, min(int(max_results or _SEARCH_DEFAULT_RESULTS), _SEARCH_MAX_RESULTS))
+    headers = {
+        "Accept": "application/json",
+        "X-Subscription-Token": BRAVE_SEARCH_API_KEY,
+    }
+    params = {"q": q, "count": n}
+
+    try:
+        with httpx.Client(timeout=_BRAVE_TIMEOUT_S) as client:
+            resp = client.get(_BRAVE_URL, headers=headers, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as e:
+        return f"Error: web_search HTTP {e.response.status_code}"
+    except httpx.TimeoutException:
+        return f"Error: web_search timed out ({_BRAVE_TIMEOUT_S} s)"
+    except Exception as e:
+        return f"Error: web_search failed: {e}"
+
+    results = (data.get("web") or {}).get("results") or []
+    if not results:
+        return f"No results for {q!r}."
+
+    lines = []
+    for i, r in enumerate(results[:n], 1):
+        title = _clean_search_text(r.get("title", "")) or "(untitled)"
+        url = _clean_search_text(r.get("url", ""))
+        snippet = _clean_search_text(r.get("description", ""))
+        if len(snippet) > _SEARCH_SNIPPET_CHARS:
+            snippet = snippet[:_SEARCH_SNIPPET_CHARS].rstrip() + "…"
+        lines.append(f"{i}. {title} - {url}\n   {snippet}" if snippet else f"{i}. {title} - {url}")
+
+    out = "\n".join(lines)
+    if len(out) > _SEARCH_TOTAL_CHARS:
+        out = out[:_SEARCH_TOTAL_CHARS].rstrip() + "\n… [truncated]"
+    return out
+
+
 SCHEMAS = [
     {
         "type": "function",
@@ -212,4 +290,34 @@ SCHEMAS = [
     }
 ]
 
-FUNCTIONS = {"fetch_url": fetch_url}
+SCHEMAS.append({
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": (
+            "Search the web (Brave Search API) for ranked links + short snippets. "
+            "Use when you need a URL but don't have one yet — then call fetch_url "
+            "on the most promising result for depth. Returns a numbered markdown "
+            "list of title / URL / snippet."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query.",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": (
+                        f"Number of results to return "
+                        f"(default {_SEARCH_DEFAULT_RESULTS}, max {_SEARCH_MAX_RESULTS})."
+                    ),
+                },
+            },
+            "required": ["query"],
+        },
+    },
+})
+
+FUNCTIONS = {"fetch_url": fetch_url, "web_search": web_search}

@@ -117,7 +117,7 @@ See §11 for the repaired streaming edge case and the summarizer model choice, p
 
 Tools are registered in `tools/__init__.py`. Adding a new tool requires only creating a module with `SCHEMAS` and `FUNCTIONS` dicts and importing it there.
 
-All tools are called synchronously. `fetch_url` is classified as a blocking sync tool (`_BLOCKING_SYNC_TOOLS`) and is run in a thread via `asyncio.to_thread()` to avoid blocking the event loop.
+All tools are called synchronously. `fetch_url` and `web_search` are classified as blocking sync tools (`_BLOCKING_SYNC_TOOLS`) and are run in a thread via `asyncio.to_thread()` to avoid blocking the event loop.
 
 The model is instructed to use native API `tool_calls` only — no XML or fenced-code tool invocations.
 
@@ -138,9 +138,13 @@ The system prompt instructs the model to use `recall()` before answering anythin
 
 If Qdrant is unreachable, memory tool calls fail with an exception caught by the tool executor, which returns the error string to the model.
 
-### 5.2 Web fetch tool (`tools/fetch.py`)
+### 5.2 Web tools (`tools/web.py`)
 
-`fetch_url(url, prompt, offset, raw)` fetches a URL and returns its content.
+Two tools live here: **`fetch_url`** for retrieving and reading a known URL, and **`web_search`** for discovering URLs when the model has none.
+
+#### 5.2.1 `fetch_url(url, prompt, offset, raw)`
+
+Fetches a URL and returns its content.
 
 **Default (summarizer) mode** — when `prompt` is provided and `raw` is not set:
 1. Fetch the URL with a browser-like User-Agent
@@ -163,6 +167,14 @@ The model can always paginate regardless of whether a pagination note is visible
 Retry behavior: up to 4 retries on timeout or connection errors with exponential backoff; up to 3 retries on HTTP 429 (rate limit) with `Retry-After` header respect.
 
 If the summarizer fails, the tool falls back to raw mode silently (logs a warning).
+
+#### 5.2.2 `web_search(query, max_results=5)`
+
+Returns a numbered markdown list of `title — url` plus a short snippet (≤ 240 chars), backed by the **[Brave Search API](https://api.search.brave.com/)** (free tier; bring-your-own key via `BRAVE_SEARCH_API_KEY` in `.env`). Additive to `fetch_url` — the model uses search to find URLs and then `fetch_url` for depth.
+
+- `max_results` is clamped to `[1, 10]` (default 5). Snippets and titles have HTML highlight tags stripped.
+- If `BRAVE_SEARCH_API_KEY` is unset, the tool returns the stable error string `"Error: web_search disabled — set BRAVE_SEARCH_API_KEY in .env"` so the model can react. HTTP / timeout failures also return short `Error: …` strings.
+- Single endpoint (`/res/v1/web/search`), 10 s timeout, no retry — Brave's free tier is rate-limited and one failure is enough signal for the model to switch strategies.
 
 ### 5.3 System prompt tools (`tools/self_modify.py`)
 

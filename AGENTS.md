@@ -50,7 +50,7 @@ Update `DESIGN.md` when behavior is part of the documented contract.
 | Agent loop / streaming | `agent.py` |
 | HTTP API + SSE | `main.py` |
 | History summarization (Gemma 26B) | `summarizer.py`, `_summarize_for_history` in `agent.py` |
-| Web fetch | `tools/fetch.py` |
+| Web (fetch + search) | `tools/web.py` |
 | Memory (Mem0 + Qdrant) | `tools/memory.py` |
 
 When in doubt, search `DESIGN.md` and mirror existing patterns in the same directory.

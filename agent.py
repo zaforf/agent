@@ -97,7 +97,25 @@ class _ThinkStripper:
         return out
 
 # Sync tools that do HTTP / long completions — run off the event loop.
-_BLOCKING_SYNC_TOOLS = frozenset({"fetch_url"})
+_BLOCKING_SYNC_TOOLS = frozenset({"fetch_url", "web_search"})
+
+
+def _merge_stream_fragment(current: str, fragment: str) -> str:
+    """Merge streamed name/arguments fragments without accidental duplication.
+
+    Providers may send either:
+      - true deltas (append-only fragments), or
+      - cumulative snapshots (same full value repeated each chunk).
+    """
+    if not fragment:
+        return current
+    if not current:
+        return fragment
+    if fragment.startswith(current):
+        return fragment
+    if current.startswith(fragment):
+        return current
+    return current + fragment
 
 
 def _sanitize_message(m: dict) -> dict | None:
@@ -515,9 +533,13 @@ async def run_stream(user_message: str, history: list[dict]):
                         }
                     if tc.function:
                         if tc.function.name:
-                            tool_calls_acc[idx]["name"] += tc.function.name
+                            tool_calls_acc[idx]["name"] = _merge_stream_fragment(
+                                tool_calls_acc[idx]["name"], tc.function.name
+                            )
                         if tc.function.arguments:
-                            tool_calls_acc[idx]["arguments"] += tc.function.arguments
+                            tool_calls_acc[idx]["arguments"] = _merge_stream_fragment(
+                                tool_calls_acc[idx]["arguments"], tc.function.arguments
+                            )
 
             if delta.content and not tool_mode:
                 raw_parts.append(delta.content)
@@ -542,10 +564,16 @@ async def run_stream(user_message: str, history: list[dict]):
             native_tc_list = []
             for idx in sorted(tool_calls_acc.keys()):
                 tc = tool_calls_acc[idx]
+                # Streamed argument chunks can be malformed/incomplete JSON.
+                # Normalize once here so history replay stays provider-safe.
+                try:
+                    args_obj = json.loads(tc["arguments"] or "{}")
+                except json.JSONDecodeError:
+                    args_obj = {}
                 native_tc_list.append({
                     "id":   tc["id"],
                     "type": "function",
-                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    "function": {"name": tc["name"], "arguments": json.dumps(args_obj)},
                 })
 
             messages.append({
@@ -558,10 +586,10 @@ async def run_stream(user_message: str, history: list[dict]):
             for idx in sorted(tool_calls_acc.keys()):
                 tc   = tool_calls_acc[idx]
                 name = tc["name"]
-                try:
-                    args = json.loads(tc["arguments"] or "{}")
-                except json.JSONDecodeError:
-                    args = {}
+                args = json.loads(next(
+                    ntc["function"]["arguments"]
+                    for ntc in native_tc_list if ntc["id"] == tc["id"]
+                ))
 
                 log.info("tool-call  %s  %s", name, str(args)[:120])
                 yield {"type": "tool_call", "name": name, "args": args}

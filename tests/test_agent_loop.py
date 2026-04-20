@@ -598,3 +598,61 @@ def test_streaming_repair_triggers_on_thinking_only(monkeypatch, tmp_system_prom
         f"expected exactly one assistant in turn_messages, got {len(assistants)}: "
         f"{assistants}"
     )
+
+
+
+def test_streaming_tool_call_name_not_duplicated_across_chunks(
+    monkeypatch, tmp_system_prompt, providers
+):
+    """Gemini/OpenAI stream deltas may repeat the same function name across chunks.
+    We should not concatenate duplicates into names like web_searchweb_search.
+    """
+    _install_fake_tool(monkeypatch, "web_search", lambda query=None, max_results=5: "ok")
+
+    iter1 = [
+        tool_chunk(index=0, id="tc_1", name="web_search", arguments=""),
+        tool_chunk(index=0, id="tc_1", name="web_search", arguments='{"query":"x"}'),
+    ]
+    iter2 = [text_chunk("done")]
+
+    p = providers([[iter1, iter2]])
+
+    events = asyncio.run(_collect_stream("go"))
+    assert events[-1]["type"] == "done"
+
+    # Second provider call receives the tool message from round 1.
+    call2_msgs = p.calls[1]["messages"]
+    tool_msgs = [m for m in call2_msgs if m.get("role") == "tool"]
+    assert tool_msgs, f"expected tool message in 2nd call, got {call2_msgs}"
+    assert tool_msgs[0]["name"] == "web_search"
+    assert "Unknown tool" not in tool_msgs[0]["content"]
+
+
+def test_streaming_tool_call_arguments_accumulate_across_chunks(
+    monkeypatch, tmp_system_prompt, providers
+):
+    """Arguments may stream in fragments; they must be concatenated in order.
+
+    Regression: a prior suffix-only dedup path accidentally dropped argument
+    fragments, producing `{}` and triggering extra malformed tool rounds.
+    """
+    seen_args = {}
+
+    def _fake_web_search(**kwargs):
+        seen_args.update(kwargs)
+        return "ok"
+
+    _install_fake_tool(monkeypatch, "web_search", _fake_web_search)
+
+    iter1 = [
+        tool_chunk(index=0, id="tc_1", name="web_search", arguments='{"query":"'),
+        tool_chunk(index=0, id="tc_1", name="web_search", arguments='x","max_results":3}'),
+    ]
+    iter2 = [text_chunk("done")]
+
+    providers([[iter1, iter2]])
+    events = asyncio.run(_collect_stream("go"))
+    assert events[-1]["type"] == "done"
+    assert seen_args == {"query": "x", "max_results": 3}
+
+

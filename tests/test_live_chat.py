@@ -85,7 +85,7 @@ def test_fetch_and_summarize_end_to_end(monkeypatch):
     """End-to-end integration test — the agent must:
 
       1. Call fetch_url on a real URL (Wikipedia)
-      2. fetch.py's internal summarizer must return a real result, not
+      2. tools/web.py's internal summarizer must return a real result, not
          raise-and-fall-through-to-raw
       3. The final visible response must be non-empty and on-topic
 
@@ -96,7 +96,7 @@ def test_fetch_and_summarize_end_to_end(monkeypatch):
     summarizer is mocked there.
     """
     import agent
-    from tools import fetch
+    from tools import web as fetch
 
     summarizer_results: list[str] = []
     real_summarize = fetch._summarize_content
