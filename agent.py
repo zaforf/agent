@@ -626,10 +626,16 @@ async def run_stream(user_message: str, history: list[dict]):
             native_tc_list = []
             for idx in sorted(tool_calls_acc.keys()):
                 tc = tool_calls_acc[idx]
+                # Streamed argument chunks can be malformed/incomplete JSON.
+                # Normalize once here so history replay stays provider-safe.
+                try:
+                    args_obj = json.loads(tc["arguments"] or "{}")
+                except json.JSONDecodeError:
+                    args_obj = {}
                 native_tc_list.append({
                     "id":   tc["id"],
                     "type": "function",
-                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    "function": {"name": tc["name"], "arguments": json.dumps(args_obj)},
                 })
 
             messages.append({
@@ -642,10 +648,10 @@ async def run_stream(user_message: str, history: list[dict]):
             for idx in sorted(tool_calls_acc.keys()):
                 tc   = tool_calls_acc[idx]
                 name = tc["name"]
-                try:
-                    args = json.loads(tc["arguments"] or "{}")
-                except json.JSONDecodeError:
-                    args = {}
+                args = json.loads(next(
+                    ntc["function"]["arguments"]
+                    for ntc in native_tc_list if ntc["id"] == tc["id"]
+                ))
 
                 log.info("tool-call  %s  %s", name, str(args)[:120])
                 yield {"type": "tool_call", "name": name, "args": args}

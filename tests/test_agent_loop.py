@@ -628,6 +628,34 @@ def test_streaming_tool_call_name_not_duplicated_across_chunks(
     assert "Unknown tool" not in tool_msgs[0]["content"]
 
 
+def test_streaming_tool_call_arguments_accumulate_across_chunks(
+    monkeypatch, tmp_system_prompt, providers
+):
+    """Arguments may stream in fragments; they must be concatenated in order.
+
+    Regression: a prior suffix-only dedup path accidentally dropped argument
+    fragments, producing `{}` and triggering extra malformed tool rounds.
+    """
+    seen_args = {}
+
+    def _fake_web_search(**kwargs):
+        seen_args.update(kwargs)
+        return "ok"
+
+    _install_fake_tool(monkeypatch, "web_search", _fake_web_search)
+
+    iter1 = [
+        tool_chunk(index=0, id="tc_1", name="web_search", arguments='{"query":"'),
+        tool_chunk(index=0, id="tc_1", name="web_search", arguments='x","max_results":3}'),
+    ]
+    iter2 = [text_chunk("done")]
+
+    providers([[iter1, iter2]])
+    events = asyncio.run(_collect_stream("go"))
+    assert events[-1]["type"] == "done"
+    assert seen_args == {"query": "x", "max_results": 3}
+
+
 def test_streaming_falls_back_to_non_stream_call_on_gemini_invalid_argument(
     monkeypatch, tmp_system_prompt, providers
 ):
