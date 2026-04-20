@@ -109,7 +109,7 @@ Gemini's reasoning is exposed via the OpenAI-compat endpoint as inline `<thinkin
 
 If the model's response is non-empty in raw form but produces no visible text after thinking-block stripping (e.g., the entire response was inside a reasoning block), the system sends a follow-up prompt (`_REPAIR_USER`) asking the model to re-emit just the user-visible answer. The repair uses non-streaming and disables tools.
 
-See §11 for known edge cases in the streaming repair path (pinned by xfail tests in `tests/test_agent_loop.py`).
+See §11 for the repaired streaming edge case and the summarizer model choice, pinned by `tests/test_agent_loop.py::test_streaming_repair_triggers_on_thinking_only` and `tests/test_agent_helpers.py::test_summarize_for_history_uses_gemma_26b`.
 
 ---
 
@@ -376,7 +376,7 @@ The prompt is organized into nine sections; each one is short and independent so
 
 ## 11. Known Limitations
 
-This section lists remaining accepted trade-offs for this single-user deployment. Previously-flagged behavioral bugs (original §11.1 streaming repair and §11.4 summarizer model choice) have been fixed and are covered by regular green tests, not `xfail`s. There are no outstanding `xfail` bugs.
+This section lists remaining accepted trade-offs for this single-user deployment. Previously-flagged behavioral bugs (original §11.1 streaming repair and the summarizer model choice) have been fixed and are covered by regular green tests.
 
 ### 11.1 Streaming repair (resolved)
 
