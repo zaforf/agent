@@ -215,11 +215,6 @@ async def _call_stream(messages: list[dict]) -> tuple:
         raise RuntimeError("No providers configured.")
 
     last_err = None
-    last_tool_round = (
-        len(messages) >= 2
-        and messages[-1].get("role") == "tool"
-        and bool(messages[-2].get("tool_calls"))
-    )
     for entry in _clients:
         kwargs = dict(
             model       = entry["model"],
@@ -240,63 +235,6 @@ async def _call_stream(messages: list[dict]) -> tuple:
                     await asyncio.sleep(2 ** attempt)
             except APIError as e:
                 last_err = e
-                # Gemini OpenAI-compat can reject stream create with INVALID_ARGUMENT
-                # on multi-round tool histories while non-streaming succeeds.
-                # Fallback to one-shot non-stream for this provider and wrap it
-                # as a single-chunk stream so run_stream can continue.
-                emsg = str(e).lower()
-                if (
-                    last_tool_round
-                    and "gemini" in entry["name"]
-                    and (
-                        "invalid_argument" in emsg
-                        or "invalid arg" in emsg
-                    )
-                ):
-                    log.warning(
-                        "stream provider=%s invalid-argument after tool round; "
-                        "falling back to non-stream call",
-                        entry["name"],
-                    )
-                    try:
-                        resp = await entry["client"].chat.completions.create(
-                            model=entry["model"],
-                            messages=messages,
-                            max_tokens=8192,
-                            tools=TOOL_SCHEMAS,
-                            tool_choice="auto",
-                        )
-
-                        async def _single_chunk_stream():
-                            yield type(
-                                "Chunk",
-                                (),
-                                {
-                                    "choices": [
-                                        type(
-                                            "Choice",
-                                            (),
-                                            {
-                                                "delta": type(
-                                                    "Delta",
-                                                    (),
-                                                    {
-                                                        "content": resp.choices[0].message.content or "",
-                                                        "tool_calls": None,
-                                                    },
-                                                )()
-                                            },
-                                        )()
-                                    ]
-                                },
-                            )()
-
-                        return _single_chunk_stream(), entry["name"]
-                    except Exception as fallback_e:
-                        log.warning(
-                            "stream fallback non-stream failed provider=%s: %s",
-                            entry["name"], fallback_e,
-                        )
                 log.warning("stream provider=%s attempt=%d api error (skipping): %s", entry["name"], attempt, e)
                 break
             except Exception as e:

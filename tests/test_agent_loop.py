@@ -656,36 +656,3 @@ def test_streaming_tool_call_arguments_accumulate_across_chunks(
     assert seen_args == {"query": "x", "max_results": 3}
 
 
-def test_streaming_falls_back_to_non_stream_call_on_gemini_invalid_argument(
-    monkeypatch, tmp_system_prompt, providers
-):
-    """Gemini stream endpoint may reject multi-tool-round payloads with
-    INVALID_ARGUMENT. We should fallback to non-streaming `_call` and continue.
-    """
-    _install_fake_tool(monkeypatch, "web_search", lambda **kwargs: "RESULT")
-
-    from openai import APIError
-    import httpx
-
-    stream_bad = APIError(
-        "invalid arg",
-        request=httpx.Request("POST", "https://x"),
-        body=[{"error": {"status": "INVALID_ARGUMENT"}}],
-    )
-
-    # Provider script:
-    # 1) stream tool call
-    # 2) stream fails INVALID_ARGUMENT
-    # 3) fallback non-stream `_call` returns final text
-    p = providers([[
-        [tool_chunk(index=0, id="tc_1", name="web_search", arguments='{"query":"x"}')],
-        stream_bad,
-        make_response("after fallback"),
-    ]], names=["gemini-gemma4-31b"])
-
-    events = asyncio.run(_collect_stream("go"))
-    assert events[-1]["type"] == "done", events
-    text = "".join(e["text"] for e in events if e["type"] == "text_chunk")
-    assert "after fallback" in text
-    # Ensure provider got called at least once with stream=False (fallback path).
-    assert any(c.get("stream") is False for c in p.calls), p.calls
