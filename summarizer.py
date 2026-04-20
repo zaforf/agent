@@ -1,7 +1,7 @@
 """Shared helper for posting prompts to the Gemma 4 26B summarizer endpoint.
 
 Used by:
-- `tools/fetch.py`'s `_summarize_content` (extract-from-page summarization)
+- `tools/web.py`'s `_summarize_content` (extract-from-page summarization)
 - `agent._summarize_for_history` (compact tool-result summaries for history)
 
 Both paths want the same thing: a fast, cheap, long-context model that isn't

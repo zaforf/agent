@@ -50,7 +50,7 @@ def test_core_tools_are_present():
     """These are the tools DESIGN §5 names by hand."""
     required = {
         "remember", "recall", "list_memories", "delete_memory",
-        "fetch_url",
+        "fetch_url", "web_search",
         "get_system_prompt", "edit_system_prompt",
     }
     names = {s["function"]["name"] for s in TOOL_SCHEMAS}

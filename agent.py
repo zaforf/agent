@@ -97,7 +97,7 @@ class _ThinkStripper:
         return out
 
 # Sync tools that do HTTP / long completions — run off the event loop.
-_BLOCKING_SYNC_TOOLS = frozenset({"fetch_url"})
+_BLOCKING_SYNC_TOOLS = frozenset({"fetch_url", "web_search"})
 
 
 def _sanitize_message(m: dict) -> dict | None:

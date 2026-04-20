@@ -1,17 +1,19 @@
-"""Real-network tests for tools/fetch.py.
+"""Real-network tests for tools/web.py.
 
 Marked `@pytest.mark.net` so the default `pytest` run skips them. Run with
 `pytest -m net` when you want to exercise the real httpx call path (User-Agent,
-retries, TLS, HTML extraction).
+retries, TLS, HTML extraction) and the live Brave Search API.
 
 Kept minimal and targeted at rock-stable endpoints — example.com is defined by
-RFC 2606 and is intentionally static.
+RFC 2606 and is intentionally static. The web_search test is skipped when
+BRAVE_SEARCH_API_KEY isn't set.
 """
 from __future__ import annotations
 
 import pytest
 
-from tools import fetch
+import config
+from tools import web as fetch
 
 
 pytestmark = pytest.mark.net
@@ -35,3 +37,14 @@ def test_fetch_example_com_short_page_has_no_pagination_note():
     """example.com is ~1kB, well below _RAW_CHAR_LIMIT — no pagination note."""
     out = fetch.fetch_url("https://example.com", raw=True)
     assert "call fetch_url with offset=" not in out
+
+
+@pytest.mark.skipif(not config.BRAVE_SEARCH_API_KEY, reason="BRAVE_SEARCH_API_KEY not set")
+def test_web_search_brave_returns_results_for_python_org():
+    """Live Brave Search — query should return at least one result and the
+    numbered markdown format the tool advertises.
+    """
+    out = fetch.web_search("python.org official site", max_results=3)
+    assert not out.startswith("Error:"), out
+    assert "1. **" in out, f"missing numbered markdown: {out[:300]!r}"
+    assert "https://" in out, f"no http URL in response: {out[:300]!r}"

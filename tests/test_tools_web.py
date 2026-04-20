@@ -1,11 +1,14 @@
-"""Unit tests for tools/fetch.py — HTML extraction, pagination math,
-summarizer fallback. HTTP is fully mocked via monkeypatch; no network.
+"""Unit tests for tools/web.py — HTML extraction, pagination math, summarizer
+fallback, and web_search (Brave). HTTP is fully mocked via monkeypatch;
+no network in default pytest.
 """
 from __future__ import annotations
 
+import httpx
 import pytest
 
-from tools import fetch
+import config  # noqa: F401  (kept for monkeypatch-on-import patterns)
+from tools import web as fetch  # historical alias keeps fetch_url tests terse
 
 
 # ── _TextExtractor ───────────────────────────────────────────────────────────
@@ -116,3 +119,98 @@ def test_schema_raw_param_uses_constant():
     (schema,) = [s for s in fetch.SCHEMAS if s["function"]["name"] == "fetch_url"]
     raw_desc = schema["function"]["parameters"]["properties"]["raw"]["description"]
     assert f"{fetch._RAW_CHAR_LIMIT:,}" in raw_desc
+
+
+# ── web_search (Brave) ───────────────────────────────────────────────────────
+
+class _FakeSearchResp:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status_code = status
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            req = httpx.Request("GET", fetch._BRAVE_URL)
+            raise httpx.HTTPStatusError(
+                "boom", request=req,
+                response=httpx.Response(self.status_code, request=req),
+            )
+
+    def json(self):
+        return self._payload
+
+
+class _FakeSearchClient:
+    def __init__(self, captured: dict, payload: dict, status: int = 200):
+        self._captured = captured
+        self._payload = payload
+        self._status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return None
+
+    def get(self, url, headers=None, params=None):
+        self._captured["url"] = url
+        self._captured["headers"] = dict(headers or {})
+        self._captured["params"] = dict(params or {})
+        return _FakeSearchResp(self._payload, status=self._status)
+
+
+def _patch_search(monkeypatch, payload, status=200, key="k-brave"):
+    captured: dict = {}
+    monkeypatch.setattr(fetch, "BRAVE_SEARCH_API_KEY", key)
+    monkeypatch.setattr(
+        httpx, "Client",
+        lambda *a, **k: _FakeSearchClient(captured, payload, status),
+    )
+    return captured
+
+
+def test_web_search_returns_numbered_markdown_results(monkeypatch):
+    _patch_search(monkeypatch, {"web": {"results": [
+        {"title": "Python", "url": "https://python.org",
+         "description": "<strong>Python</strong> language"},
+        {"title": "PyPI", "url": "https://pypi.org",
+         "description": "Package index"},
+    ]}})
+    out = fetch.web_search("python", max_results=2)
+    assert out.startswith("1. **Python** — https://python.org"), out
+    assert "2. **PyPI** — https://pypi.org" in out
+    assert "<strong>" not in out, "html highlight tags must be stripped"
+
+
+def test_web_search_clamps_max_results(monkeypatch):
+    captured = _patch_search(monkeypatch, {"web": {"results": []}})
+    fetch.web_search("q", max_results=fetch._SEARCH_MAX_RESULTS * 100)
+    assert captured["params"]["count"] == fetch._SEARCH_MAX_RESULTS
+
+
+def test_web_search_no_key_returns_stable_error(monkeypatch):
+    monkeypatch.setattr(fetch, "BRAVE_SEARCH_API_KEY", "")
+    out = fetch.web_search("anything")
+    assert out.startswith("Error: web_search disabled")
+
+
+def test_web_search_empty_query_returns_error(monkeypatch):
+    monkeypatch.setattr(fetch, "BRAVE_SEARCH_API_KEY", "k")
+    assert fetch.web_search("   ").startswith("Error: web_search needs")
+
+
+def test_web_search_no_results_message(monkeypatch):
+    _patch_search(monkeypatch, {"web": {"results": []}})
+    assert "No results" in fetch.web_search("zzz")
+
+
+def test_web_search_http_error_returns_string(monkeypatch):
+    _patch_search(monkeypatch, {}, status=429)
+    out = fetch.web_search("q")
+    assert out.startswith("Error: web_search HTTP 429"), out
+
+
+def test_web_search_sends_subscription_token(monkeypatch):
+    captured = _patch_search(monkeypatch, {"web": {"results": []}}, key="brave-secret")
+    fetch.web_search("q")
+    assert captured["headers"].get("X-Subscription-Token") == "brave-secret"
