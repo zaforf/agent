@@ -106,6 +106,9 @@ def _merge_stream_fragment(current: str, fragment: str) -> str:
     Providers may send either:
       - true deltas (append-only fragments), or
       - cumulative snapshots (same full value repeated each chunk).
+
+    Some OpenAI-compat streams repeat the full ``function.name`` on later chunks
+    for the same index; naive concat doubles it — see ``test_stream_tool_merge``.
     """
     if not fragment:
         return current
