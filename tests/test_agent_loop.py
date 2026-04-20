@@ -598,3 +598,66 @@ def test_streaming_repair_triggers_on_thinking_only(monkeypatch, tmp_system_prom
         f"expected exactly one assistant in turn_messages, got {len(assistants)}: "
         f"{assistants}"
     )
+
+
+
+def test_streaming_tool_call_name_not_duplicated_across_chunks(
+    monkeypatch, tmp_system_prompt, providers
+):
+    """Gemini/OpenAI stream deltas may repeat the same function name across chunks.
+    We should not concatenate duplicates into names like web_searchweb_search.
+    """
+    _install_fake_tool(monkeypatch, "web_search", lambda query=None, max_results=5: "ok")
+
+    iter1 = [
+        tool_chunk(index=0, id="tc_1", name="web_search", arguments=""),
+        tool_chunk(index=0, id="tc_1", name="web_search", arguments='{"query":"x"}'),
+    ]
+    iter2 = [text_chunk("done")]
+
+    p = providers([[iter1, iter2]])
+
+    events = asyncio.run(_collect_stream("go"))
+    assert events[-1]["type"] == "done"
+
+    # Second provider call receives the tool message from round 1.
+    call2_msgs = p.calls[1]["messages"]
+    tool_msgs = [m for m in call2_msgs if m.get("role") == "tool"]
+    assert tool_msgs, f"expected tool message in 2nd call, got {call2_msgs}"
+    assert tool_msgs[0]["name"] == "web_search"
+    assert "Unknown tool" not in tool_msgs[0]["content"]
+
+
+def test_streaming_falls_back_to_non_stream_call_on_gemini_invalid_argument(
+    monkeypatch, tmp_system_prompt, providers
+):
+    """Gemini stream endpoint may reject multi-tool-round payloads with
+    INVALID_ARGUMENT. We should fallback to non-streaming `_call` and continue.
+    """
+    _install_fake_tool(monkeypatch, "web_search", lambda **kwargs: "RESULT")
+
+    from openai import APIError
+    import httpx
+
+    stream_bad = APIError(
+        "invalid arg",
+        request=httpx.Request("POST", "https://x"),
+        body=[{"error": {"status": "INVALID_ARGUMENT"}}],
+    )
+
+    # Provider script:
+    # 1) stream tool call
+    # 2) stream fails INVALID_ARGUMENT
+    # 3) fallback non-stream `_call` returns final text
+    p = providers([[
+        [tool_chunk(index=0, id="tc_1", name="web_search", arguments='{"query":"x"}')],
+        stream_bad,
+        make_response("after fallback"),
+    ]], names=["gemini-gemma4-31b"])
+
+    events = asyncio.run(_collect_stream("go"))
+    assert events[-1]["type"] == "done", events
+    text = "".join(e["text"] for e in events if e["type"] == "text_chunk")
+    assert "after fallback" in text
+    # Ensure provider got called at least once with stream=False (fallback path).
+    assert any(c.get("stream") is False for c in p.calls), p.calls
