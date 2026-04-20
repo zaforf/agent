@@ -7,7 +7,6 @@ from __future__ import annotations
 import httpx
 import pytest
 
-import config  # noqa: F401  (kept for monkeypatch-on-import patterns)
 from tools import web as fetch  # historical alias keeps fetch_url tests terse
 
 
@@ -177,10 +176,28 @@ def test_web_search_returns_numbered_markdown_results(monkeypatch):
          "description": "Package index"},
     ]}})
     out = fetch.web_search("python", max_results=2)
-    assert out.startswith("1. **Python** — https://python.org"), out
-    assert "2. **PyPI** — https://pypi.org" in out
+    assert out.startswith("1. Python - https://python.org"), out
+    assert "2. PyPI - https://pypi.org" in out
     assert "<strong>" not in out, "html highlight tags must be stripped"
 
+
+
+
+def test_web_search_strips_control_characters(monkeypatch):
+    _patch_search(monkeypatch, {"web": {"results": [
+        {"title": "A\u0000B", "url": "https://e\u0007xample.com", "description": "line\u000bbreak"},
+    ]}})
+    out = fetch.web_search("q")
+    assert "\x00" not in out and "\x07" not in out and "\x0b" not in out
+
+
+def test_web_search_total_output_truncated(monkeypatch):
+    monkeypatch.setattr(fetch, "_SEARCH_TOTAL_CHARS", 80)
+    _patch_search(monkeypatch, {"web": {"results": [
+        {"title": "Long title", "url": "https://example.com", "description": "x" * 500},
+    ]}})
+    out = fetch.web_search("q")
+    assert out.endswith("… [truncated]")
 
 def test_web_search_clamps_max_results(monkeypatch):
     captured = _patch_search(monkeypatch, {"web": {"results": []}})

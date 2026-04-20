@@ -36,6 +36,7 @@ _BRAVE_TIMEOUT_S        = 10
 _SEARCH_DEFAULT_RESULTS = 5
 _SEARCH_MAX_RESULTS     = 10
 _SEARCH_SNIPPET_CHARS   = 240
+_SEARCH_TOTAL_CHARS     = 4000
 
 
 class _TextExtractor(HTMLParser):
@@ -178,6 +179,15 @@ def _strip_html(s: str) -> str:
     return re.sub(r"<[^>]+>", "", s or "").strip()
 
 
+def _clean_search_text(s: str) -> str:
+    """Keep tool output API-safe for provider round-trips (strip controls/surrogates)."""
+    s = _strip_html(s or "")
+    s = s.encode("utf-8", "replace").decode("utf-8")
+    s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", s)
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
+
+
 def web_search(query: str, max_results: int = _SEARCH_DEFAULT_RESULTS) -> str:
     """Brave Search — return a numbered markdown list of title, URL, snippet.
 
@@ -217,13 +227,17 @@ def web_search(query: str, max_results: int = _SEARCH_DEFAULT_RESULTS) -> str:
 
     lines = []
     for i, r in enumerate(results[:n], 1):
-        title   = _strip_html(r.get("title", "")) or "(untitled)"
-        url     = r.get("url", "")
-        snippet = _strip_html(r.get("description", ""))
+        title = _clean_search_text(r.get("title", "")) or "(untitled)"
+        url = _clean_search_text(r.get("url", ""))
+        snippet = _clean_search_text(r.get("description", ""))
         if len(snippet) > _SEARCH_SNIPPET_CHARS:
             snippet = snippet[:_SEARCH_SNIPPET_CHARS].rstrip() + "…"
-        lines.append(f"{i}. **{title}** — {url}\n   {snippet}" if snippet else f"{i}. **{title}** — {url}")
-    return "\n".join(lines)
+        lines.append(f"{i}. {title} - {url}\n   {snippet}" if snippet else f"{i}. {title} - {url}")
+
+    out = "\n".join(lines)
+    if len(out) > _SEARCH_TOTAL_CHARS:
+        out = out[:_SEARCH_TOTAL_CHARS].rstrip() + "\n… [truncated]"
+    return out
 
 
 SCHEMAS = [
