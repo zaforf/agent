@@ -129,6 +129,21 @@ class ChatRequest(BaseModel):
     attachments: list[Attachment] = []
 
 
+def _patch_display_files(turn_messages: list[dict], display_files: list[dict]) -> None:
+    """Attach display-only file metadata to the user message in turn_messages.
+
+    Stored as `_display_files` on the user message dict so db.get_display_history()
+    can render chips without re-exposing raw file content. The field is stripped by
+    agent._sanitize_message (whitelist-based) before it reaches the LLM.
+    """
+    if not display_files:
+        return
+    for msg in turn_messages:
+        if msg.get("role") == "user":
+            msg["_display_files"] = display_files
+            return
+
+
 def _build_user_content(message: str, attachments: list[Attachment]) -> "str | list":
     """Return a plain string when there are no attachments (backward-compat).
 
@@ -160,6 +175,7 @@ class ChatResponse(BaseModel):
 async def chat(req: ChatRequest):
     history = _get_history(req.session_id)
     user_content = _build_user_content(req.message, req.attachments)
+    display_files = [{"type": a.type, "filename": a.filename} for a in req.attachments]
     try:
         response, provider, turn_messages, pending = await agent.run(
             user_content, history
@@ -167,6 +183,7 @@ async def chat(req: ChatRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    _patch_display_files(turn_messages, display_files)
     history.extend(turn_messages)
     row_id = db.append_turn(req.session_id, req.message, turn_messages)
     _spawn_finalizer(pending, turn_messages, row_id)
@@ -180,6 +197,7 @@ async def chat(req: ChatRequest):
 async def chat_stream(req: ChatRequest):
     history = _get_history(req.session_id)
     user_content = _build_user_content(req.message, req.attachments)
+    display_files = [{"type": a.type, "filename": a.filename} for a in req.attachments]
 
     async def generate():
         full_response  = ""
@@ -195,6 +213,7 @@ async def chat_stream(req: ChatRequest):
                     # Pop tasks before serializing — they are not JSON-safe and
                     # are handed to the background finalizer below.
                     pending = event.pop("pending_summaries", [])
+                    _patch_display_files(turn_messages, display_files)
 
                 yield f"data: {json.dumps(event)}\n\n"
 

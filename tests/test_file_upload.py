@@ -183,6 +183,32 @@ def test_chat_stream_image_attachment_passes_image_url(client, monkeypatch):
     assert img_parts[0]["image_url"]["url"] == "data:image/png;base64,XYZ"
 
 
+def test_chat_stream_patches_display_files_into_history(client, monkeypatch):
+    """_display_files is patched onto the user message so display history can
+    render file chips after a page refresh (DESIGN §13.4)."""
+    async def fake_stream(user_content, history):
+        yield {"type": "text_chunk", "text": "ok"}
+        yield {"type": "done", "provider": "fake", "turn_messages": [
+            {"role": "user", "content": user_content},
+            {"role": "assistant", "content": "ok"},
+        ]}
+
+    monkeypatch.setattr(agent, "run_stream", fake_stream)
+
+    with client.stream("POST", "/chat/stream", json={
+        "message": "look at this",
+        "session_id": "df-stream",
+        "attachments": [{"type": "image", "filename": "photo.jpg", "content": "data:image/jpeg;base64,xyz"}],
+    }) as r:
+        assert r.status_code == 200
+        list(r.iter_lines())
+
+    msgs = db.get_display_history("df-stream")
+    user_msg = next(m for m in msgs if m["role"] == "user")
+    assert user_msg.get("attachments") == [{"type": "image", "filename": "photo.jpg"}]
+    assert user_msg["content"] == "look at this"
+
+
 def test_chat_stream_no_attachments_backward_compat(client, monkeypatch):
     received = {}
 
@@ -206,26 +232,46 @@ def test_chat_stream_no_attachments_backward_compat(client, monkeypatch):
 
 # ── History round-trip with multimodal content ────────────────────────────────
 
-def test_display_history_flattens_multimodal_user_content(tmp_db):
-    """List-content user messages stored by the agent are shown as plain text
-    in the display history (DESIGN §6.6 / §13)."""
+def test_display_history_shows_message_text_and_chip_metadata(tmp_db):
+    """Display history shows the user's typed message text (not file contents) and
+    an 'attachments' list for chip rendering in the UI (DESIGN §13.4)."""
     multimodal_content = [
         {"type": "text", "text": "[File: readme.md]\nsome notes"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
         {"type": "text", "text": "summarise"},
     ]
+    display_files = [
+        {"type": "text",  "filename": "readme.md"},
+        {"type": "image", "filename": "shot.png"},
+    ]
     turn = [
-        {"role": "user",      "content": multimodal_content},
+        {"role": "user", "content": multimodal_content, "_display_files": display_files},
         {"role": "assistant", "content": "here is the summary"},
     ]
     db.append_turn("hist-multi", "summarise", turn)
 
     msgs = db.get_display_history("hist-multi")
     user_msg = next(m for m in msgs if m["role"] == "user")
-    assert isinstance(user_msg["content"], str), "display history must flatten list content"
-    assert "some notes" in user_msg["content"]
-    assert "[image]" in user_msg["content"]
-    assert "summarise" in user_msg["content"]
+
+    # Content shows the typed message, not the file contents
+    assert user_msg["content"] == "summarise"
+    assert "some notes" not in user_msg["content"], "file body must not appear in display text"
+
+    # Chip metadata is present for the UI
+    assert user_msg["attachments"] == display_files
+
+
+def test_display_history_no_attachments_field_when_none(tmp_db):
+    """User messages without files must not have an 'attachments' key."""
+    turn = [
+        {"role": "user",      "content": "plain message"},
+        {"role": "assistant", "content": "reply"},
+    ]
+    db.append_turn("hist-plain", "plain message", turn)
+
+    msgs = db.get_display_history("hist-plain")
+    user_msg = next(m for m in msgs if m["role"] == "user")
+    assert "attachments" not in user_msg
 
 
 def test_get_history_preserves_multimodal_content_for_llm(tmp_db):

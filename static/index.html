@@ -932,7 +932,7 @@
     const data = await res.json();
     for (const msg of data.messages) {
       if (msg.role === 'user') {
-        addUserMsg(msg.content, false);
+        addUserMsg(msg.content, msg.attachments || [], false);
       } else {
         // Render stored tool steps before the assistant message
         for (const step of (msg.steps || [])) {
