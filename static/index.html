@@ -406,6 +406,7 @@
     /* File chip — inline inside #input, same metrics as surrounding text */
     .file-chip {
       background: var(--panel);
+      border: 1px solid var(--border-2);
       border-radius: 3px;
       padding: 1px 5px;
       font-size: 13px;
@@ -424,7 +425,8 @@
       margin-bottom: 5px;
     }
     .msg-file-chip {
-      background: rgba(255,255,255,0.13);
+      background: rgba(255,255,255,0.10);
+      border: 1px solid rgba(255,255,255,0.18);
       border-radius: 3px;
       padding: 1px 6px;
       font-size: 12px;
@@ -493,7 +495,8 @@
       background: none;
       border: 1px solid var(--border);
       color: var(--text-2);
-      padding: 0 10px;
+      padding: 0;
+      width: 36px;
       font-size: 15px;
     }
     .btn-icon:hover { background: var(--panel); color: var(--text); }
@@ -535,7 +538,7 @@
       #bar-wrap { padding: 8px 10px; }
       #bar { gap: 6px; }
       .btn { padding: 0 10px; }
-      .btn-icon { padding: 0 8px; }
+      .btn-icon { padding: 0; width: 32px; }
       .agent .bubble { max-width: 94%; }
       .user .bubble { max-width: 86%; }
     }
@@ -572,7 +575,7 @@
              accept="image/*,.pdf,.txt,.md,.py,.js,.ts,.jsx,.tsx,.json,.csv,.html,.css,.yaml,.yml,.toml,.sh,.c,.cpp,.h,.java,.rs,.go">
       <div id="input" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Message…"></div>
       <button class="btn btn-send" id="send-btn" onclick="send()">Send</button>
-      <button class="btn btn-icon" id="btn-mem" onclick="togglePanel('mem-panel','btn-mem')" title="Memories">◈</button>
+      <button class="btn btn-icon" id="btn-mem" onclick="togglePanel('mem-panel','btn-mem')" title="Memories">◉</button>
     </div>
   </div>
 </div>
