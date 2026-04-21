@@ -7,10 +7,12 @@ def mem0_config_dict() -> dict:
     """Mem0 configuration (embeddings + vector store + LLM). Exposed for tests."""
     return {
         "llm": {
-            "provider": "groq",
+            "provider": "gemini",
             "config": {
-                "model": "llama-3.1-8b-instant",
-                "api_key": config.GROQ_API_KEY,
+                "model": config.MEM0_LLM_MODEL,
+                "api_key": config.GEMINI_API_KEY or None,
+                "max_tokens": 2048,
+                "temperature": 0.1,
             },
         },
         "embedder": {
