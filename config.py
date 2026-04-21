@@ -72,3 +72,7 @@ MEM0_USER_ID = "user"
 MEM0_QDRANT_COLLECTION = os.environ.get("MEM0_QDRANT_COLLECTION", "agent_memories_gemini")
 GEMINI_EMBEDDING_MODEL = os.environ.get("GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-001")
 GEMINI_EMBEDDING_DIMS = int(os.environ.get("GEMINI_EMBEDDING_DIMS", "768"))
+
+# Mem0 LLM (fact extraction on remember, etc.) — native Gemini API via mem0, not Groq.
+# Default: Gemma 4 26B MoE (lighter than 31B; avoids Groq free-tier TPM limits on large prompts).
+MEM0_LLM_MODEL = os.environ.get("MEM0_LLM_MODEL", "gemma-4-26b-a4b-it")

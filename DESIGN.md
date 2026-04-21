@@ -27,7 +27,7 @@ This is a personal AI assistant for Zafir, exposed as a web application. It runs
 | Conversation storage | SQLite (`data/history.db`) |
 | Long-term memory | Mem0 + Qdrant (localhost:6333) |
 | Memory embeddings | Google **Gemini Embedding** (`models/gemini-embedding-001` via `google-genai`; same `GEMINI_API_KEY` as chat). Dimensions default **768** (`GEMINI_EMBEDDING_DIMS`). No local `sentence-transformers` — suitable for small VPS RAM. |
-| Memory LLM | Groq `llama-3.1-8b-instant` |
+| Memory LLM | Gemini API via mem0 (`MEM0_LLM_MODEL`, default `gemma-4-26b-a4b-it` — same `GEMINI_API_KEY` as chat; avoids Groq TPM limits on large extraction prompts) |
 | Web UI | Vanilla JS + Marked (markdown) + KaTeX (LaTeX) |
 | Streaming protocol | Server-Sent Events (SSE) |
 
@@ -123,7 +123,7 @@ The model is instructed to use native API `tool_calls` only — no XML or fenced
 
 ### 5.1 Memory tools (`tools/memory.py`)
 
-Backed by Mem0 + Qdrant. Qdrant host/port are read from `QDRANT_HOST` / `QDRANT_PORT` env vars (defaulting to `localhost:6333`); prod typically sets `QDRANT_HOST=qdrant` inside docker-compose. `docker-compose.yml` is gitignored because dev/prod topologies differ. Embeddings use the **Gemini Embedding API** (`GEMINI_API_KEY`, model `GEMINI_EMBEDDING_MODEL` defaulting to `models/gemini-embedding-001`, `GEMINI_EMBEDDING_DIMS` default 768). Vectors are stored under collection `MEM0_QDRANT_COLLECTION` (default `agent_memories_gemini` — new name so a prior local 768-d HuggingFace index is not reused). Mem0 uses Groq `llama-3.1-8b-instant` for memory extraction/processing. Memory tools run in a worker thread (`asyncio.to_thread`) like `fetch_url` / `web_search` so the async event loop is not blocked during embedding or Qdrant I/O.
+Backed by Mem0 + Qdrant. Qdrant host/port are read from `QDRANT_HOST` / `QDRANT_PORT` env vars (defaulting to `localhost:6333`); prod typically sets `QDRANT_HOST=qdrant` inside docker-compose. `docker-compose.yml` is gitignored because dev/prod topologies differ. Embeddings use the **Gemini Embedding API** (`GEMINI_API_KEY`, model `GEMINI_EMBEDDING_MODEL` defaulting to `models/gemini-embedding-001`, `GEMINI_EMBEDDING_DIMS` default 768). Vectors are stored under collection `MEM0_QDRANT_COLLECTION` (default `agent_memories_gemini` — new name so a prior local 768-d HuggingFace index is not reused). Mem0 uses the **Gemini** LLM provider (`MEM0_LLM_MODEL`, default **Gemma 4 26B MoE** `gemma-4-26b-a4b-it`) for memory extraction/processing — same `GEMINI_API_KEY` as the agent. This avoids Groq free-tier **tokens-per-minute** failures when the extraction prompt is large. Override with `MEM0_LLM_MODEL` (e.g. `gemma-4-31b-it`) if needed. Memory tools run in a worker thread (`asyncio.to_thread`) like `fetch_url` / `web_search` so the async event loop is not blocked during embedding or Qdrant I/O.
 
 All memories are stored under the single user ID `"user"`.
 
