@@ -52,7 +52,12 @@ def remember(content: str, category: str = "fact") -> str:
 
 
 def recall(query: str) -> str:
-    results = _get_memory().search(query, user_id=USER_ID, limit=5)
+    # mem0: entity scope must be filters=..., not user_id=... (Memory.search)
+    results = _get_memory().search(
+        query,
+        filters={"user_id": USER_ID},
+        top_k=5,
+    )
     entries = results.get("results", [])
     if not entries:
         return "No relevant memories found."
@@ -60,7 +65,7 @@ def recall(query: str) -> str:
 
 
 def list_memories() -> str:
-    results = _get_memory().get_all(user_id=USER_ID)
+    results = _get_memory().get_all(filters={"user_id": USER_ID})
     entries = results.get("results", [])
     if not entries:
         return "No memories stored."
@@ -74,7 +79,7 @@ def delete_memory(memory_id: str) -> str:
 
 # Exposed for API endpoints (not a tool)
 def get_all() -> list[dict]:
-    results = _get_memory().get_all(user_id=USER_ID)
+    results = _get_memory().get_all(filters={"user_id": USER_ID})
     return results.get("results", [])
 
 

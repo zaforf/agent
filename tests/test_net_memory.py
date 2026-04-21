@@ -38,7 +38,7 @@ def test_mem0_gemini_embedding_add_without_infer_llm():
     probe = f"pytest embedding probe {uuid.uuid4().hex[:12]}"
     mem = Memory.from_config(mem0_config_dict())
     mem.add(probe, user_id=USER_ID, metadata={"category": "fact"}, infer=False)
-    out = mem.search(probe, user_id=USER_ID, limit=3)
+    out = mem.search(probe, filters={"user_id": USER_ID}, top_k=3)
     results = out.get("results") or []
     texts = [r.get("memory", "") for r in results]
     assert any(probe in t for t in texts), f"probe not in search results: {texts}"
