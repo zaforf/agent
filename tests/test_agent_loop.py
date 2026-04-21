@@ -10,10 +10,8 @@ can be exercised in <100ms each, with no network. They cover:
 - MAX_TOOL_ITERATIONS termination
 - Provider-chain fallback on retryable errors (DESIGN §3)
 - Streaming: tool-call events + text_chunk + done event ordering
-
-An xfail test pins the DESIGN §11.1 bug (streaming repair is dead code /
-must not leak scaffold when fixed) so it becomes a visible target for a
-future fix.
+- Streaming repair triggers correctly when the model returns only thinking
+  tokens (pinned by test_streaming_repair_triggers_on_thinking_only)
 """
 from __future__ import annotations
 
