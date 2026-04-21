@@ -279,6 +279,7 @@ Table: `messages` — one row per completed turn.
 |---|---|---|
 | `POST` | `/chat` | Non-streaming chat. Returns `{response, session_id, provider}`. Used by tests; the UI streams exclusively. |
 | `POST` | `/chat/stream` | SSE streaming chat. Yields event objects (see §8.1). |
+| `POST` | `/upload` | PDF text extraction (see §13). Returns `{filename, type, content}`. |
 | `GET` | `/sessions` | List all sessions with preview text, message count, and last timestamp. |
 | `GET` | `/sessions/{id}/history` | Display-friendly history for the UI (`get_display_history()`). |
 | `DELETE` | `/sessions/{id}` | Delete a session from cache and SQLite. |
@@ -311,7 +312,7 @@ Single-page app (`static/index.html`). All state is managed client-side except c
 ### 9.1 Layout
 
 - **Left sidebar** (sessions panel): session list with preview text and timestamp; switch, create, delete sessions
-- **Center** (chat): message feed + input bar
+- **Center** (chat): message feed + input bar (see §13 for file attach)
 - **Right sidebar** (memories panel): list of all Mem0 memories with per-entry delete
 - **Modal** (system prompt editor): full textarea edit + save via PUT `/system-prompt`
 
@@ -385,6 +386,58 @@ The streaming repair gate now keys on visible content (`visible_parts`), not raw
 ### 11.2 Summarizer uses Gemma 26B (resolved)
 
 `_summarize_for_history()` now uses Gemma 4 26B via the shared `summarizer.summarize_gemma` helper (~10× faster than the dense primary, fine for compact structured summaries). See §6.5. Verified by `tests/test_agent_helpers.py::test_summarize_for_history_uses_gemma_26b`.
+
+---
+
+## 13. File Uploads
+
+Users can attach files to any message via drag-and-drop onto the chat area or the ⊕ button.
+
+### 13.1 Supported types
+
+| Type | Handling | Server round-trip? |
+|---|---|---|
+| Images (`image/*`) | `FileReader.readAsDataURL` in browser | No — base64 data URL held in JS state |
+| Text / code files (`text/*` or known extensions) | `FileReader.readAsText` in browser | No — UTF-8 text held in JS state |
+| PDFs (`application/pdf`) | `POST /upload` → `pypdf` extraction → text returned | Yes — pypdf runs server-side |
+
+Size cap: **5 MB per file**. Rejected with HTTP 413 at the `/upload` endpoint; enforced client-side for browser-handled types.
+
+### 13.2 API contract
+
+`POST /chat` and `POST /chat/stream` accept an optional `attachments` list:
+
+```json
+{
+  "message": "explain this",
+  "session_id": "...",
+  "attachments": [
+    {"type": "text",  "filename": "foo.py",    "content": "def f(): pass"},
+    {"type": "image", "filename": "shot.png",  "content": "data:image/png;base64,..."}
+  ]
+}
+```
+
+`main._build_user_content()` converts this to an OpenAI vision-format content list:
+- Text attachments → `{"type": "text", "text": "[File: <name>]\n<content>"}` (prepended before the message)
+- Image attachments → `{"type": "image_url", "image_url": {"url": "<data-url>"}}`
+- User's text message → `{"type": "text", "text": "<message>"}` (appended last)
+
+When there are no attachments, `user_content` is a plain string — the API contract is unchanged for existing callers.
+
+### 13.3 Agent integration
+
+`agent.run()` and `agent.run_stream()` accept `user_content: str | list` instead of the former `user_message: str`. The internal `_user_content_as_text()` helper extracts a plain-string representation for use in history summarization prompts. `_sanitize_message()` already passes list content through for the user role.
+
+### 13.4 History storage
+
+The raw multimodal content list is stored in `turn_messages` (JSON-serialized in SQLite) and replayed to the LLM on subsequent turns. `db.get_display_history()` flattens list content to a plain string for the UI — image parts become `[image]`, text parts are joined.
+
+The `content` column (used for session preview) always stores the text portion of the message (`req.message`), not the full multimodal content.
+
+### 13.5 UI
+
+The input is a `contenteditable` div instead of a `<textarea>`. File chips (`contenteditable="false"` inline `<span>` elements) sit inline with text — the browser treats them as characters, so cursor navigation, Backspace, and Delete remove them natively. Chips show a type symbol (`📄`/`🖼`/`📑`) and a truncated filename. Sent user messages show read-only chip indicators in the bubble.
 
 ---
 

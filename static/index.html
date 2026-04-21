@@ -373,20 +373,102 @@
       background: var(--bg);
       border: 1px solid var(--border);
       color: var(--text);
-      padding: 8px 12px;
+      padding: 6px 12px;
       border-radius: var(--radius);
       font-family: var(--font);
       font-size: 14px;
       outline: none;
-      resize: none;
-      height: 36px;
+      min-height: 36px;
       max-height: 120px;
       line-height: 1.45;
-      overflow-y: hidden;
+      overflow-y: auto;
       transition: border-color 0.1s;
+      white-space: pre-wrap;
+      word-break: break-word;
+      cursor: text;
     }
     #input:focus { border-color: var(--accent); }
-    #input::placeholder { color: var(--text-3); }
+    #input:empty::before {
+      content: attr(data-placeholder);
+      color: var(--text-3);
+      pointer-events: none;
+    }
+
+    /* File chip — inline inside #input */
+    .file-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      background: var(--panel);
+      border: 1px solid var(--border-2);
+      border-radius: 4px;
+      padding: 1px 3px 1px 5px;
+      font-size: 12px;
+      line-height: 1.55;
+      vertical-align: text-bottom;
+      user-select: none;
+      cursor: default;
+      max-width: 180px;
+      white-space: nowrap;
+      margin: 0 1px;
+    }
+    .chip-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 130px;
+      display: inline-block;
+      vertical-align: bottom;
+    }
+    .chip-del {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--text-3);
+      font-size: 12px;
+      padding: 0 1px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .chip-del:hover { color: var(--danger); }
+
+    /* File chips displayed in sent user bubble */
+    .msg-files {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 5px;
+    }
+    .msg-file-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(255,255,255,0.13);
+      border-radius: 4px;
+      padding: 2px 7px;
+      font-size: 11.5px;
+      white-space: nowrap;
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Drag-over overlay */
+    #chat { position: relative; }
+    #drag-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      background: rgba(37, 99, 235, 0.07);
+      border: 2px dashed var(--accent);
+      border-radius: 4px;
+      z-index: 20;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      color: var(--accent);
+      pointer-events: none;
+    }
+    #drag-overlay.active { display: flex; }
 
     #thinking-ind {
       display: none;
@@ -549,6 +631,7 @@
 
 <!-- Chat -->
 <div id="chat">
+  <div id="drag-overlay">Drop files to attach</div>
   <div id="messages">
     <div class="msg-inner" id="msg-inner"></div>
   </div>
@@ -556,7 +639,10 @@
     <div id="thinking-ind"><span id="thinking-lbl"></span><span id="thinking-dots-txt"></span></div>
     <div id="bar">
       <button class="btn btn-icon" id="btn-sessions" onclick="togglePanel('sessions-panel','btn-sessions')" title="Sessions">☰</button>
-      <textarea id="input" placeholder="Message…" rows="1"></textarea>
+      <div id="input" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Message…"></div>
+      <button class="btn btn-icon" id="btn-attach" onclick="document.getElementById('file-input').click()" title="Attach file">⊕</button>
+      <input type="file" id="file-input" style="display:none" multiple
+             accept="image/*,.pdf,.txt,.md,.py,.js,.ts,.jsx,.tsx,.json,.csv,.html,.css,.yaml,.yml,.toml,.sh,.c,.cpp,.h,.java,.rs,.go">
       <button class="btn btn-send" id="send-btn" onclick="send()">Send</button>
       <button class="btn btn-icon" id="btn-mem" onclick="togglePanel('mem-panel','btn-mem')" title="Memories">◈</button>
       <button class="btn btn-icon" onclick="openSP()" title="System prompt">⚙</button>
@@ -717,12 +803,29 @@
 
   // ── Message rendering ─────────────────────────────────────
 
-  function addUserMsg(text, shouldScroll = true) {
+  function addUserMsg(text, displayAttachments = [], shouldScroll = true) {
     const row = document.createElement('div');
     row.className = 'row user';
     const bub = document.createElement('div');
     bub.className = 'bubble';
-    bub.textContent = text;
+    if (displayAttachments.length) {
+      const filesDiv = document.createElement('div');
+      filesDiv.className = 'msg-files';
+      for (const att of displayAttachments) {
+        const chip = document.createElement('span');
+        chip.className = 'msg-file-chip';
+        const icon = att.type === 'image' ? '🖼' : (att.filename?.toLowerCase().endsWith('.pdf') ? '📑' : '📄');
+        const name = att.filename || 'file';
+        chip.textContent = `${icon} ${name.length > 22 ? name.slice(0, 19) + '…' : name}`;
+        filesDiv.appendChild(chip);
+      }
+      bub.appendChild(filesDiv);
+    }
+    if (text) {
+      const textDiv = document.createElement('div');
+      textDiv.textContent = text;
+      bub.appendChild(textDiv);
+    }
     row.appendChild(bub);
     feed.appendChild(row);
     if (shouldScroll) scrollFeed();
@@ -994,17 +1097,16 @@
   // ── Send (streaming) ──────────────────────────────────────
 
   async function send() {
-    const text = input.value.trim();
-    if (!text || sendBtn.disabled) return;
-    input.value = '';
-    resetInputHeight();
+    const { text, attachments } = getInputContent();
+    if ((!text && !attachments.length) || sendBtn.disabled) return;
+    clearInput();
     sendBtn.disabled = true;
     _showThinking('');
 
     const hint = feed.querySelector('.empty-hint');
     if (hint) hint.remove();
 
-    addUserMsg(text);
+    addUserMsg(text, attachments.map(a => ({ type: a.type, filename: a.filename })));
     stickToBottom = true;
 
     let agentMd       = null;   // md-content div for the current text segment
@@ -1017,7 +1119,15 @@
       const res = await fetch('/chat/stream', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ message: text, session_id: sid }),
+        body:    JSON.stringify({
+          message:     text,
+          session_id:  sid,
+          attachments: attachments.map(a => ({
+            type:     a.type,
+            filename: a.filename,
+            content:  a.content,
+          })),
+        }),
       });
 
       if (!res.ok) {
@@ -1115,23 +1225,209 @@
     }
   }
 
-  // ── Input auto-grow ───────────────────────────────────────
+  // ── Contenteditable helpers ───────────────────────────────
 
-  function resetInputHeight() {
-    input.style.height = '36px';
-    input.style.overflowY = 'hidden';
+  // fileId → { type, filename, content }
+  const attachedFiles = new Map();
+
+  function clearInput() {
+    input.innerHTML = '';
+    attachedFiles.clear();
   }
 
-  input.addEventListener('input', () => {
-    input.style.height = '36px';
-    const h = Math.min(input.scrollHeight, 120);
-    input.style.height = h + 'px';
-    input.style.overflowY = input.scrollHeight > 120 ? 'auto' : 'hidden';
+  /** Parse the contenteditable div into { text, attachments }. */
+  function getInputContent() {
+    const attachments = [];
+    const textParts   = [];
+
+    function walk(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        textParts.push(node.textContent);
+      } else if (node.nodeName === 'BR') {
+        textParts.push('\n');
+      } else if (node.classList?.contains('file-chip')) {
+        const fileData = attachedFiles.get(node.dataset.fileId);
+        if (fileData) attachments.push(fileData);
+      } else {
+        const isBlock = node.nodeName === 'DIV' || node.nodeName === 'P';
+        if (isBlock && textParts.length && !textParts[textParts.length - 1].endsWith('\n')) {
+          textParts.push('\n');
+        }
+        for (const child of node.childNodes) walk(child);
+      }
+    }
+    for (const child of input.childNodes) walk(child);
+
+    return { text: textParts.join('').trim(), attachments };
+  }
+
+  /** Insert a chip span at the current cursor position (or append). */
+  function insertChip(fileId, filename, chipType) {
+    const chip = document.createElement('span');
+    chip.className          = 'file-chip';
+    chip.contentEditable    = 'false';
+    chip.dataset.fileId     = fileId;
+
+    const icons = { text: '📄', image: '🖼', pdf: '📑' };
+    const icon  = icons[chipType] || '📎';
+    const short = filename.length > 22 ? filename.slice(0, 19) + '…' : filename;
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className   = 'chip-name';
+    nameSpan.textContent = `${icon} ${short}`;
+
+    const delBtn = document.createElement('button');
+    delBtn.className   = 'chip-del';
+    delBtn.textContent = '×';
+    delBtn.title       = 'Remove';
+    delBtn.addEventListener('mousedown', e => {
+      e.preventDefault();   // keep focus in input
+      attachedFiles.delete(chip.dataset.fileId);
+      chip.remove();
+      input.focus();
+    });
+
+    chip.appendChild(nameSpan);
+    chip.appendChild(delBtn);
+
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && input.contains(sel.anchorNode)) {
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(chip);
+      range.setStartAfter(chip);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else {
+      input.appendChild(chip);
+    }
+    input.focus();
+  }
+
+  // ── File reading helpers ──────────────────────────────────
+
+  const _TEXT_EXTS = new Set([
+    'txt','md','py','js','ts','jsx','tsx','json','csv','html','css',
+    'yaml','yml','toml','sh','c','cpp','h','java','rs','go','rb','php',
+    'swift','kt','r','sql','xml','ini','env',
+  ]);
+
+  function _readAsText(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload  = e => resolve(e.target.result);
+      r.onerror = reject;
+      r.readAsText(file);
+    });
+  }
+
+  function _readAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload  = e => resolve(e.target.result);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+  }
+
+  async function handleFileAttach(file) {
+    const MAX = 5 * 1024 * 1024;
+    if (file.size > MAX) {
+      alert(`"${file.name}" exceeds the 5 MB limit.`);
+      return;
+    }
+
+    const mime = file.type || '';
+    const ext  = (file.name.split('.').pop() || '').toLowerCase();
+    const fileId = Math.random().toString(36).slice(2);
+
+    if (mime.startsWith('image/')) {
+      const dataUrl = await _readAsDataURL(file);
+      attachedFiles.set(fileId, { type: 'image', filename: file.name, content: dataUrl });
+      insertChip(fileId, file.name, 'image');
+
+    } else if (mime === 'application/pdf') {
+      const fd  = new FormData();
+      fd.append('file', file);
+      let res;
+      try { res = await fetch('/upload', { method: 'POST', body: fd }); }
+      catch { alert(`Upload failed: network error`); return; }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(`Upload failed: ${err.detail || res.status}`);
+        return;
+      }
+      const data = await res.json();
+      attachedFiles.set(fileId, { type: 'text', filename: data.filename, content: data.content });
+      insertChip(fileId, file.name, 'pdf');
+
+    } else if (mime.startsWith('text/') || _TEXT_EXTS.has(ext)) {
+      const text = await _readAsText(file);
+      attachedFiles.set(fileId, { type: 'text', filename: file.name, content: text });
+      insertChip(fileId, file.name, 'text');
+
+    } else {
+      alert(`Unsupported file type: ${mime || ext || 'unknown'}`);
+    }
+  }
+
+  function handleFilePicker(e) {
+    [...e.target.files].forEach(handleFileAttach);
+    e.target.value = '';
+  }
+
+  // ── Drag-and-drop ─────────────────────────────────────────
+
+  const chatEl      = document.getElementById('chat');
+  const dragOverlay = document.getElementById('drag-overlay');
+  let _dragCounter  = 0;
+
+  chatEl.addEventListener('dragenter', e => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    _dragCounter++;
+    dragOverlay.classList.add('active');
   });
+  chatEl.addEventListener('dragleave', () => {
+    _dragCounter = Math.max(0, _dragCounter - 1);
+    if (_dragCounter === 0) dragOverlay.classList.remove('active');
+  });
+  chatEl.addEventListener('dragover', e => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  chatEl.addEventListener('drop', e => {
+    e.preventDefault();
+    _dragCounter = 0;
+    dragOverlay.classList.remove('active');
+    [...e.dataTransfer.files].forEach(handleFileAttach);
+    input.focus();
+  });
+
+  // ── Input keydown / paste ─────────────────────────────────
 
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   });
+
+  // Strip rich formatting on paste — keep plain text only.
+  input.addEventListener('paste', e => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text/plain');
+    document.execCommand('insertText', false, text);
+  });
+
+  // Clean up any stray <br> Chrome inserts when the div becomes empty.
+  input.addEventListener('input', () => {
+    if (!input.textContent.trim() && !input.querySelector('.file-chip')) {
+      input.innerHTML = '';
+    }
+  });
+
+  // Wire file-input change handler.
+  document.getElementById('file-input').addEventListener('change', handleFilePicker);
 
   // ── Init ──────────────────────────────────────────────────
 

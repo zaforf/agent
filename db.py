@@ -112,7 +112,19 @@ def get_display_history(session_id: str) -> list[dict]:
         role = msg.get("role")
 
         if role == "user":
-            current_user = {"role": "user", "content": msg["content"]}
+            content = msg["content"]
+            if isinstance(content, list):
+                # Multimodal turn — flatten to displayable text for the UI.
+                parts = []
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "text":
+                        parts.append(part["text"])
+                    elif part.get("type") == "image_url":
+                        parts.append("[image]")
+                content = " ".join(parts)
+            current_user = {"role": "user", "content": content}
             pending_tcs = {}
             pending_steps = []
 
