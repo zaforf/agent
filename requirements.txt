@@ -9,6 +9,8 @@ groq
 python-dotenv
 pydantic
 gunicorn
+pypdf
+python-multipart
 
 # Dev / test
 pytest

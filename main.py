@@ -1,9 +1,11 @@
 import asyncio
+import io
 import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from typing import Literal
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -80,11 +82,87 @@ def _spawn_finalizer(pending, turn_messages, row_id) -> None:
     task.add_done_callback(_background_tasks.discard)
 
 
+# ── File upload ───────────────────────────────────────────────────────────────
+
+_MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB
+
+
+@app.post("/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """Extract text from an uploaded PDF (only MIME accepted server-side).
+
+    Text files and images are handled entirely client-side; this endpoint
+    exists solely for PDF extraction via pypdf (DESIGN §13).
+    """
+    data = await file.read()
+    if len(data) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File exceeds 5 MB limit")
+
+    content_type = (file.content_type or "").split(";")[0].strip()
+    if content_type != "application/pdf":
+        raise HTTPException(
+            status_code=415,
+            detail=f"Only PDFs are processed server-side; got {content_type!r}",
+        )
+
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        # pypdf can produce lone surrogates from malformed/encoded PDFs; strip them
+        text = text.encode("utf-8", errors="ignore").decode("utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"PDF text extraction failed: {e}")
+
+    return {"filename": file.filename, "type": "text", "content": text}
+
+
 # ── Request / response models ─────────────────────────────────────────────────
 
+class Attachment(BaseModel):
+    type:     Literal["text", "image"]
+    filename: str
+    content:  str   # text string, or "data:<mime>;base64,..." for images
+
+
 class ChatRequest(BaseModel):
-    message:    str
-    session_id: str = "default"
+    message:     str
+    session_id:  str             = "default"
+    attachments: list[Attachment] = []
+
+
+def _patch_display_files(turn_messages: list[dict], display_files: list[dict]) -> None:
+    """Attach display-only file metadata to the user message in turn_messages.
+
+    Stored as `_display_files` on the user message dict so db.get_display_history()
+    can render chips without re-exposing raw file content. The field is stripped by
+    agent._sanitize_message (whitelist-based) before it reaches the LLM.
+    """
+    if not display_files:
+        return
+    for msg in turn_messages:
+        if msg.get("role") == "user":
+            msg["_display_files"] = display_files
+            return
+
+
+def _build_user_content(message: str, attachments: list[Attachment]) -> "str | list":
+    """Return a plain string when there are no attachments (backward-compat).
+
+    With attachments, return a multimodal content list (OpenAI vision format):
+    file context parts first, then the user's text message.
+    """
+    if not attachments:
+        return message
+    parts: list[dict] = []
+    for att in attachments:
+        if att.type == "text":
+            parts.append({"type": "text", "text": f"[File: {att.filename}]\n{att.content}"})
+        elif att.type == "image":
+            parts.append({"type": "image_url", "image_url": {"url": att.content}})
+    if message:
+        parts.append({"type": "text", "text": message})
+    return parts
 
 
 class ChatResponse(BaseModel):
@@ -98,13 +176,16 @@ class ChatResponse(BaseModel):
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     history = _get_history(req.session_id)
+    user_content = _build_user_content(req.message, req.attachments)
+    display_files = [{"type": a.type, "filename": a.filename} for a in req.attachments]
     try:
         response, provider, turn_messages, pending = await agent.run(
-            req.message, history
+            user_content, history
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    _patch_display_files(turn_messages, display_files)
     history.extend(turn_messages)
     row_id = db.append_turn(req.session_id, req.message, turn_messages)
     _spawn_finalizer(pending, turn_messages, row_id)
@@ -117,6 +198,8 @@ async def chat(req: ChatRequest):
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest):
     history = _get_history(req.session_id)
+    user_content = _build_user_content(req.message, req.attachments)
+    display_files = [{"type": a.type, "filename": a.filename} for a in req.attachments]
 
     async def generate():
         full_response  = ""
@@ -124,7 +207,7 @@ async def chat_stream(req: ChatRequest):
         pending: list[tuple[dict, asyncio.Task]] = []
 
         try:
-            async for event in agent.run_stream(req.message, history):
+            async for event in agent.run_stream(user_content, history):
                 if event["type"] == "text_chunk":
                     full_response += event["text"]
                 elif event["type"] == "done":
@@ -132,6 +215,7 @@ async def chat_stream(req: ChatRequest):
                     # Pop tasks before serializing — they are not JSON-safe and
                     # are handed to the background finalizer below.
                     pending = event.pop("pending_summaries", [])
+                    _patch_display_files(turn_messages, display_files)
 
                 yield f"data: {json.dumps(event)}\n\n"
 

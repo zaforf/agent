@@ -162,6 +162,17 @@ def _visible_after_think(text: str) -> str:
     return _THINK_RE.sub("", text or "").strip()
 
 
+def _user_content_as_text(user_content: "str | list") -> str:
+    """Extract a plain-text representation from a user content value.
+
+    Used when a summarizer or log call needs a string even if the original
+    user turn included multimodal parts (images, file chunks).
+    """
+    if isinstance(user_content, str):
+        return user_content
+    return " ".join(p["text"] for p in user_content if isinstance(p, dict) and p.get("type") == "text")
+
+
 
 
 def _extract_calls(msg) -> list[dict]:
@@ -394,9 +405,12 @@ async def _apply_finished_summaries(
 # ── Non-streaming run (used by /chat endpoint) ────────────────────────────────
 
 async def run(
-    user_message: str, history: list[dict]
+    user_content: "str | list", history: list[dict]
 ) -> tuple[str, str, list[dict], list[tuple[dict, asyncio.Task]]]:
     """Returns (final_response, provider, turn_messages, pending_summaries).
+
+    `user_content` is either a plain string or a multimodal content list
+    (OpenAI vision format: [{type: "text", text: ...}, {type: "image_url", ...}, ...]).
 
     `turn_messages` is the full slice of messages added this turn — starting
     from the user message through to the final assistant reply, including all
@@ -411,10 +425,11 @@ async def run(
     the user's response.
     """
     history = _sanitize_history(history)
+    _user_text = _user_content_as_text(user_content)
     messages = [
         {"role": "system", "content": _build_system_prompt()},
         *history,
-        {"role": "user", "content": user_message},
+        {"role": "user", "content": user_content},
     ]
     turn_start = 1 + len(history)   # index of the user message; everything from here is new
 
@@ -470,7 +485,7 @@ async def run(
                 msg_dict = {"role": "tool", "name": name, "tool_call_id": tc_id, "content": result}
                 result_blocks.append(msg_dict)
                 if len(result) > _HISTORY_SUMMARIZE_THRESHOLD:
-                    task = asyncio.create_task(_summarize_for_history(name, args, user_message, result))
+                    task = asyncio.create_task(_summarize_for_history(name, args, _user_text, result))
                     pending_summaries.append((msg_dict, task))
 
         messages.extend(result_blocks)
@@ -481,7 +496,7 @@ async def run(
 
 # ── Streaming run (used by /chat/stream endpoint) ─────────────────────────────
 
-async def run_stream(user_message: str, history: list[dict]):
+async def run_stream(user_content: "str | list", history: list[dict]):
     """
     Async generator yielding event dicts:
       {"type": "tool_call",   "name": str, "args": dict}
@@ -490,6 +505,9 @@ async def run_stream(user_message: str, history: list[dict]):
       {"type": "done",        "provider": str, "turn_messages": list, "pending_summaries": list}
       {"type": "error",       "detail": str}
 
+    `user_content` is either a plain string or a multimodal content list
+    (OpenAI vision format). See `run()` for full contract.
+
     The `done` event's `pending_summaries` is a list of (message_dict,
     asyncio.Task) pairs for tool-result summaries not yet finished. The caller
     (main.py) drains them in the background after persisting the turn — see
@@ -497,10 +515,11 @@ async def run_stream(user_message: str, history: list[dict]):
     event is JSON-serialized onto the SSE stream.
     """
     history = _sanitize_history(history)
+    _user_text = _user_content_as_text(user_content)
     messages = [
         {"role": "system", "content": _build_system_prompt()},
         *history,
-        {"role": "user", "content": user_message},
+        {"role": "user", "content": user_content},
     ]
     turn_start = 1 + len(history)   # index of the user message; everything from here is new
 
@@ -608,7 +627,7 @@ async def run_stream(user_message: str, history: list[dict]):
                 }
                 result_messages.append(msg_dict)
                 if len(result) > _HISTORY_SUMMARIZE_THRESHOLD:
-                    task = asyncio.create_task(_summarize_for_history(name, args, user_message, result))
+                    task = asyncio.create_task(_summarize_for_history(name, args, _user_text, result))
                     pending_summaries.append((msg_dict, task))
 
             messages.extend(result_messages)

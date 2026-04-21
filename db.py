@@ -112,7 +112,24 @@ def get_display_history(session_id: str) -> list[dict]:
         role = msg.get("role")
 
         if role == "user":
-            current_user = {"role": "user", "content": msg["content"]}
+            content = msg["content"]
+            display_files = msg.get("_display_files", [])
+            if isinstance(content, list):
+                # Multimodal turn — extract only the user's typed message text;
+                # file contents were injected as "[File: name]\n..." prefixed parts
+                # and are represented by display_files chips instead.
+                text_parts = []
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "text":
+                        text = part["text"]
+                        if not text.startswith("[File: "):
+                            text_parts.append(text)
+                content = " ".join(text_parts)
+            current_user: dict = {"role": "user", "content": content}
+            if display_files:
+                current_user["attachments"] = display_files
             pending_tcs = {}
             pending_steps = []
 

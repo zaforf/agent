@@ -149,19 +149,28 @@
 
     /* Memories */
     .mem-entry {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 8px 10px;
+      padding: 7px 10px;
       display: flex;
-      gap: 8px;
       align-items: flex-start;
+      gap: 8px;
+      border-radius: 5px;
     }
-    .mem-body  { flex: 1; min-width: 0; }
-    .mem-text  { font-size: 12.5px; color: var(--text); line-height: 1.45; }
-    .mem-cat   { font-size: 10.5px; color: var(--text-3); margin-top: 3px; }
-    .mem-del   { background: none; border: none; color: var(--text-3); cursor: pointer; font-size: 15px; line-height: 1; flex-shrink: 0; }
-    .mem-del:hover { color: var(--danger); }
+    .mem-entry:hover { background: var(--panel); }
+    .mem-text { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text); line-height: 1.5; }
+    .mem-del {
+      background: none;
+      border: none;
+      color: transparent;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 0;
+      line-height: 1;
+      flex-shrink: 0;
+      margin-top: 1px;
+      transition: color 0.1s;
+    }
+    .mem-entry:hover .mem-del { color: var(--text-3); }
+    .mem-del:hover { color: var(--danger) !important; }
 
     /* ── Chat column ─────────────────────────────────────── */
 
@@ -373,20 +382,78 @@
       background: var(--bg);
       border: 1px solid var(--border);
       color: var(--text);
-      padding: 8px 12px;
+      padding: 6px 12px;
       border-radius: var(--radius);
       font-family: var(--font);
       font-size: 14px;
       outline: none;
-      resize: none;
-      height: 36px;
+      min-height: 36px;
       max-height: 120px;
       line-height: 1.45;
-      overflow-y: hidden;
+      overflow-y: auto;
       transition: border-color 0.1s;
+      white-space: pre-wrap;
+      word-break: break-word;
+      cursor: text;
     }
     #input:focus { border-color: var(--accent); }
-    #input::placeholder { color: var(--text-3); }
+    #input:empty::before {
+      content: attr(data-placeholder);
+      color: var(--text-3);
+      pointer-events: none;
+    }
+
+    /* File chip — inline inside #input, same metrics as surrounding text */
+    .file-chip {
+      background: var(--panel);
+      border: 1px solid var(--border-2);
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-size: 13px;
+      font-family: var(--mono);
+      color: var(--text-2);
+      user-select: none;
+      cursor: default;
+      white-space: nowrap;
+    }
+
+    /* File chips displayed in sent user bubble */
+    .msg-files {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 5px;
+    }
+    .msg-file-chip {
+      background: rgba(255,255,255,0.10);
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: 12px;
+      font-family: var(--mono);
+      white-space: nowrap;
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Drag-over overlay */
+    #chat { position: relative; }
+    #drag-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      background: rgba(37, 99, 235, 0.07);
+      border: 2px dashed var(--accent);
+      border-radius: 4px;
+      z-index: 20;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      color: var(--accent);
+      pointer-events: none;
+    }
+    #drag-overlay.active { display: flex; }
 
     #thinking-ind {
       display: none;
@@ -428,7 +495,8 @@
       background: none;
       border: 1px solid var(--border);
       color: var(--text-2);
-      padding: 0 10px;
+      padding: 0;
+      width: 36px;
       font-size: 15px;
     }
     .btn-icon:hover { background: var(--panel); color: var(--text); }
@@ -443,61 +511,6 @@
     }
     .btn-sm:hover { background: var(--border); color: var(--text); }
 
-    /* ── System prompt modal ─────────────────────────────── */
-
-    #sp-overlay {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.25);
-      z-index: 100;
-      align-items: center;
-      justify-content: center;
-    }
-    #sp-overlay.open { display: flex; }
-    #sp-box {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      width: 640px;
-      max-width: 92vw;
-      display: flex;
-      flex-direction: column;
-      max-height: 80vh;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.12);
-    }
-    #sp-box-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--border);
-      font-size: 13px;
-      font-weight: 500;
-    }
-    #sp-textarea {
-      flex: 1;
-      background: var(--bg);
-      color: var(--text);
-      border: none;
-      padding: 14px 16px;
-      font-family: var(--mono);
-      font-size: 12.5px;
-      line-height: 1.6;
-      resize: none;
-      outline: none;
-      min-height: 280px;
-      overflow-y: auto;
-    }
-    #sp-box-footer {
-      display: flex;
-      gap: 8px;
-      justify-content: flex-end;
-      align-items: center;
-      padding: 10px 14px;
-      border-top: 1px solid var(--border);
-    }
-    #sp-box-footer .btn { height: 32px; }
 
     /* ── Misc ────────────────────────────────────────────── */
 
@@ -525,7 +538,7 @@
       #bar-wrap { padding: 8px 10px; }
       #bar { gap: 6px; }
       .btn { padding: 0 10px; }
-      .btn-icon { padding: 0 8px; }
+      .btn-icon { padding: 0; width: 32px; }
       .agent .bubble { max-width: 94%; }
       .user .bubble { max-width: 86%; }
     }
@@ -549,6 +562,7 @@
 
 <!-- Chat -->
 <div id="chat">
+  <div id="drag-overlay">Drop files to attach</div>
   <div id="messages">
     <div class="msg-inner" id="msg-inner"></div>
   </div>
@@ -556,10 +570,12 @@
     <div id="thinking-ind"><span id="thinking-lbl"></span><span id="thinking-dots-txt"></span></div>
     <div id="bar">
       <button class="btn btn-icon" id="btn-sessions" onclick="togglePanel('sessions-panel','btn-sessions')" title="Sessions">☰</button>
-      <textarea id="input" placeholder="Message…" rows="1"></textarea>
+      <button class="btn btn-icon" id="btn-attach" onclick="document.getElementById('file-input').click()" title="Attach file">+</button>
+      <input type="file" id="file-input" style="display:none" multiple
+             accept="image/*,.pdf,.txt,.md,.py,.js,.ts,.jsx,.tsx,.json,.csv,.html,.css,.yaml,.yml,.toml,.sh,.c,.cpp,.h,.java,.rs,.go">
+      <div id="input" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Message…"></div>
       <button class="btn btn-send" id="send-btn" onclick="send()">Send</button>
-      <button class="btn btn-icon" id="btn-mem" onclick="togglePanel('mem-panel','btn-mem')" title="Memories">◈</button>
-      <button class="btn btn-icon" onclick="openSP()" title="System prompt">⚙</button>
+      <button class="btn btn-icon" id="btn-mem" onclick="togglePanel('mem-panel','btn-mem')" title="Memories">◉</button>
     </div>
   </div>
 </div>
@@ -576,20 +592,6 @@
   <div id="mem-list" class="panel-body"></div>
 </div>
 
-<!-- System prompt modal -->
-<div id="sp-overlay" onclick="closeSP(event)">
-  <div id="sp-box" onclick="event.stopPropagation()">
-    <div id="sp-box-header">
-      <span>System Prompt</span>
-      <button class="btn btn-sm" onclick="closeSP()">✕</button>
-    </div>
-    <textarea id="sp-textarea" spellcheck="false"></textarea>
-    <div id="sp-box-footer">
-      <button class="btn btn-sm" onclick="closeSP()">Cancel</button>
-      <button class="btn btn-send" onclick="saveSP()">Save</button>
-    </div>
-  </div>
-</div>
 
 <script>
   // ── Markdown / Math setup ─────────────────────────────────
@@ -717,12 +719,28 @@
 
   // ── Message rendering ─────────────────────────────────────
 
-  function addUserMsg(text, shouldScroll = true) {
+  function addUserMsg(text, displayAttachments = [], shouldScroll = true) {
     const row = document.createElement('div');
     row.className = 'row user';
     const bub = document.createElement('div');
     bub.className = 'bubble';
-    bub.textContent = text;
+    if (displayAttachments.length) {
+      const filesDiv = document.createElement('div');
+      filesDiv.className = 'msg-files';
+      for (const att of displayAttachments) {
+        const chip = document.createElement('span');
+        chip.className = 'msg-file-chip';
+        const name = att.filename || 'file';
+        chip.textContent = name.length > 24 ? name.slice(0, 21) + '…' : name;
+        filesDiv.appendChild(chip);
+      }
+      bub.appendChild(filesDiv);
+    }
+    if (text) {
+      const textDiv = document.createElement('div');
+      textDiv.textContent = text;
+      bub.appendChild(textDiv);
+    }
     row.appendChild(bub);
     feed.appendChild(row);
     if (shouldScroll) scrollFeed();
@@ -829,7 +847,7 @@
     const data = await res.json();
     for (const msg of data.messages) {
       if (msg.role === 'user') {
-        addUserMsg(msg.content, false);
+        addUserMsg(msg.content, msg.attachments || [], false);
       } else {
         // Render stored tool steps before the assistant message
         for (const step of (msg.steps || [])) {
@@ -920,10 +938,7 @@
       const el = document.createElement('div');
       el.className = 'mem-entry';
       el.innerHTML = `
-        <div class="mem-body">
-          <div class="mem-text">${esc(m.memory)}</div>
-          <div class="mem-cat">${esc(m.metadata?.category ?? '')}</div>
-        </div>
+        <div class="mem-text">${esc(m.memory)}</div>
         <button class="mem-del" onclick="deleteMem('${m.id}',this)">×</button>`;
       list.appendChild(el);
     }
@@ -935,31 +950,6 @@
     btn.closest('.mem-entry').remove();
     if (!document.getElementById('mem-list').querySelector('.mem-entry'))
       document.getElementById('mem-list').innerHTML = '<div class="empty-hint">No memories yet.</div>';
-  }
-
-  // ── System prompt ─────────────────────────────────────────
-
-  async function openSP() {
-    const res  = await fetch('/system-prompt');
-    const data = await res.json();
-    document.getElementById('sp-textarea').value = data.content;
-    document.getElementById('sp-overlay').classList.add('open');
-    document.getElementById('sp-textarea').focus();
-  }
-
-  async function saveSP() {
-    const content = document.getElementById('sp-textarea').value;
-    await fetch('/system-prompt', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    });
-    closeSP();
-  }
-
-  function closeSP(e) {
-    if (e && e.target !== document.getElementById('sp-overlay')) return;
-    document.getElementById('sp-overlay').classList.remove('open');
   }
 
   // ── Thinking indicator ────────────────────────────────────
@@ -994,17 +984,16 @@
   // ── Send (streaming) ──────────────────────────────────────
 
   async function send() {
-    const text = input.value.trim();
-    if (!text || sendBtn.disabled) return;
-    input.value = '';
-    resetInputHeight();
+    const { text, attachments } = getInputContent();
+    if ((!text && !attachments.length) || sendBtn.disabled) return;
+    clearInput();
     sendBtn.disabled = true;
     _showThinking('');
 
     const hint = feed.querySelector('.empty-hint');
     if (hint) hint.remove();
 
-    addUserMsg(text);
+    addUserMsg(text, attachments.map(a => ({ type: a.type, filename: a.filename })));
     stickToBottom = true;
 
     let agentMd       = null;   // md-content div for the current text segment
@@ -1017,7 +1006,15 @@
       const res = await fetch('/chat/stream', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ message: text, session_id: sid }),
+        body:    JSON.stringify({
+          message:     text,
+          session_id:  sid,
+          attachments: attachments.map(a => ({
+            type:     a.type,
+            filename: a.filename,
+            content:  a.content,
+          })),
+        }),
       });
 
       if (!res.ok) {
@@ -1115,23 +1112,188 @@
     }
   }
 
-  // ── Input auto-grow ───────────────────────────────────────
+  // ── Contenteditable helpers ───────────────────────────────
 
-  function resetInputHeight() {
-    input.style.height = '36px';
-    input.style.overflowY = 'hidden';
+  // fileId → { type, filename, content }
+  const attachedFiles = new Map();
+
+  function clearInput() {
+    input.innerHTML = '';
+    attachedFiles.clear();
   }
 
-  input.addEventListener('input', () => {
-    input.style.height = '36px';
-    const h = Math.min(input.scrollHeight, 120);
-    input.style.height = h + 'px';
-    input.style.overflowY = input.scrollHeight > 120 ? 'auto' : 'hidden';
+  /** Parse the contenteditable div into { text, attachments }. */
+  function getInputContent() {
+    const attachments = [];
+    const textParts   = [];
+
+    function walk(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        textParts.push(node.textContent);
+      } else if (node.nodeName === 'BR') {
+        textParts.push('\n');
+      } else if (node.classList?.contains('file-chip')) {
+        const fileData = attachedFiles.get(node.dataset.fileId);
+        if (fileData) attachments.push(fileData);
+      } else {
+        const isBlock = node.nodeName === 'DIV' || node.nodeName === 'P';
+        if (isBlock && textParts.length && !textParts[textParts.length - 1].endsWith('\n')) {
+          textParts.push('\n');
+        }
+        for (const child of node.childNodes) walk(child);
+      }
+    }
+    for (const child of input.childNodes) walk(child);
+
+    return { text: textParts.join('').trim(), attachments };
+  }
+
+  /** Insert a chip span at the current cursor position (or append). */
+  function insertChip(fileId, filename) {
+    const chip = document.createElement('span');
+    chip.className       = 'file-chip';
+    chip.contentEditable = 'false';
+    chip.dataset.fileId  = fileId;
+    chip.textContent     = filename.length > 24 ? filename.slice(0, 21) + '…' : filename;
+
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && input.contains(sel.anchorNode)) {
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(chip);
+      range.setStartAfter(chip);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else {
+      input.appendChild(chip);
+    }
+    input.focus();
+  }
+
+  // ── File reading helpers ──────────────────────────────────
+
+  const _TEXT_EXTS = new Set([
+    'txt','md','py','js','ts','jsx','tsx','json','csv','html','css',
+    'yaml','yml','toml','sh','c','cpp','h','java','rs','go','rb','php',
+    'swift','kt','r','sql','xml','ini','env',
+  ]);
+
+  function _readAsText(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload  = e => resolve(e.target.result);
+      r.onerror = reject;
+      r.readAsText(file);
+    });
+  }
+
+  function _readAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload  = e => resolve(e.target.result);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+  }
+
+  async function handleFileAttach(file) {
+    const MAX = 5 * 1024 * 1024;
+    if (file.size > MAX) {
+      alert(`"${file.name}" exceeds the 5 MB limit.`);
+      return;
+    }
+
+    const mime = file.type || '';
+    const ext  = (file.name.split('.').pop() || '').toLowerCase();
+    const fileId = Math.random().toString(36).slice(2);
+
+    if (mime.startsWith('image/')) {
+      const dataUrl = await _readAsDataURL(file);
+      attachedFiles.set(fileId, { type: 'image', filename: file.name, content: dataUrl });
+      insertChip(fileId, file.name);
+
+    } else if (mime === 'application/pdf') {
+      const fd  = new FormData();
+      fd.append('file', file);
+      let res;
+      try { res = await fetch('/upload', { method: 'POST', body: fd }); }
+      catch { alert(`Upload failed: network error`); return; }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(`Upload failed: ${err.detail || res.status}`);
+        return;
+      }
+      const data = await res.json();
+      attachedFiles.set(fileId, { type: 'text', filename: data.filename, content: data.content });
+      insertChip(fileId, file.name);
+
+    } else if (mime.startsWith('text/') || _TEXT_EXTS.has(ext)) {
+      const text = await _readAsText(file);
+      attachedFiles.set(fileId, { type: 'text', filename: file.name, content: text });
+      insertChip(fileId, file.name);
+
+    } else {
+      alert(`Unsupported file type: ${mime || ext || 'unknown'}`);
+    }
+  }
+
+  function handleFilePicker(e) {
+    [...e.target.files].forEach(handleFileAttach);
+    e.target.value = '';
+  }
+
+  // ── Drag-and-drop ─────────────────────────────────────────
+
+  const chatEl      = document.getElementById('chat');
+  const dragOverlay = document.getElementById('drag-overlay');
+  let _dragCounter  = 0;
+
+  chatEl.addEventListener('dragenter', e => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    _dragCounter++;
+    dragOverlay.classList.add('active');
   });
+  chatEl.addEventListener('dragleave', () => {
+    _dragCounter = Math.max(0, _dragCounter - 1);
+    if (_dragCounter === 0) dragOverlay.classList.remove('active');
+  });
+  chatEl.addEventListener('dragover', e => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  chatEl.addEventListener('drop', e => {
+    e.preventDefault();
+    _dragCounter = 0;
+    dragOverlay.classList.remove('active');
+    [...e.dataTransfer.files].forEach(handleFileAttach);
+    input.focus();
+  });
+
+  // ── Input keydown / paste ─────────────────────────────────
 
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   });
+
+  // Strip rich formatting on paste — keep plain text only.
+  input.addEventListener('paste', e => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text/plain');
+    document.execCommand('insertText', false, text);
+  });
+
+  // Clean up any stray <br> Chrome inserts when the div becomes empty.
+  input.addEventListener('input', () => {
+    if (!input.textContent.trim() && !input.querySelector('.file-chip')) {
+      input.innerHTML = '';
+    }
+  });
+
+  // Wire file-input change handler.
+  document.getElementById('file-input').addEventListener('change', handleFilePicker);
 
   // ── Init ──────────────────────────────────────────────────
 
