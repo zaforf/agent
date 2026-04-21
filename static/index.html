@@ -149,19 +149,28 @@
 
     /* Memories */
     .mem-entry {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 8px 10px;
+      padding: 7px 10px;
       display: flex;
-      gap: 8px;
       align-items: flex-start;
+      gap: 8px;
+      border-radius: 5px;
     }
-    .mem-body  { flex: 1; min-width: 0; }
-    .mem-text  { font-size: 12.5px; color: var(--text); line-height: 1.45; }
-    .mem-cat   { font-size: 10.5px; color: var(--text-3); margin-top: 3px; }
-    .mem-del   { background: none; border: none; color: var(--text-3); cursor: pointer; font-size: 15px; line-height: 1; flex-shrink: 0; }
-    .mem-del:hover { color: var(--danger); }
+    .mem-entry:hover { background: var(--panel); }
+    .mem-text { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text); line-height: 1.5; }
+    .mem-del {
+      background: none;
+      border: none;
+      color: transparent;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 0;
+      line-height: 1;
+      flex-shrink: 0;
+      margin-top: 1px;
+      transition: color 0.1s;
+    }
+    .mem-entry:hover .mem-del { color: var(--text-3); }
+    .mem-del:hover { color: var(--danger) !important; }
 
     /* ── Chat column ─────────────────────────────────────── */
 
@@ -394,42 +403,18 @@
       pointer-events: none;
     }
 
-    /* File chip — inline inside #input */
+    /* File chip — inline inside #input, same metrics as surrounding text */
     .file-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 3px;
       background: var(--panel);
-      border: 1px solid var(--border-2);
-      border-radius: 4px;
-      padding: 1px 3px 1px 5px;
-      font-size: 12px;
-      line-height: 1.55;
-      vertical-align: text-bottom;
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-size: 13px;
+      font-family: var(--mono);
+      color: var(--text-2);
       user-select: none;
       cursor: default;
-      max-width: 180px;
       white-space: nowrap;
-      margin: 0 1px;
     }
-    .chip-name {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 130px;
-      display: inline-block;
-      vertical-align: bottom;
-    }
-    .chip-del {
-      background: none;
-      border: none;
-      cursor: pointer;
-      color: var(--text-3);
-      font-size: 12px;
-      padding: 0 1px;
-      line-height: 1;
-      flex-shrink: 0;
-    }
-    .chip-del:hover { color: var(--danger); }
 
     /* File chips displayed in sent user bubble */
     .msg-files {
@@ -439,13 +424,11 @@
       margin-bottom: 5px;
     }
     .msg-file-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
       background: rgba(255,255,255,0.13);
-      border-radius: 4px;
-      padding: 2px 7px;
-      font-size: 11.5px;
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: 12px;
+      font-family: var(--mono);
       white-space: nowrap;
       max-width: 180px;
       overflow: hidden;
@@ -525,61 +508,6 @@
     }
     .btn-sm:hover { background: var(--border); color: var(--text); }
 
-    /* ── System prompt modal ─────────────────────────────── */
-
-    #sp-overlay {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.25);
-      z-index: 100;
-      align-items: center;
-      justify-content: center;
-    }
-    #sp-overlay.open { display: flex; }
-    #sp-box {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      width: 640px;
-      max-width: 92vw;
-      display: flex;
-      flex-direction: column;
-      max-height: 80vh;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.12);
-    }
-    #sp-box-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--border);
-      font-size: 13px;
-      font-weight: 500;
-    }
-    #sp-textarea {
-      flex: 1;
-      background: var(--bg);
-      color: var(--text);
-      border: none;
-      padding: 14px 16px;
-      font-family: var(--mono);
-      font-size: 12.5px;
-      line-height: 1.6;
-      resize: none;
-      outline: none;
-      min-height: 280px;
-      overflow-y: auto;
-    }
-    #sp-box-footer {
-      display: flex;
-      gap: 8px;
-      justify-content: flex-end;
-      align-items: center;
-      padding: 10px 14px;
-      border-top: 1px solid var(--border);
-    }
-    #sp-box-footer .btn { height: 32px; }
 
     /* ── Misc ────────────────────────────────────────────── */
 
@@ -639,13 +567,12 @@
     <div id="thinking-ind"><span id="thinking-lbl"></span><span id="thinking-dots-txt"></span></div>
     <div id="bar">
       <button class="btn btn-icon" id="btn-sessions" onclick="togglePanel('sessions-panel','btn-sessions')" title="Sessions">☰</button>
-      <div id="input" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Message…"></div>
-      <button class="btn btn-icon" id="btn-attach" onclick="document.getElementById('file-input').click()" title="Attach file">⊕</button>
+      <button class="btn btn-icon" id="btn-attach" onclick="document.getElementById('file-input').click()" title="Attach file">+</button>
       <input type="file" id="file-input" style="display:none" multiple
              accept="image/*,.pdf,.txt,.md,.py,.js,.ts,.jsx,.tsx,.json,.csv,.html,.css,.yaml,.yml,.toml,.sh,.c,.cpp,.h,.java,.rs,.go">
+      <div id="input" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Message…"></div>
       <button class="btn btn-send" id="send-btn" onclick="send()">Send</button>
       <button class="btn btn-icon" id="btn-mem" onclick="togglePanel('mem-panel','btn-mem')" title="Memories">◈</button>
-      <button class="btn btn-icon" onclick="openSP()" title="System prompt">⚙</button>
     </div>
   </div>
 </div>
@@ -662,20 +589,6 @@
   <div id="mem-list" class="panel-body"></div>
 </div>
 
-<!-- System prompt modal -->
-<div id="sp-overlay" onclick="closeSP(event)">
-  <div id="sp-box" onclick="event.stopPropagation()">
-    <div id="sp-box-header">
-      <span>System Prompt</span>
-      <button class="btn btn-sm" onclick="closeSP()">✕</button>
-    </div>
-    <textarea id="sp-textarea" spellcheck="false"></textarea>
-    <div id="sp-box-footer">
-      <button class="btn btn-sm" onclick="closeSP()">Cancel</button>
-      <button class="btn btn-send" onclick="saveSP()">Save</button>
-    </div>
-  </div>
-</div>
 
 <script>
   // ── Markdown / Math setup ─────────────────────────────────
@@ -814,9 +727,8 @@
       for (const att of displayAttachments) {
         const chip = document.createElement('span');
         chip.className = 'msg-file-chip';
-        const icon = att.type === 'image' ? '🖼' : (att.filename?.toLowerCase().endsWith('.pdf') ? '📑' : '📄');
         const name = att.filename || 'file';
-        chip.textContent = `${icon} ${name.length > 22 ? name.slice(0, 19) + '…' : name}`;
+        chip.textContent = name.length > 24 ? name.slice(0, 21) + '…' : name;
         filesDiv.appendChild(chip);
       }
       bub.appendChild(filesDiv);
@@ -1023,10 +935,7 @@
       const el = document.createElement('div');
       el.className = 'mem-entry';
       el.innerHTML = `
-        <div class="mem-body">
-          <div class="mem-text">${esc(m.memory)}</div>
-          <div class="mem-cat">${esc(m.metadata?.category ?? '')}</div>
-        </div>
+        <div class="mem-text">${esc(m.memory)}</div>
         <button class="mem-del" onclick="deleteMem('${m.id}',this)">×</button>`;
       list.appendChild(el);
     }
@@ -1038,31 +947,6 @@
     btn.closest('.mem-entry').remove();
     if (!document.getElementById('mem-list').querySelector('.mem-entry'))
       document.getElementById('mem-list').innerHTML = '<div class="empty-hint">No memories yet.</div>';
-  }
-
-  // ── System prompt ─────────────────────────────────────────
-
-  async function openSP() {
-    const res  = await fetch('/system-prompt');
-    const data = await res.json();
-    document.getElementById('sp-textarea').value = data.content;
-    document.getElementById('sp-overlay').classList.add('open');
-    document.getElementById('sp-textarea').focus();
-  }
-
-  async function saveSP() {
-    const content = document.getElementById('sp-textarea').value;
-    await fetch('/system-prompt', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    });
-    closeSP();
-  }
-
-  function closeSP(e) {
-    if (e && e.target !== document.getElementById('sp-overlay')) return;
-    document.getElementById('sp-overlay').classList.remove('open');
   }
 
   // ── Thinking indicator ────────────────────────────────────
@@ -1262,33 +1146,12 @@
   }
 
   /** Insert a chip span at the current cursor position (or append). */
-  function insertChip(fileId, filename, chipType) {
+  function insertChip(fileId, filename) {
     const chip = document.createElement('span');
-    chip.className          = 'file-chip';
-    chip.contentEditable    = 'false';
-    chip.dataset.fileId     = fileId;
-
-    const icons = { text: '📄', image: '🖼', pdf: '📑' };
-    const icon  = icons[chipType] || '📎';
-    const short = filename.length > 22 ? filename.slice(0, 19) + '…' : filename;
-
-    const nameSpan = document.createElement('span');
-    nameSpan.className   = 'chip-name';
-    nameSpan.textContent = `${icon} ${short}`;
-
-    const delBtn = document.createElement('button');
-    delBtn.className   = 'chip-del';
-    delBtn.textContent = '×';
-    delBtn.title       = 'Remove';
-    delBtn.addEventListener('mousedown', e => {
-      e.preventDefault();   // keep focus in input
-      attachedFiles.delete(chip.dataset.fileId);
-      chip.remove();
-      input.focus();
-    });
-
-    chip.appendChild(nameSpan);
-    chip.appendChild(delBtn);
+    chip.className       = 'file-chip';
+    chip.contentEditable = 'false';
+    chip.dataset.fileId  = fileId;
+    chip.textContent     = filename.length > 24 ? filename.slice(0, 21) + '…' : filename;
 
     const sel = window.getSelection();
     if (sel && sel.rangeCount > 0 && input.contains(sel.anchorNode)) {
@@ -1345,7 +1208,7 @@
     if (mime.startsWith('image/')) {
       const dataUrl = await _readAsDataURL(file);
       attachedFiles.set(fileId, { type: 'image', filename: file.name, content: dataUrl });
-      insertChip(fileId, file.name, 'image');
+      insertChip(fileId, file.name);
 
     } else if (mime === 'application/pdf') {
       const fd  = new FormData();
@@ -1360,12 +1223,12 @@
       }
       const data = await res.json();
       attachedFiles.set(fileId, { type: 'text', filename: data.filename, content: data.content });
-      insertChip(fileId, file.name, 'pdf');
+      insertChip(fileId, file.name);
 
     } else if (mime.startsWith('text/') || _TEXT_EXTS.has(ext)) {
       const text = await _readAsText(file);
       attachedFiles.set(fileId, { type: 'text', filename: file.name, content: text });
-      insertChip(fileId, file.name, 'text');
+      insertChip(fileId, file.name);
 
     } else {
       alert(`Unsupported file type: ${mime || ext || 'unknown'}`);

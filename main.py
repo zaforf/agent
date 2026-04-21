@@ -109,6 +109,8 @@ async def upload_file(file: UploadFile = File(...)):
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(data))
         text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        # pypdf can produce lone surrogates from malformed/encoded PDFs; strip them
+        text = text.encode("utf-8", errors="ignore").decode("utf-8")
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"PDF text extraction failed: {e}")
 
