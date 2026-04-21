@@ -97,7 +97,15 @@ class _ThinkStripper:
         return out
 
 # Sync tools that do HTTP / long completions — run off the event loop.
-_BLOCKING_SYNC_TOOLS = frozenset({"fetch_url", "web_search"})
+# Memory tools call Mem0 (Groq + Gemini embeddings + Qdrant) synchronously.
+_BLOCKING_SYNC_TOOLS = frozenset({
+    "fetch_url",
+    "web_search",
+    "remember",
+    "recall",
+    "list_memories",
+    "delete_memory",
+})
 
 
 def _merge_stream_fragment(current: str, fragment: str) -> str:

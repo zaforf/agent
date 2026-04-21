@@ -66,3 +66,9 @@ SYSTEM_PROMPT_PATH = DATA_DIR / "system_prompt.md"
 QDRANT_HOST  = os.environ.get("QDRANT_HOST", "localhost")
 QDRANT_PORT  = int(os.environ.get("QDRANT_PORT", "6333"))
 MEM0_USER_ID = "user"
+
+# Mem0 embedder: Gemini API (`google-genai`), same key as chat (`GEMINI_API_KEY`).
+# Collection name bumped when embedding model/dims change (no migration of old vectors).
+MEM0_QDRANT_COLLECTION = os.environ.get("MEM0_QDRANT_COLLECTION", "agent_memories_gemini")
+GEMINI_EMBEDDING_MODEL = os.environ.get("GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-001")
+GEMINI_EMBEDDING_DIMS = int(os.environ.get("GEMINI_EMBEDDING_DIMS", "768"))

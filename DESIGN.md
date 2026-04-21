@@ -12,7 +12,7 @@ This is a personal AI assistant for Zafir, exposed as a web application. It runs
 - Fast streaming responses with visible tool call steps in the UI
 - Correct and complete context for the model on every turn (no silent data loss)
 - Cheap-to-run: primary models are free-tier Google AI Studio; fallbacks are rate-limited free tiers
-- Self-contained: no managed backends beyond Qdrant running locally
+- Self-contained: no paid managed backends beyond **Qdrant** (typically local or your own container) and **API usage** for models/embeddings
 
 ---
 
@@ -26,7 +26,7 @@ This is a personal AI assistant for Zafir, exposed as a web application. It runs
 | API adapter (all providers) | OpenAI Python SDK (`AsyncOpenAI`); Gemini uses Google's OpenAI-compatibility endpoint (`/v1beta/openai/`) |
 | Conversation storage | SQLite (`data/history.db`) |
 | Long-term memory | Mem0 + Qdrant (localhost:6333) |
-| Memory embeddings | `BAAI/bge-base-en-v1.5` (local HuggingFace) |
+| Memory embeddings | Google **Gemini Embedding** (`models/gemini-embedding-001` via `google-genai`; same `GEMINI_API_KEY` as chat). Dimensions default **768** (`GEMINI_EMBEDDING_DIMS`). No local `sentence-transformers` — suitable for small VPS RAM. |
 | Memory LLM | Groq `llama-3.1-8b-instant` |
 | Web UI | Vanilla JS + Marked (markdown) + KaTeX (LaTeX) |
 | Streaming protocol | Server-Sent Events (SSE) |
@@ -117,13 +117,13 @@ See §11 for the repaired streaming edge case and the summarizer model choice, p
 
 Tools are registered in `tools/__init__.py`. Adding a new tool requires only creating a module with `SCHEMAS` and `FUNCTIONS` dicts and importing it there.
 
-All tools are called synchronously. `fetch_url` and `web_search` are classified as blocking sync tools (`_BLOCKING_SYNC_TOOLS`) and are run in a thread via `asyncio.to_thread()` to avoid blocking the event loop.
+All tools are called synchronously. `fetch_url`, `web_search`, and the Mem0 tools (`remember`, `recall`, `list_memories`, `delete_memory`) are classified as blocking sync tools (`_BLOCKING_SYNC_TOOLS`) and are run in a thread via `asyncio.to_thread()` to avoid blocking the event loop.
 
 The model is instructed to use native API `tool_calls` only — no XML or fenced-code tool invocations.
 
 ### 5.1 Memory tools (`tools/memory.py`)
 
-Backed by Mem0 + Qdrant. Qdrant host/port are read from `QDRANT_HOST` / `QDRANT_PORT` env vars (defaulting to `localhost:6333`); prod typically sets `QDRANT_HOST=qdrant` inside docker-compose. `docker-compose.yml` is gitignored because dev/prod topologies differ. Embeddings are computed locally using `BAAI/bge-base-en-v1.5` (768-dimensional). Mem0 uses Groq `llama-3.1-8b-instant` for memory extraction/processing.
+Backed by Mem0 + Qdrant. Qdrant host/port are read from `QDRANT_HOST` / `QDRANT_PORT` env vars (defaulting to `localhost:6333`); prod typically sets `QDRANT_HOST=qdrant` inside docker-compose. `docker-compose.yml` is gitignored because dev/prod topologies differ. Embeddings use the **Gemini Embedding API** (`GEMINI_API_KEY`, model `GEMINI_EMBEDDING_MODEL` defaulting to `models/gemini-embedding-001`, `GEMINI_EMBEDDING_DIMS` default 768). Vectors are stored under collection `MEM0_QDRANT_COLLECTION` (default `agent_memories_gemini` — new name so a prior local 768-d HuggingFace index is not reused). Mem0 uses Groq `llama-3.1-8b-instant` for memory extraction/processing. Memory tools run in a worker thread (`asyncio.to_thread`) like `fetch_url` / `web_search` so the async event loop is not blocked during embedding or Qdrant I/O.
 
 All memories are stored under the single user ID `"user"`.
 
