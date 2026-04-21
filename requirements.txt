@@ -4,7 +4,7 @@ openai
 httpx
 mem0ai
 qdrant-client
-sentence-transformers
+google-genai
 groq
 python-dotenv
 pydantic

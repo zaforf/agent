@@ -1,28 +1,37 @@
 from mem0 import Memory
-from config import GROQ_API_KEY, QDRANT_HOST, QDRANT_PORT
 
-_config = {
-    "llm": {
-        "provider": "groq",
-        "config": {
-            "model": "llama-3.1-8b-instant",
-            "api_key": GROQ_API_KEY,
+import config
+
+
+def mem0_config_dict() -> dict:
+    """Mem0 configuration (embeddings + vector store + LLM). Exposed for tests."""
+    return {
+        "llm": {
+            "provider": "groq",
+            "config": {
+                "model": "llama-3.1-8b-instant",
+                "api_key": config.GROQ_API_KEY,
+            },
         },
-    },
-    "embedder": {
-        "provider": "huggingface",
-        "config": {"model": "BAAI/bge-base-en-v1.5"},
-    },
-    "vector_store": {
-        "provider": "qdrant",
-        "config": {
-            "host": QDRANT_HOST,
-            "port": QDRANT_PORT,
-            "collection_name": "agent_memories",
-            "embedding_model_dims": 768,
+        "embedder": {
+            "provider": "gemini",
+            "config": {
+                "model": config.GEMINI_EMBEDDING_MODEL,
+                "embedding_dims": config.GEMINI_EMBEDDING_DIMS,
+                "api_key": config.GEMINI_API_KEY or None,
+            },
         },
-    },
-}
+        "vector_store": {
+            "provider": "qdrant",
+            "config": {
+                "host": config.QDRANT_HOST,
+                "port": config.QDRANT_PORT,
+                "collection_name": config.MEM0_QDRANT_COLLECTION,
+                "embedding_model_dims": config.GEMINI_EMBEDDING_DIMS,
+            },
+        },
+    }
+
 
 USER_ID = "user"
 _memory = None
@@ -31,7 +40,7 @@ _memory = None
 def _get_memory() -> Memory:
     global _memory
     if _memory is None:
-        _memory = Memory.from_config(_config)
+        _memory = Memory.from_config(mem0_config_dict())
     return _memory
 
 
