@@ -138,6 +138,8 @@ The system prompt instructs the model to use `recall()` before answering anythin
 
 If Qdrant is unreachable, memory tool calls fail with an exception caught by the tool executor, which returns the error string to the model.
 
+**Dependency:** `mem0ai` is pinned to **2.x** (`requirements.txt`: `mem0ai[nlp]>=2.0.0,<3`). Version 2 uses `Memory.search(..., filters={"user_id": "..."}, top_k=...)` and `get_all(filters={...})`; version 1 used `user_id=` / `limit=` instead — mixing code written for one major with the other produces runtime errors. The `[nlp]` extra installs spaCy so mem0’s optional lemmatization path does not warn on every import.
+
 ### 5.2 Web tools (`tools/web.py`)
 
 Two tools live here: **`fetch_url`** for retrieving and reading a known URL, and **`web_search`** for discovering URLs when the model has none.

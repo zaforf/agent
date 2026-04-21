@@ -51,6 +51,6 @@ Update `DESIGN.md` when behavior is part of the documented contract.
 | HTTP API + SSE | `main.py` |
 | History summarization (Gemma 26B) | `summarizer.py`, `_summarize_for_history` in `agent.py` |
 | Web (fetch + search) | `tools/web.py` |
-| Memory (Mem0 + Qdrant, Gemini API embeddings) | `tools/memory.py` |
+| Memory (Mem0 2.x + Qdrant, Gemini API embeddings) | `tools/memory.py` (`mem0ai[nlp]>=2`) |
 
 When in doubt, search `DESIGN.md` and mirror existing patterns in the same directory.
