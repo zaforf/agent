@@ -138,6 +138,8 @@ The system prompt instructs the model to use `recall()` before answering anythin
 
 If Qdrant is unreachable, memory tool calls fail with an exception caught by the tool executor, which returns the error string to the model.
 
+Mem0’s `search` / `get_all` require **scoped entity filters** (`filters={"user_id": "user"}`), not top-level `user_id=` — the tools layer passes this for `recall` and `list_memories`.
+
 ### 5.2 Web tools (`tools/web.py`)
 
 Two tools live here: **`fetch_url`** for retrieving and reading a known URL, and **`web_search`** for discovering URLs when the model has none.
