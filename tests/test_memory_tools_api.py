@@ -38,3 +38,19 @@ def test_get_all_api_calls_get_all_with_filters():
         memory.get_all()
 
     mock_mem.get_all.assert_called_once_with(filters={"user_id": memory.USER_ID})
+
+
+def test_remember_persists_with_infer_false():
+    """infer=False guarantees Qdrant write of the tool string; infer=True can no-op."""
+    mock_mem = MagicMock()
+    mock_mem.add.return_value = {"results": [{"id": "1", "memory": "x", "event": "ADD"}]}
+
+    with patch.object(memory, "_get_memory", return_value=mock_mem):
+        memory.remember("favorite color is blue", category="preference")
+
+    mock_mem.add.assert_called_once_with(
+        "favorite color is blue",
+        user_id=memory.USER_ID,
+        metadata={"category": "preference"},
+        infer=False,
+    )
