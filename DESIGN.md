@@ -129,7 +129,7 @@ All memories are stored under the single user ID `"user"`.
 
 | Tool | Description |
 |---|---|
-| `remember(content, category)` | Store a durable fact. Categories: `user`, `preference`, `fact`, `project`. Only for facts worth recalling in a future conversation. |
+| `remember(content, category)` | Store a durable fact. Categories: `user`, `preference`, `fact`, `project`. Only for facts worth recalling in a future conversation. Implementation uses Mem0 **`infer=False`** so the exact string is embedded and written to Qdrant; Mem0’s default **`infer=True`** path uses an LLM to extract facts and can persist nothing if extraction fails, which made `recall` / `list_memories` look empty despite a “Stored” reply. |
 | `recall(query)` | Semantic search over stored memories. Returns up to 5 results. |
 | `list_memories()` | List all memories with IDs and categories. |
 | `delete_memory(memory_id)` | Delete a specific memory by full ID. |
@@ -138,7 +138,7 @@ The system prompt instructs the model to use `recall()` before answering anythin
 
 If Qdrant is unreachable, memory tool calls fail with an exception caught by the tool executor, which returns the error string to the model.
 
-Mem0’s `search` / `get_all` require **scoped entity filters** (`filters={"user_id": "user"}`), not top-level `user_id=` — the tools layer passes this for `recall` and `list_memories`.
+**Dependency:** `mem0ai` is pinned to **2.x** (`requirements.txt`: `mem0ai[nlp]>=2.0.0,<3`). Version 2 uses `Memory.search(..., filters={"user_id": "..."}, top_k=...)` and `get_all(filters={...})`; version 1 used `user_id=` / `limit=` instead — mixing code written for one major with the other produces runtime errors. The `[nlp]` extra installs spaCy so mem0’s optional lemmatization path does not warn on every import.
 
 ### 5.2 Web tools (`tools/web.py`)
 

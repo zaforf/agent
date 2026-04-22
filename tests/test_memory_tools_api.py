@@ -1,4 +1,4 @@
-"""Mem0 API compatibility: search/get_all use filters= not top-level user_id."""
+"""mem0ai 2.x API: search/get_all require filters= and top_k on search (not user_id=/limit=)."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -6,23 +6,21 @@ from unittest.mock import MagicMock, patch
 import tools.memory as memory
 
 
-def test_recall_uses_filters_not_user_id_kwarg():
+def test_recall_calls_search_with_filters_and_top_k():
     mock_mem = MagicMock()
-    mock_mem.search.return_value = {"results": [{"memory": "hello"}]}
+    mock_mem.search.return_value = {"results": [{"memory": "x"}]}
 
     with patch.object(memory, "_get_memory", return_value=mock_mem):
-        out = memory.recall("test query")
+        memory.recall("q")
 
-    assert "hello" in out
-    mock_mem.search.assert_called_once()
-    call_kw = mock_mem.search.call_args
-    assert call_kw[0][0] == "test query"
-    assert call_kw[1]["filters"] == {"user_id": memory.USER_ID}
-    assert call_kw[1]["top_k"] == 5
-    assert "user_id" not in call_kw[1]
+    mock_mem.search.assert_called_once_with(
+        "q",
+        filters={"user_id": memory.USER_ID},
+        top_k=5,
+    )
 
 
-def test_list_memories_uses_filters_not_user_id_kwarg():
+def test_list_memories_calls_get_all_with_filters():
     mock_mem = MagicMock()
     mock_mem.get_all.return_value = {"results": []}
 
@@ -32,7 +30,7 @@ def test_list_memories_uses_filters_not_user_id_kwarg():
     mock_mem.get_all.assert_called_once_with(filters={"user_id": memory.USER_ID})
 
 
-def test_get_all_api_uses_filters():
+def test_get_all_api_calls_get_all_with_filters():
     mock_mem = MagicMock()
     mock_mem.get_all.return_value = {"results": []}
 
@@ -40,3 +38,19 @@ def test_get_all_api_uses_filters():
         memory.get_all()
 
     mock_mem.get_all.assert_called_once_with(filters={"user_id": memory.USER_ID})
+
+
+def test_remember_persists_with_infer_false():
+    """infer=False guarantees Qdrant write of the tool string; infer=True can no-op."""
+    mock_mem = MagicMock()
+    mock_mem.add.return_value = {"results": [{"id": "1", "memory": "x", "event": "ADD"}]}
+
+    with patch.object(memory, "_get_memory", return_value=mock_mem):
+        memory.remember("favorite color is blue", category="preference")
+
+    mock_mem.add.assert_called_once_with(
+        "favorite color is blue",
+        user_id=memory.USER_ID,
+        metadata={"category": "preference"},
+        infer=False,
+    )

@@ -47,12 +47,20 @@ def _get_memory() -> Memory:
 
 
 def remember(content: str, category: str = "fact") -> str:
-    _get_memory().add(content, user_id=USER_ID, metadata={"category": category})
+    # infer=False: embed and persist the string as-is. With infer=True (mem0 default),
+    # LLM extraction can fail or return no facts — then nothing is written to Qdrant
+    # but the tool still looked "successful", so recall/list stay empty.
+    _get_memory().add(
+        content,
+        user_id=USER_ID,
+        metadata={"category": category},
+        infer=False,
+    )
     return f"Stored: {content}"
 
 
 def recall(query: str) -> str:
-    # mem0: entity scope must be filters=..., not user_id=... (Memory.search)
+    # mem0ai >=2.0: session scope via filters=; use top_k (not limit).
     results = _get_memory().search(
         query,
         filters={"user_id": USER_ID},

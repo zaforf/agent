@@ -2,7 +2,7 @@ fastapi
 uvicorn[standard]
 openai
 httpx
-mem0ai
+mem0ai[nlp]>=2.0.0,<3
 qdrant-client
 google-genai
 groq
