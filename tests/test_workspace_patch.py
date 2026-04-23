@@ -14,25 +14,6 @@ def ws(tmp_path, monkeypatch):
     return root
 
 
-def test_read_workspace_file_returns_utf8(ws):
-    p = ws / "hello.txt"
-    p.write_text("hello\nworld\n", encoding="utf-8")
-    assert wp.read_workspace_file("hello.txt") == "hello\nworld\n"
-
-
-def test_read_workspace_file_truncates(ws):
-    p = ws / "big.txt"
-    p.write_text("x" * 100, encoding="utf-8")
-    out = wp.read_workspace_file("big.txt", max_bytes=40)
-    assert "truncated" in out
-    assert len(out) < 200
-
-
-def test_read_workspace_file_missing(ws):
-    with pytest.raises(FileNotFoundError):
-        wp.read_workspace_file("nope.txt")
-
-
 def test_apply_creates_file(ws):
     diff = """\
 --- /dev/null

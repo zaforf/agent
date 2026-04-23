@@ -1,7 +1,8 @@
-"""Workspace file read + unified-diff apply — same root as the shell (`tools.shell.WORKSPACE`).
+"""Unified-diff apply for files under the shell workspace (`tools.shell.WORKSPACE`).
 
-`apply_unified_patch` applies a **git-style unified diff** (``---`` / ``+++`` / ``@@`` hunks) to files
-under the workspace. Pure Python (no ``patch(1)``) for consistent behavior in slim containers.
+`apply_unified_patch` applies a **git-style unified diff** (``---`` / ``+++`` / ``@@`` hunks). Pure
+Python (no ``patch(1)``). Read files with ``shell_exec`` (e.g. ``cat``, ``head``, ``sed``) before
+building a patch so hunks match.
 
 **Design choices**
 
@@ -10,7 +11,6 @@ under the workspace. Pure Python (no ``patch(1)``) for consistent behavior in sl
 - **Atomic writes:** temp file in the target directory, then ``os.replace``.
 - **Hunks:** applied **bottom-up** (highest ``old_start`` first) so line indices stay stable.
 - **Renames:** ``---`` and ``+++`` must refer to the same workspace-relative path (no rename in one patch).
-- **Read cap:** ``read_workspace_file`` truncates with an explicit trailer for huge files.
 """
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ from tools.shell import WORKSPACE
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_READ_MAX = 512_000
 _HUNK_RE = re.compile(
     r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@"
 )
@@ -73,28 +72,6 @@ def _workspace_target(rel: str) -> Path:
     except ValueError as e:
         raise ValueError(f"path escapes workspace: {rel!r}") from e
     return target
-
-
-def read_workspace_file(path: str, max_bytes: int | None = None) -> str:
-    """Read a UTF-8 text file under the workspace. Truncates if larger than ``max_bytes``."""
-    cap = int(max_bytes) if max_bytes is not None else _DEFAULT_READ_MAX
-    if cap < 1:
-        raise ValueError("max_bytes must be positive")
-
-    rel = path.strip().replace("\\", "/").lstrip("./")
-    target = _workspace_target(rel)
-    if not target.is_file():
-        raise FileNotFoundError(f"not a file: {rel}")
-
-    data = target.read_bytes()
-    if len(data) <= cap:
-        return data.decode("utf-8", errors="replace")
-
-    text = data[:cap].decode("utf-8", errors="replace")
-    return (
-        f"{text}\n\n[… truncated: file is {len(data)} bytes; "
-        f"showing first {cap} bytes — use shell to read the rest]\n"
-    )
 
 
 def _split_hunk_sides(raw_body: tuple[str, ...]) -> tuple[list[str], list[str]]:
@@ -290,36 +267,12 @@ SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "read_workspace_file",
-            "description": (
-                "Read a UTF-8 text file under the agent workspace (same directory as shell_exec). "
-                "Large files are truncated with a notice; use shell for huge binaries or tailing logs. "
-                "Call this before editing so hunks match current content."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path relative to workspace (e.g. src/app.py)",
-                    },
-                    "max_bytes": {
-                        "type": "integer",
-                        "description": f"Max bytes to return (default {_DEFAULT_READ_MAX})",
-                    },
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "apply_unified_patch",
             "description": (
                 "Apply a git-style unified diff to workspace files. Use ---/+++ paths relative to "
                 "workspace (git prefixes a/ b/ are OK). One call can touch multiple files. "
-                "On context mismatch, returns an error — re-read the file and regenerate the patch. "
+                "Use shell_exec (cat, head, sed, etc.) to read the current file before generating the "
+                "diff so hunks match. On context mismatch, re-read and regenerate the patch. "
                 "Renames (different --- vs +++ paths) are not supported."
             ),
             "parameters": {
@@ -337,6 +290,5 @@ SCHEMAS = [
 ]
 
 FUNCTIONS = {
-    "read_workspace_file": read_workspace_file,
     "apply_unified_patch": apply_unified_patch,
 }
