@@ -4,13 +4,14 @@ Tool registry. To add a new tool:
   2. Import and register it here — that's it.
 """
 
-from tools import memory, self_modify, shell, web
+from tools import memory, self_modify, shell, web, workspace_patch
 
 TOOL_SCHEMAS: list[dict] = [
     *memory.SCHEMAS,
     *self_modify.SCHEMAS,
     *web.SCHEMAS,
     *shell.SCHEMAS,
+    *workspace_patch.SCHEMAS,
 ]
 
 TOOL_FUNCTIONS: dict[str, callable] = {
@@ -18,4 +19,5 @@ TOOL_FUNCTIONS: dict[str, callable] = {
     **self_modify.FUNCTIONS,
     **web.FUNCTIONS,
     **shell.FUNCTIONS,
+    **workspace_patch.FUNCTIONS,
 }

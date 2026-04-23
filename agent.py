@@ -103,6 +103,8 @@ _BLOCKING_SYNC_TOOLS = frozenset({
     "list_memories",
     "delete_memory",
     "shell_exec",
+    "read_workspace_file",
+    "apply_unified_patch",
 })
 
 
