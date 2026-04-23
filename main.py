@@ -131,6 +131,10 @@ class ChatRequest(BaseModel):
     attachments: list[Attachment] = []
 
 
+class StreamCancelRequest(BaseModel):
+    session_id: str
+
+
 def _patch_display_files(turn_messages: list[dict], display_files: list[dict]) -> None:
     """Attach display-only file metadata to the user message in turn_messages.
 
@@ -195,6 +199,8 @@ async def chat(req: ChatRequest):
 
 # ── Chat (streaming SSE) ───────────────────────────────────────────────────────
 
+_active_stream_tasks: dict[str, asyncio.Task] = {}
+
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest):
     history = _get_history(req.session_id)
@@ -205,6 +211,10 @@ async def chat_stream(req: ChatRequest):
         full_response  = ""
         turn_messages: list[dict] = []
         pending: list[tuple[dict, asyncio.Task]] = []
+        was_cancelled = False
+        this_task = asyncio.current_task()
+        if this_task is not None:
+            _active_stream_tasks[req.session_id] = this_task
 
         try:
             async for event in agent.run_stream(user_content, history):
@@ -219,16 +229,32 @@ async def chat_stream(req: ChatRequest):
 
                 yield f"data: {json.dumps(event)}\n\n"
 
+        except asyncio.CancelledError:
+            was_cancelled = True
+            yield f"data: {json.dumps({'type': 'cancelled'})}\n\n"
+            return
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
             return
+        finally:
+            if this_task is not None and _active_stream_tasks.get(req.session_id) is this_task:
+                _active_stream_tasks.pop(req.session_id, None)
 
-        if full_response and turn_messages:
+        if (not was_cancelled) and full_response and turn_messages:
             history.extend(turn_messages)
             row_id = db.append_turn(req.session_id, req.message, turn_messages)
             _spawn_finalizer(pending, turn_messages, row_id)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.post("/chat/stream/cancel")
+async def chat_stream_cancel(req: StreamCancelRequest):
+    task = _active_stream_tasks.get(req.session_id)
+    if task is None or task.done():
+        return {"cancelled": False}
+    task.cancel()
+    return {"cancelled": True}
 
 
 # ── History / sessions ────────────────────────────────────────────────────────
