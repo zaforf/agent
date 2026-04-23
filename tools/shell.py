@@ -149,7 +149,9 @@ def shell_exec(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
             if remaining <= 0:
                 log.warning("shell: command timed out after %ds", timeout)
                 _kill_shell()
-                return f"Error: command timed out after {timeout}s (shell restarted)"
+                partial = "".join(lines).rstrip("\n")
+                trailer = f"[timed out after {timeout}s — output may be incomplete; shell restarted]"
+                return f"{partial}\n{trailer}" if partial else trailer
 
             try:
                 raw = _out_queue.get(timeout=min(remaining, 1.0))
