@@ -626,6 +626,49 @@ def test_streaming_tool_call_name_not_duplicated_across_chunks(
     assert "Unknown tool" not in tool_msgs[0]["content"]
 
 
+def test_streaming_thinking_done_event_emitted_on_block_close(monkeypatch, tmp_system_prompt, providers):
+    """thinking_done must fire when a thinking block closes, before visible output.
+
+    Root cause of issue #46 bug 1: the model closes </thinking>, _drain()
+    transitions to scanning and returns "". Neither thinking_chars nor
+    text_chunk fires, so the counter freezes at its last value for the
+    entire model-generation gap before the first output token.
+
+    Fix: detect the buffering→scanning transition and emit thinking_done so
+    the UI can clear the stale count while keeping the dots animated.
+    """
+    chunks = [
+        text_chunk("<thinking>some thought"),  # enters buffering
+        text_chunk("</thinking>"),             # closes block — thinking_done must fire
+        text_chunk("visible answer"),          # visible text follows (gap simulated above)
+    ]
+    providers([[chunks]])
+    events = asyncio.run(_collect_stream("hi"))
+    types = [e["type"] for e in events]
+
+    assert "thinking_done" in types, f"thinking_done not emitted: {types}"
+
+    # thinking_done must precede the first text_chunk (the gap scenario)
+    td_idx  = types.index("thinking_done")
+    tc_idx  = types.index("text_chunk")
+    assert td_idx < tc_idx, (
+        f"thinking_done ({td_idx}) must precede first text_chunk ({tc_idx})"
+    )
+
+    # Visible text must pass through intact
+    text = "".join(e["text"] for e in events if e["type"] == "text_chunk")
+    assert text == "visible answer"
+    assert "some thought" not in text
+
+
+def test_streaming_thinking_done_not_emitted_without_thinking_block(monkeypatch, tmp_system_prompt, providers):
+    """thinking_done must NOT fire on a plain-text response — no false positives."""
+    providers([[[text_chunk("plain answer")]]])
+    events = asyncio.run(_collect_stream("hi"))
+    types = [e["type"] for e in events]
+    assert "thinking_done" not in types, f"spurious thinking_done: {types}"
+
+
 def test_streaming_tool_call_arguments_accumulate_across_chunks(
     monkeypatch, tmp_system_prompt, providers
 ):

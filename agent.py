@@ -571,7 +571,13 @@ async def run_stream(user_content: "str | list", history: list[dict]):
 
             if delta.content and not tool_mode:
                 raw_parts.append(delta.content)
-                forwarded = stripper.feed(delta.content)
+                prev_state = stripper._state
+                forwarded  = stripper.feed(delta.content)
+                # Thinking block just closed → tell the UI to drop the stale count.
+                # The model may still be generating before streaming its first output
+                # token, so we keep the dots visible rather than hiding entirely.
+                if prev_state == "buffering" and stripper._state == "scanning":
+                    yield {"type": "thinking_done"}
                 if forwarded:
                     visible_parts.append(forwarded)
                     yield {"type": "text_chunk", "text": forwarded}
