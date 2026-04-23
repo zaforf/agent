@@ -52,6 +52,7 @@ def test_core_tools_are_present():
         "remember", "recall", "list_memories", "delete_memory",
         "fetch_url", "web_search",
         "get_system_prompt", "edit_system_prompt",
+        "shell_exec",
     }
     names = {s["function"]["name"] for s in TOOL_SCHEMAS}
     missing = required - names
