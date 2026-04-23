@@ -1032,6 +1032,10 @@
     let providerUsed  = null;
 
     try {
+      // Yield so the browser can paint the user bubble before we open the
+      // network stream (otherwise some engines batch layout until after fetch
+      // work starts, which feels like the message appears with the first SSE).
+      await new Promise(requestAnimationFrame);
       const streamController = new AbortController();
       currentStreamController = streamController;
       const res = await fetch('/chat/stream', {
