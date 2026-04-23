@@ -574,8 +574,7 @@
       <input type="file" id="file-input" style="display:none" multiple
              accept="image/*,.pdf,.txt,.md,.py,.js,.ts,.jsx,.tsx,.json,.csv,.html,.css,.yaml,.yml,.toml,.sh,.c,.cpp,.h,.java,.rs,.go">
       <div id="input" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Message…"></div>
-      <button class="btn btn-send" id="send-btn" onclick="send()">Send</button>
-      <button class="btn btn-sm" id="stop-btn" onclick="cancelStream()" style="display:none">Stop</button>
+      <button class="btn btn-send" id="send-btn" onclick="sendOrStop()">Send</button>
       <button class="btn btn-icon" id="btn-mem" onclick="togglePanel('mem-panel','btn-mem')" title="Memories">◉</button>
     </div>
   </div>
@@ -988,6 +987,15 @@
   // ── Send (streaming) ──────────────────────────────────────
 
   let currentStreamController = null;
+  let isStreaming = false;
+
+  function sendOrStop() {
+    if (isStreaming) {
+      cancelStream();
+      return;
+    }
+    send();
+  }
 
   async function cancelStream() {
     if (!currentStreamController) return;
@@ -1005,10 +1013,10 @@
 
   async function send() {
     const { text, attachments } = getInputContent();
-    if ((!text && !attachments.length) || sendBtn.disabled) return;
+    if ((!text && !attachments.length) || isStreaming) return;
     clearInput();
-    sendBtn.disabled = true;
-    document.getElementById('stop-btn').style.display = 'inline-flex';
+    isStreaming = true;
+    sendBtn.textContent = 'Stop';
     _showThinking('');
 
     const hint = feed.querySelector('.empty-hint');
@@ -1150,8 +1158,8 @@
       }
     } finally {
       currentStreamController = null;
-      sendBtn.disabled = false;
-      document.getElementById('stop-btn').style.display = 'none';
+      isStreaming = false;
+      sendBtn.textContent = 'Send';
       _hideThinking();
       input.focus();
     }
