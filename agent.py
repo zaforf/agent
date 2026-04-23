@@ -42,8 +42,9 @@ _HISTORY_SUMMARIZE_THRESHOLD = 8000
 
 class _ThinkStripper:
     """Stream-safe removal of <thought/think/thinking> blocks.
-    State: scanning → buffering → passthrough.
-    Once past any thought block, all chunks are forwarded immediately.
+    State machine: scanning → buffering → scanning (loops).
+    A closing tag returns to scanning so multiple interleaved
+    thinking/output/thinking cycles are all handled correctly.
     """
     _OPEN_RE  = re.compile(r"<(thought|think|thinking)[\s>]", re.IGNORECASE)
     _CLOSE_RE = re.compile(r"</(thought|think|thinking)>",    re.IGNORECASE)
@@ -59,8 +60,6 @@ class _ThinkStripper:
         self._buf   = ""
 
     def feed(self, chunk: str) -> str:
-        if self._state == "passthrough":
-            return chunk
         self._buf += chunk
         if self._state == "scanning":
             m = self._OPEN_RE.search(self._buf)
@@ -81,18 +80,16 @@ class _ThinkStripper:
         if m:
             remaining   = self._buf[m.end():].lstrip("\n")
             self._buf   = ""
-            self._state = "passthrough"
+            self._state = "scanning"
             return remaining
         return ""
 
     def finalize(self) -> str:
         if self._state == "buffering":
             out = self._buf          # unclosed block — return it so response isn't empty
-        elif self._state == "scanning":
+        else:                        # scanning
             pm  = self._PARTIAL_OPEN_RE.search(self._buf)
             out = self._buf[:pm.start()] if pm else self._buf
-        else:
-            out = self._buf
         self._buf = ""
         return out
 

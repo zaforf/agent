@@ -98,9 +98,9 @@ Models may emit reasoning inside `<thought>`, `<think>`, `<thinking>`, `<redacte
 In **non-streaming mode**, `_visible_after_think()` strips all closed reasoning blocks via regex.
 
 In **streaming mode**, `_ThinkStripper` processes chunks in real-time:
-- State machine: `scanning → buffering → passthrough`
+- State machine: `scanning → buffering → scanning` (loops — closing tag returns to `scanning` so multiple interleaved thinking/output/thinking cycles are all handled correctly)
 - Buffers content inside thinking tags; passes through only visible content
-- Emits `thinking_chars` events to the UI while buffering (drives the animated thinking indicator)
+- Emits `thinking_chars` events to the UI while buffering (drives the animated thinking indicator). The UI throttles these updates to one DOM write per animation frame via `requestAnimationFrame` so rapid events cannot starve the renderer.
 - Note: `_ThinkStripper` handles `thought|think|thinking` tags only; `redacted_reasoning` and `redacted_thinking` are only handled post-stream by `_visible_after_think`. Streaming models that emit those longer forms may pass them through raw. (Known limitation.)
 
 Gemini's reasoning is exposed via the OpenAI-compat endpoint as inline `<thinking>` (or equivalent) text in the response, so the same stream stripper handles all providers uniformly.

@@ -959,6 +959,9 @@
   const thinkDots = document.getElementById('thinking-dots-txt');
   const _DOT_FRAMES = ['.', '..', '...', '..', '.'];
   let _dotIdx = 0, _dotTimer = null;
+  // Throttle thinking_chars DOM updates to one per animation frame so rapid
+  // SSE events don't starve the renderer (issue #46 bug 1).
+  let _thinkRafPending = false, _thinkPendingCount = 0;
 
   function _showThinking(label) {
     thinkLbl.textContent = label || '';
@@ -1042,7 +1045,14 @@
           catch { continue; }
 
           if (event.type === 'thinking_chars') {
-            _showThinking('received ' + event.count.toLocaleString() + ' chars');
+            _thinkPendingCount = event.count;
+            if (!_thinkRafPending) {
+              _thinkRafPending = true;
+              requestAnimationFrame(() => {
+                _showThinking('received ' + _thinkPendingCount.toLocaleString() + ' chars');
+                _thinkRafPending = false;
+              });
+            }
 
           } else if (event.type === 'tool_call') {
             console.debug('[agent] tool_call:', event.name, event.args);
@@ -1065,9 +1075,9 @@
             _showThinking('');
 
           } else if (event.type === 'text_chunk') {
+            _hideThinking();
             if (!agentMd) {
               agentMd = createAgentBubble(null);
-              _hideThinking();
             }
             textBuffer   += event.text;
             bubbleBuffer += event.text;
