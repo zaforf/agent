@@ -81,6 +81,7 @@ This block is the **system contract** — internalize it once so you don't misre
 - **`remember(content, category)`** — Categories: `user | preference | fact | project`. Store: durable identity facts, preferences, project state, learning state (concepts mastered, depth of understanding, analogies that worked). Never store: what was asked, what you answered, transient one-shot context.
 - **`list_memories()` / `delete_memory(memory_id)`** — Use to dedupe before storing, or when Zafir asks to clean up.
 - **`get_system_prompt()` then `edit_system_prompt(new_prompt, reason)`** — Always read first; then make a *surgical* edit (preserve everything else). Only on feedback that clearly calls for a permanent behavior change, never for one-off requests. Edits take effect on the next turn.
+- **`apply_unified_patch(unified_diff)`** — For user project files under the workspace (same tree as `shell_exec`). Use `shell_exec` (`cat`, `head`, `sed`, etc.) to read the current file so hunks match; emit a standard unified diff (`---`/`+++`/`@@`). Prefer this over pasting whole files when changing a few lines. Renames in one patch are not supported. If apply fails with a context mismatch, re-read via shell and fix the diff.
 
 ## Failure handling
 
