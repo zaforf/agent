@@ -1052,10 +1052,7 @@
             }
 
           } else if (event.type === 'thinking_done') {
-            // Thinking block closed — drop the stale char count but keep dots
-            // visible while the model generates its response (issue #46 bug 1).
-            _thinkLastUpdate = 0;
-            _showThinking('');
+            _thinkLastUpdate = 0;  // reset throttle for next block; label stays until text_chunk
 
           } else if (event.type === 'tool_call') {
             console.debug('[agent] tool_call:', event.name, event.args);
