@@ -9,7 +9,9 @@ Exercise:
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 from collections.abc import AsyncIterator
 
 import pytest
@@ -234,6 +236,69 @@ def test_chat_stream_handles_error_event(client, monkeypatch):
     assert "boom midway" in data
     # Nothing should have been persisted on error
     assert db.get_history("err-stream") == []
+
+
+def test_chat_stream_cancel_endpoint_cancels_active_stream(client, monkeypatch):
+    started = threading.Event()
+
+    async def fake_stream(user_message, history):
+        started.set()
+        yield {"type": "text_chunk", "text": "partial"}
+        while True:
+            await asyncio.sleep(1)
+
+    monkeypatch.setattr(agent, "run_stream", fake_stream)
+
+    stream_data = {}
+
+    def _consume_stream():
+        with client.stream(
+            "POST",
+            "/chat/stream",
+            json={"message": "x", "session_id": "cancel-sess"},
+        ) as r:
+            stream_data["status"] = r.status_code
+            stream_data["body"] = b"".join(r.iter_bytes()).decode()
+
+    t = threading.Thread(target=_consume_stream, daemon=True)
+    t.start()
+
+    assert started.wait(timeout=2), "stream never started"
+    rc = client.post("/chat/stream/cancel", json={"session_id": "cancel-sess"})
+    assert rc.status_code == 200
+    assert rc.json() == {"cancelled": True}
+
+    t.join(timeout=5)
+    assert not t.is_alive(), "stream thread should finish after cancellation"
+    assert stream_data.get("status") == 200
+    assert '"type": "cancelled"' in stream_data.get("body", "")
+    assert db.get_history("cancel-sess") == []
+
+
+def test_chat_stream_cancel_endpoint_noop_when_not_active(client):
+    r = client.post("/chat/stream/cancel", json={"session_id": "nope"})
+    assert r.status_code == 200
+    assert r.json() == {"cancelled": False}
+
+
+def test_chat_stream_cancel_event_does_not_persist_history(client, monkeypatch):
+    """If run_stream emits a cancelled event itself, no turn should persist."""
+    async def fake_stream(user_message, history):
+        yield {"type": "text_chunk", "text": "partial"}
+        yield {"type": "cancelled"}
+
+    monkeypatch.setattr(agent, "run_stream", fake_stream)
+
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        json={"message": "x", "session_id": "cancel-no-persist"},
+    ) as r:
+        assert r.status_code == 200
+        body = b"".join(r.iter_bytes()).decode()
+
+    assert '"type": "cancelled"' in body
+    assert db.get_history("cancel-no-persist") == []
 
 
 # ── DELETE /sessions/{id} ────────────────────────────────────────────────────

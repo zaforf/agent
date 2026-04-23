@@ -323,6 +323,7 @@ Table: `messages` — one row per completed turn.
 |---|---|---|
 | `POST` | `/chat` | Non-streaming chat. Returns `{response, session_id, provider}`. Used by tests; the UI streams exclusively. |
 | `POST` | `/chat/stream` | SSE streaming chat. Yields event objects (see §8.1). |
+| `POST` | `/chat/stream/cancel` | Cancel an active stream for `session_id`. Returns `{cancelled: bool}`. |
 | `POST` | `/upload` | PDF text extraction (see §13). Returns `{filename, type, content}`. |
 | `GET` | `/sessions` | List all sessions with preview text, message count, and last timestamp. |
 | `GET` | `/sessions/{id}/history` | Display-friendly history for the UI (`get_display_history()`). |
@@ -342,10 +343,17 @@ Table: `messages` — one row per completed turn.
 | `thinking_chars` | `count: int` | Number of thinking chars buffered so far (drives indicator) |
 | `tool_call` | `name: str`, `args: dict` | A tool is about to be called |
 | `tool_result` | `name: str`, `result: str` | Tool execution completed |
+| `cancelled` | *(none)* | Stream was cancelled server-side (via `/chat/stream/cancel`) |
 | `done` | `provider: str`, `turn_messages: list` | Turn complete; `turn_messages` is the full history slice |
 | `error` | `detail: str` | Unrecoverable error |
 
 The frontend uses `turn_messages` from the `done` event to update the in-memory history cache (server-side). The client never manages history state directly.
+
+Cancellation semantics:
+- `main.py` tracks one active streaming task per `session_id`.
+- `POST /chat/stream/cancel` calls `task.cancel()` for that session and returns `{cancelled: true}` when a live stream existed.
+- On cancellation, the SSE stream emits `{"type":"cancelled"}` and exits.
+- Cancelled streams are **not persisted** to SQLite/history (same as error mid-stream).
 
 ---
 

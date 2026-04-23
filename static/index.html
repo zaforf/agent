@@ -574,7 +574,7 @@
       <input type="file" id="file-input" style="display:none" multiple
              accept="image/*,.pdf,.txt,.md,.py,.js,.ts,.jsx,.tsx,.json,.csv,.html,.css,.yaml,.yml,.toml,.sh,.c,.cpp,.h,.java,.rs,.go">
       <div id="input" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Message…"></div>
-      <button class="btn btn-send" id="send-btn" onclick="send()">Send</button>
+      <button class="btn btn-send" id="send-btn" onclick="sendOrStop()">Send</button>
       <button class="btn btn-icon" id="btn-mem" onclick="togglePanel('mem-panel','btn-mem')" title="Memories">◉</button>
     </div>
   </div>
@@ -986,11 +986,37 @@
 
   // ── Send (streaming) ──────────────────────────────────────
 
+  let currentStreamController = null;
+  let isStreaming = false;
+
+  function sendOrStop() {
+    if (isStreaming) {
+      cancelStream();
+      return;
+    }
+    send();
+  }
+
+  async function cancelStream() {
+    if (!currentStreamController) return;
+    try {
+      await fetch('/chat/stream/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sid }),
+      });
+    } catch {
+      // Best effort cancel; abort client stream regardless.
+    }
+    currentStreamController.abort();
+  }
+
   async function send() {
     const { text, attachments } = getInputContent();
-    if ((!text && !attachments.length) || sendBtn.disabled) return;
+    if ((!text && !attachments.length) || isStreaming) return;
     clearInput();
-    sendBtn.disabled = true;
+    isStreaming = true;
+    sendBtn.textContent = 'Stop';
     _showThinking('');
 
     const hint = feed.querySelector('.empty-hint');
@@ -1006,9 +1032,12 @@
     let providerUsed  = null;
 
     try {
+      const streamController = new AbortController();
+      currentStreamController = streamController;
       const res = await fetch('/chat/stream', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: streamController.signal,
         body:    JSON.stringify({
           message:     text,
           session_id:  sid,
@@ -1106,6 +1135,14 @@
             if (document.getElementById('sessions-panel').classList.contains('open'))
               loadSessions();
 
+          } else if (event.type === 'cancelled') {
+            if (!agentMd) addAgentMsg('_Generation stopped._');
+            else {
+              const note = document.createElement('div');
+              note.className = 'fallback-tag';
+              note.textContent = 'generation stopped';
+              agentMd.parentElement.insertBefore(note, agentMd);
+            }
           } else if (event.type === 'error') {
             console.error('[agent] error:', event.detail);
             addAgentMsg('**Error:** ' + esc(event.detail || 'Unknown error'));
@@ -1114,9 +1151,15 @@
       }
 
     } catch (e) {
-      addAgentMsg('**Error:** ' + String(e));
+      if (e && e.name === 'AbortError') {
+        addAgentMsg('_Generation stopped._');
+      } else {
+        addAgentMsg('**Error:** ' + String(e));
+      }
     } finally {
-      sendBtn.disabled = false;
+      currentStreamController = null;
+      isStreaming = false;
+      sendBtn.textContent = 'Send';
       _hideThinking();
       input.focus();
     }
