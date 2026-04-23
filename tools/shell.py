@@ -64,12 +64,14 @@ def _start_shell() -> None:
     log.info("shell: started pid=%d workspace=%s", _proc.pid, WORKSPACE)
 
     def _reader() -> None:
-        # Capture the queue reference at thread creation time so that a later
-        # _start_shell() creating a new queue doesn't cause cross-contamination.
-        q = _out_queue
+        # Capture both references at thread creation time — a later _start_shell()
+        # sets _proc = None then creates a new process; accessing the global on
+        # each iteration races with that None assignment (AttributeError).
+        q    = _out_queue
+        proc = _proc
         try:
             while True:
-                chunk = _proc.stdout.readline()
+                chunk = proc.stdout.readline()
                 if not chunk:
                     q.put(None)  # EOF — shell exited
                     break
