@@ -179,6 +179,14 @@ def test_timeout_kills_command(shell_env):
     assert "2s" in result
 
 
+def test_timeout_returns_partial_output(shell_env):
+    sh = shell_env
+    # Command prints something before blocking — partial output must be preserved.
+    result = sh.shell_exec("echo partial_line; sleep 999", timeout=2)
+    assert "partial_line" in result
+    assert "timed out" in result
+
+
 def test_shell_usable_after_timeout(shell_env):
     sh = shell_env
     sh.shell_exec("sleep 999", timeout=2)
