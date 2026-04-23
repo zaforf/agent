@@ -105,6 +105,7 @@ _BLOCKING_SYNC_TOOLS = frozenset({
     "recall",
     "list_memories",
     "delete_memory",
+    "shell_exec",
 })
 
 

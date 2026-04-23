@@ -187,6 +187,47 @@ Returns a numbered markdown list of `title — url` plus a short snippet (≤ 24
 
 The system prompt instructs the model to always call `get_system_prompt()` before `edit_system_prompt()`, to make surgical edits only (not rewrites), and to only modify when user feedback clearly requires a permanent behavior change. The file is read fresh on every turn (via `_build_system_prompt()`) so edits take effect immediately on the next call.
 
+### 5.4 Shell tool (`tools/shell.py`)
+
+| Tool | Description |
+|---|---|
+| `shell_exec(command, timeout)` | Execute a shell command in a persistent bash session; returns combined stdout+stderr |
+
+**Architecture — single long-lived bash process:**
+
+A single `subprocess.Popen(bash)` is started on first use and reused for all subsequent calls. All calls are serialized via `threading.Lock`. State — environment variables, working directory, installed packages — carries over between calls. stderr is merged into stdout so the model sees error messages inline.
+
+**Workspace:**
+
+The shell starts in `WORKSPACE` (resolved from the `AGENT_WORKSPACE` env var; default `<project-root>/workspace`). The directory is created automatically on first use. In production, bind-mount it to a host directory so files survive container rebuilds; the shell process itself may be lost on redeploy but files in the workspace are unaffected.
+
+**Output and exit codes:**
+
+- Non-zero exit codes are appended as `(exit code N)` after the output.
+- Commands with no output return the string `"(no output)"`.
+- Output exceeding 1 MB triggers a hard cap: the shell is restarted and a truncation notice is appended. Normal outputs that exceed 8 000 chars are summarized by the existing agent-loop history summarizer (§6.5) before storage, just like all other tools.
+
+**Timeout:**
+
+Default timeout is 30 seconds (overridable via `AGENT_SHELL_TIMEOUT` env var or per-call `timeout` parameter). On timeout the shell is killed and restarted for the next call. The system prompt instructs the model to increase `timeout` for long-running tasks (package installs, builds) and to use non-interactive flags for commands that would otherwise wait for user input.
+
+**Shell restart:**
+
+If the shell process dies unexpectedly (e.g., OOM kill), `_ensure_shell()` detects it on the next call (via `Popen.poll()`) and starts a fresh shell. The new shell always starts in `WORKSPACE`.
+
+**Sentinel mechanism:**
+
+Every command is appended with `__rc=$?; echo "<sentinel>:$__rc"` on a separate line. A background reader thread feeds stdout lines into a `queue.Queue`; `shell_exec` reads until it sees the sentinel and parses the exit code from it. A new queue is created each time the shell is restarted so reader threads from prior processes cannot contaminate the new session.
+
+**Network:** Allowed (curl, pip, git, etc.). No allowlist — single trusted operator deployment.
+
+**Env vars:**
+
+| Var | Default | Purpose |
+|---|---|---|
+| `AGENT_WORKSPACE` | `<project-root>/workspace` | Workspace directory path |
+| `AGENT_SHELL_TIMEOUT` | `30` | Default per-command timeout (seconds) |
+
 ---
 
 ## 6. History & Context Management
