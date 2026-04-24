@@ -182,6 +182,33 @@ def test_chat_non_blocking_summary_patches_db_row(tmp_db, monkeypatch):
     asyncio.run(_scenario())
 
 
+
+
+def test_chat_nuke_resets_history_to_assistant_summary(client, monkeypatch):
+    # Seed prior history so we can verify full reset.
+    db.append_turn("n1", "old-user", [
+        {"role": "user", "content": "old-user"},
+        {"role": "assistant", "content": "old-answer"},
+    ])
+
+    async def fake_run(user_message, history):
+        return "summary kept", "fake-provider", [
+            {"role": "assistant", "content": "summary kept", "_nuke": True},
+        ], []
+
+    monkeypatch.setattr(agent, "run", fake_run)
+
+    r = client.post("/chat", json={"message": "please nuke", "session_id": "n1"})
+    assert r.status_code == 200
+    expected = "Chat reset via nuke. Summary:\nsummary kept"
+    assert r.json()["response"] == expected
+
+    hist = db.get_history("n1")
+    assert hist == [{"role": "assistant", "content": expected}]
+
+    shown = client.get("/sessions/n1/history").json()["messages"]
+    assert shown == [{"role": "assistant", "content": expected}]
+
 def test_chat_propagates_agent_error(client, monkeypatch):
     async def boom(*a, **kw):
         raise RuntimeError("provider exhausted")

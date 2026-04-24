@@ -149,6 +149,32 @@ def _patch_display_files(turn_messages: list[dict], display_files: list[dict]) -
             return
 
 
+
+
+def _extract_nuke_summary(turn_messages: list[dict]) -> str | None:
+    if len(turn_messages) != 1:
+        return None
+    msg = turn_messages[0]
+    if msg.get("role") != "assistant" or not msg.get("_nuke"):
+        return None
+    return (msg.get("content") or "").strip() or None
+
+
+
+
+def _format_nuke_summary(summary: str) -> str:
+    summary = summary.strip()
+    return f"Chat reset via nuke. Summary:\n{summary}" if summary else "Chat reset via nuke."
+
+def _apply_nuke(session_id: str, history: list[dict], summary: str) -> None:
+    """Replace entire session history with one assistant summary message."""
+    formatted = _format_nuke_summary(summary)
+    clean_turn = [{"role": "assistant", "content": formatted}]
+    db.clear(session_id)
+    history.clear()
+    history.extend(clean_turn)
+    db.append_turn(session_id, formatted, clean_turn)
+
 def _build_user_content(message: str, attachments: list[Attachment]) -> "str | list":
     """Return a plain string when there are no attachments (backward-compat).
 
@@ -188,6 +214,11 @@ async def chat(req: ChatRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    nuke_summary = _extract_nuke_summary(turn_messages)
+    if nuke_summary is not None:
+        _apply_nuke(req.session_id, history, nuke_summary)
+        return ChatResponse(response=_format_nuke_summary(nuke_summary), session_id=req.session_id, provider=provider)
+
     _patch_display_files(turn_messages, display_files)
     history.extend(turn_messages)
     row_id = db.append_turn(req.session_id, req.message, turn_messages)
@@ -211,6 +242,7 @@ async def chat_stream(req: ChatRequest):
         turn_messages: list[dict] = []
         pending: list[tuple[dict, asyncio.Task]] = []
         was_cancelled = False
+        nuke_summary: str | None = None
         this_task = asyncio.current_task()
         if this_task is not None:
             _active_stream_tasks[req.session_id] = this_task
@@ -224,7 +256,9 @@ async def chat_stream(req: ChatRequest):
                     # Pop tasks before serializing — they are not JSON-safe and
                     # are handed to the background finalizer below.
                     pending = event.pop("pending_summaries", [])
-                    _patch_display_files(turn_messages, display_files)
+                    nuke_summary = _extract_nuke_summary(turn_messages)
+                    if nuke_summary is None:
+                        _patch_display_files(turn_messages, display_files)
 
                 yield f"data: {json.dumps(event)}\n\n"
 
@@ -239,7 +273,9 @@ async def chat_stream(req: ChatRequest):
             if this_task is not None and _active_stream_tasks.get(req.session_id) is this_task:
                 _active_stream_tasks.pop(req.session_id, None)
 
-        if (not was_cancelled) and full_response and turn_messages:
+        if nuke_summary is not None:
+            _apply_nuke(req.session_id, history, nuke_summary)
+        elif (not was_cancelled) and full_response and turn_messages:
             history.extend(turn_messages)
             row_id = db.append_turn(req.session_id, req.message, turn_messages)
             _spawn_finalizer(pending, turn_messages, row_id)

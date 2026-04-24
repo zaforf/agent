@@ -8,6 +8,7 @@ import config
 from config import PROVIDERS
 from summarizer import summarize_gemma
 from tools import TOOL_SCHEMAS, TOOL_FUNCTIONS
+from tools.nuke import _NUKE_PREFIX
 
 log = logging.getLogger(__name__)
 
@@ -167,6 +168,18 @@ def _sanitize_history(history: list[dict]) -> list[dict]:
 
 def _visible_after_think(text: str) -> str:
     return _THINK_RE.sub("", text or "").strip()
+
+
+def _extract_nuke_summary(tool_result: str) -> str | None:
+    if not isinstance(tool_result, str) or not tool_result.startswith(_NUKE_PREFIX):
+        return None
+    payload = tool_result[len(_NUKE_PREFIX):]
+    try:
+        obj = json.loads(payload)
+    except Exception:
+        return None
+    summary = str(obj.get("summary", "")).strip()
+    return summary or None
 
 
 def _user_content_as_text(user_content: "str | list") -> str:
@@ -484,6 +497,11 @@ async def run(
             result = await _run_tool_async(name, args)
             log.debug("run: tool_result %s → %.120s", name, result)
 
+            nuke_summary = _extract_nuke_summary(result)
+            if nuke_summary is not None:
+                await _apply_finished_summaries(pending_summaries)
+                return nuke_summary, provider_used, [{"role": "assistant", "content": nuke_summary, "_nuke": True}], pending_summaries
+
             if i < n_tc:
                 tc_id = msg.tool_calls[i].id
                 msg_dict = {"role": "tool", "name": name, "tool_call_id": tc_id, "content": result}
@@ -628,6 +646,18 @@ async def run_stream(user_content: "str | list", history: list[dict]):
                 result = await _run_tool_async(name, args)
                 log.debug("stream: tool_result %s → %.120s", name, result)
                 yield {"type": "tool_result", "name": name, "result": result}
+
+                nuke_summary = _extract_nuke_summary(result)
+                if nuke_summary is not None:
+                    await _apply_finished_summaries(pending_summaries)
+                    yield {"type": "text_chunk", "text": nuke_summary}
+                    yield {
+                        "type": "done",
+                        "provider": provider_used,
+                        "turn_messages": [{"role": "assistant", "content": nuke_summary, "_nuke": True}],
+                        "pending_summaries": pending_summaries,
+                    }
+                    return
 
                 msg_dict = {
                     "role":         "tool",
