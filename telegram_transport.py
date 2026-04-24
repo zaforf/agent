@@ -57,6 +57,12 @@ def _session_branch_slug(session_id: str) -> str | None:
     return session_id.rsplit(":s-", 1)[-1]
 
 
+def _user_facing_label(session_id: str) -> str:
+    """Short name for Telegram copy only (slug or 'default'). Full id stays in SQLite."""
+    sl = _session_branch_slug(session_id)
+    return sl if sl is not None else "default"
+
+
 def _sender_user_id(message: dict[str, Any]) -> int | None:
     from_user = message.get("from")
     if not from_user or from_user.get("id") is None:
@@ -203,14 +209,8 @@ async def _handle_command(
     if cmd == "new":
         sid = _new_session_id(chat_id, thread_key)
         _set_active(chat_id, thread_key, sid)
-        short = _session_branch_slug(sid) or ""
-        body = (
-            "New session.\n"
-            f"Active: <b>{_html_escape(sid)}</b>\n"
-        )
-        if short:
-            body += f"Short: <b>{_html_escape(short)}</b> — /switch {short}\n"
-        body += "Send a message to start."
+        label = _html_escape(_user_facing_label(sid))
+        body = f"New session.\nActive: <b>{label}</b>\nSend a message to start."
         await _send_text(client, api, chat_id, body, thread_key=thread_key)
         return
 
@@ -220,14 +220,14 @@ async def _handle_command(
         if not rows:
             await _send_text(client, api, chat_id, "No saved sessions for this chat yet.", thread_key=thread_key)
             return
-        lines: list[str] = [f"Active: <b>{_html_escape(cur)}</b>", ""]
+        cur_label = _html_escape(_user_facing_label(cur))
+        lines: list[str] = [f"Active: <b>{cur_label}</b>", ""]
         for i, s in enumerate(rows[:20], start=1):
             mark = " ← active" if s["session_id"] == cur else ""
             full = s["session_id"]
-            sl = _session_branch_slug(full)
-            short_h = f" <b>{_html_escape(sl)}</b> — /switch {_html_escape(sl)}" if sl else ""
+            label = _html_escape(_user_facing_label(full))
             pv = _html_escape((s.get("preview") or "").replace("\n", " "))
-            lines.append(f"{i}. <b>{_html_escape(full)}</b>{short_h} — {pv}{mark}")
+            lines.append(f"{i}. <b>{label}</b> — {pv}{mark}")
         if len(rows) > 20:
             lines.append(f"\n… and {len(rows) - 20} more")
         await _send_text(client, api, chat_id, "\n".join(lines), thread_key=thread_key)
@@ -239,7 +239,7 @@ async def _handle_command(
                 client,
                 api,
                 chat_id,
-                "Usage: /switch &lt;id&gt; or short slug from /sessions (e.g. /switch abcde).",
+                "Usage: /switch &lt;name&gt; (see /sessions).",
                 thread_key=thread_key,
             )
             return
@@ -253,13 +253,14 @@ async def _handle_command(
                 client,
                 api,
                 chat_id,
-                f"Unknown or ambiguous: <b>{h}</b>\nUse /sessions, then /switch the short slug (letters) or the full id.",
+                f"Unknown or ambiguous: <b>{h}</b>\nCheck /sessions for the name to use.",
                 thread_key=thread_key,
             )
             return
         _set_active(chat_id, thread_key, resolved)
+        sw_label = _html_escape(_user_facing_label(resolved))
         await _send_text(
-            client, api, chat_id, f"Switched to <b>{_html_escape(resolved)}</b>.", thread_key=thread_key
+            client, api, chat_id, f"Switched to <b>{sw_label}</b>.", thread_key=thread_key
         )
         return
 
@@ -287,14 +288,15 @@ async def _handle_command(
 
     if cmd in ("start", "help"):
         a = _active_sid(chat_id, thread_key)
+        a_label = _html_escape(_user_facing_label(a))
         help_body = (
             "Commands:\n"
-            "/new — new session (short letters-only id for /switch)\n"
-            "/sessions — list for this chat\n"
-            "/switch &lt;id or short slug&gt;\n"
+            "/new — new session\n"
+            "/sessions — list sessions\n"
+            "/switch &lt;name&gt;\n"
             "/nuke — summarize &amp; reset current session\n"
             "/help — this text\n\n"
-            f"Active: <b>{_html_escape(a)}</b>"
+            f"Active: <b>{a_label}</b>"
         )
         await _send_text(client, api, chat_id, help_body, thread_key=thread_key)
         return

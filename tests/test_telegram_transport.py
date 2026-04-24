@@ -64,6 +64,11 @@ def test_default_and_new_session_ids():
     assert sl.islower() and sl.isalpha() and sl.isascii()
 
 
+def test_user_facing_label():
+    assert tt._user_facing_label("tg:1") == "default"
+    assert tt._user_facing_label("tg:1:s-abcde") == "abcde"
+
+
 def test_resolve_session_switch_by_short_slug():
     valid = {"tg:1", "tg:1:s-abcde", "tg:1:s-xyzab"}
     assert tt._resolve_session_switch("tg:1:s-abcde", valid) == "tg:1:s-abcde"
@@ -130,7 +135,7 @@ def test_command_sessions_lists_tg_sessions_only(tmp_db, monkeypatch):
     asyncio.run(_run())
     sent = [c[1]["text"] for c in client.post_calls if c[1] and "sendMessage" in c[0]]
     blob = "\n".join(sent)
-    assert "tg:9" in blob
+    assert "default" in blob
     assert "web-other" not in blob
 
 

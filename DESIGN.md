@@ -346,7 +346,7 @@ When `TELEGRAM_BOT_TOKEN` is set, `main.py` starts **long-polling** `getUpdates`
 
 **Per-chat routing**: An in-memory map `(chat_id, thread_key) → active session_id` chooses which `session_id` receives plain text messages. It is **process-local** (lost on restart); sessions on disk remain, and `/sessions` + `/switch` recover them.
 
-**Commands** (text starting with `/`): `/new`, `/sessions`, `/switch` (full id or short **slug** if unambiguous), `/nuke` (instructs the model to call `nuke_chat`), `/help`, `/start`.
+**Commands** (text starting with `/`): `/new`, `/sessions`, `/switch` (by **name**: short slug or `default`, or full internal `session_id` if needed), `/nuke` (instructs the model to call `nuke_chat`), `/help`, `/start`. Bot copy shows only the **slug** (or the label **default** for the base session), not the full `tg:…` id.
 
 **Transport**: Bot messages use `sendMessage` with **`parse_mode: HTML`**. Incoming user text is still plain. Long replies are split at Telegram’s 4096-character boundary. No attachment forwarding from Telegram in this version.
 
