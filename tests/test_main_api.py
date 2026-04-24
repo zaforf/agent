@@ -321,14 +321,3 @@ def test_delete_session_clears_cache_and_db(client, monkeypatch):
     assert db.get_history("dl") == []
 
 
-# ── /system-prompt ───────────────────────────────────────────────────────────
-
-def test_get_and_put_system_prompt(client, tmp_system_prompt):
-    r = client.get("/system-prompt")
-    assert r.status_code == 200
-    assert "Test system prompt" in r.json()["content"]
-
-    r2 = client.put("/system-prompt", json={"content": "# replaced\n"})
-    assert r2.status_code == 200
-
-    assert tmp_system_prompt.read_text() == "# replaced\n"

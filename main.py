@@ -12,7 +12,6 @@ from pydantic import BaseModel
 import agent
 import db
 from tools.memory import get_all as get_all_memories, delete_memory
-from tools.self_modify import get_system_prompt, edit_system_prompt
 
 logging.basicConfig(
     level=getattr(logging, os.environ.get("LOGLEVEL", "INFO").upper(), logging.INFO),
@@ -290,23 +289,6 @@ def delete_memory_api(memory_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return {"deleted": memory_id}
-
-
-# ── System prompt ─────────────────────────────────────────────────────────────
-
-class SystemPromptBody(BaseModel):
-    content: str
-
-
-@app.get("/system-prompt")
-def get_sp():
-    return {"content": get_system_prompt()}
-
-
-@app.put("/system-prompt")
-def set_sp(body: SystemPromptBody):
-    edit_system_prompt(body.content, "Updated via UI")
-    return {"ok": True}
 
 
 # ── Health ────────────────────────────────────────────────────────────────────

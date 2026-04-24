@@ -107,14 +107,12 @@ def test_extract_calls_empty_when_no_tool_calls():
 
 # ── _build_system_prompt ─────────────────────────────────────────────────────
 
-def test_build_system_prompt_includes_tool_names(tmp_system_prompt):
+def test_build_system_prompt_includes_seeded_prompt_and_compact_tool_policy(tmp_system_prompt):
     prompt = agent._build_system_prompt()
-    assert "Test system prompt" in prompt  # seeded by fixture
-    # Every registered tool appears by name in the tool doc section
-    from tools import TOOL_SCHEMAS
-    for schema in TOOL_SCHEMAS:
-        name = schema["function"]["name"]
-        assert name in prompt, f"tool {name!r} missing from prompt"
+    assert "Test system prompt" in prompt
+    assert "at most one tool call per assistant message" in prompt
+    assert "workspace_search_replace" in prompt
+    assert "Do not repeat identical failing calls" in prompt
 
 
 def test_build_system_prompt_forbids_xml_tool_format(tmp_system_prompt):
