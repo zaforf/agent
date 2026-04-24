@@ -328,6 +328,35 @@ def test_chat_stream_cancel_event_does_not_persist_history(client, monkeypatch):
     assert db.get_history("cancel-no-persist") == []
 
 
+def test_stream_turn_background_persists_without_sse_consumer(tmp_db, monkeypatch):
+    """Server-owned producer persists turn even without an active SSE consumer."""
+    monkeypatch.setattr(main, "_cache", {})
+
+    async def fake_stream(user_message, history):
+        yield {"type": "text_chunk", "text": "partial"}
+        yield {
+            "type": "done",
+            "provider": "fake",
+            "turn_messages": [
+                {"role": "user", "content": user_message},
+                {"role": "assistant", "content": "final-result"},
+            ],
+        }
+
+    monkeypatch.setattr(agent, "run_stream", fake_stream)
+
+    async def _scenario():
+        state = main._StreamTurnState("dc1", "persist me", [])
+        history = main._get_history("dc1")
+        await main._run_stream_turn(state, "persist me", history)
+
+    asyncio.run(_scenario())
+
+    hist = db.get_history("dc1")
+    assert [m["role"] for m in hist] == ["user", "assistant"]
+    assert hist[-1]["content"] == "final-result"
+
+
 # ── DELETE /sessions/{id} ────────────────────────────────────────────────────
 
 def test_delete_session_clears_cache_and_db(client, monkeypatch):
