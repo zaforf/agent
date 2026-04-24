@@ -490,6 +490,8 @@
       color: var(--user-text);
     }
     .btn-send:hover:not(:disabled) { background: #2d2d2c; }
+    .btn-send.stop-state { background: var(--call-accent); color: #fff; }
+    .btn-send.stop-state:hover:not(:disabled) { background: #446b57; }
     .btn-send:disabled { opacity: 0.35; cursor: default; }
     .btn-icon {
       background: none;
@@ -1017,6 +1019,7 @@
     clearInput();
     isStreaming = true;
     sendBtn.textContent = 'Stop';
+    sendBtn.classList.add('stop-state');
     _showThinking('');
 
     const hint = feed.querySelector('.empty-hint');
@@ -1122,6 +1125,13 @@
             providerUsed = event.provider;
             console.debug('[agent] done, provider:', providerUsed,
               'response chars:', textBuffer.length);
+            if (event.turn_messages && event.turn_messages.length === 1 && event.turn_messages[0].role === 'assistant') {
+              // nuke_chat resets history server-side; refresh UI from canonical display history
+              await loadHistory();
+              if (document.getElementById('sessions-panel').classList.contains('open')) loadSessions();
+              _hideThinking();
+              continue;
+            }
             if (agentMd) {
               agentMd.innerHTML = renderMarkdown(bubbleBuffer);
               setTimeout(() => renderMath(agentMd), 0);
@@ -1164,6 +1174,7 @@
       currentStreamController = null;
       isStreaming = false;
       sendBtn.textContent = 'Send';
+      sendBtn.classList.remove('stop-state');
       _hideThinking();
       input.focus();
     }

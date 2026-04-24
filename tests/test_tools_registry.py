@@ -50,6 +50,7 @@ def test_core_tools_are_present():
     """These are the tools DESIGN §5 names by hand."""
     required = {
         "remember", "recall", "list_memories", "delete_memory",
+        "nuke_chat",
         "fetch_url", "web_search",
         "shell_exec",
         "workspace_search_replace",
