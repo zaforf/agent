@@ -41,10 +41,9 @@ def _html_escape(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _agent_reply_html(s: str) -> str:
-    """Model reply: entity-escape and turn newlines into <br> for HTML parse mode."""
-    t = _html_escape(s or "")
-    return t.replace("\n", "<br>")
+def _agent_reply_for_tg(s: str) -> str:
+    """Model reply: entity-escape. Newlines are kept as \\n (Telegram HTML has no <br>)."""
+    return _html_escape(s or "")
 
 
 def _random_letter_slug(length: int = _SESSION_SLUG_LEN) -> str:
@@ -283,18 +282,19 @@ async def _handle_command(
                 client, api, chat_id, f"Error: {_html_escape(str(e))}", thread_key=thread_key
             )
             return
-        await _send_text(client, api, chat_id, _agent_reply_html(reply), thread_key=thread_key)
+        await _send_text(client, api, chat_id, _agent_reply_for_tg(reply), thread_key=thread_key)
         return
 
     if cmd in ("start", "help"):
         a = _active_sid(chat_id, thread_key)
+        # Telegram parse_mode=HTML: no <br>; newlines in the string are line breaks in chat.
         help_body = (
-            "Commands (HTML formatting in bot messages):<br>"
-            "/new — new session (short <b>letters-only</b> id for /switch)<br>"
-            "/sessions — list for this chat<br>"
-            "/switch &lt;id or short slug&gt;<br>"
-            "/nuke — summarize &amp; reset current session<br>"
-            "/help — this text<br><br>"
+            "Commands (bot uses HTML for bold, etc.):\n"
+            "/new — new session (short <b>letters-only</b> id for /switch)\n"
+            "/sessions — list for this chat\n"
+            "/switch &lt;id or short slug&gt;\n"
+            "/nuke — summarize &amp; reset current session\n"
+            "/help — this text\n\n"
             f"Active: <b>{_html_escape(a)}</b>"
         )
         await _send_text(client, api, chat_id, help_body, thread_key=thread_key)
@@ -337,7 +337,7 @@ async def _handle_message(client: httpx.AsyncClient, api: str, message: dict[str
             client, api, chat_id, f"Error: {_html_escape(str(e))}", thread_key=thread_key
         )
         return
-    await _send_text(client, api, chat_id, _agent_reply_html(reply), thread_key=thread_key)
+    await _send_text(client, api, chat_id, _agent_reply_for_tg(reply), thread_key=thread_key)
 
 
 async def run_telegram_polling() -> None:

@@ -350,7 +350,7 @@ When `TELEGRAM_BOT_TOKEN` is set, `main.py` starts **long-polling** `getUpdates`
 
 **Transport**: Bot messages use `sendMessage` with **`parse_mode: HTML`**. Incoming user text is still plain. Long replies are split at Telegram’s 4096-character boundary. No attachment forwarding from Telegram in this version.
 
-**Formatting (model)**: `main.complete_chat_turn(..., output_channel="telegram")` appends a “plain, no LaTeX/fences” system block; server output is entity-escaped and newlines become `<br>`. The **web** UI uses the default streaming prompt; history is unchanged.
+**Formatting (model)**: `main.complete_chat_turn(..., output_channel="telegram")` appends a “plain, no LaTeX/fences” system block; server output is entity-escaped; newlines stay as newlines (Telegram `parse_mode=HTML` does not support `<br>`). The **web** UI uses the default streaming prompt; history is unchanged.
 
 ### 8.2 SSE event types (`/chat/stream`)
 
