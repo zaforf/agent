@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import agent
+import config
 import db
 from tools.memory import get_all as get_all_memories, delete_memory
 
@@ -29,7 +30,16 @@ log = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init()
+    tg_task: asyncio.Task | None = None
+    if config.TELEGRAM_BOT_TOKEN:
+        from telegram_transport import run_telegram_polling
+
+        tg_task = asyncio.create_task(run_telegram_polling(), name="telegram-poll")
     yield
+    if tg_task is not None:
+        tg_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await tg_task
 
 
 app = FastAPI(title="Agent", lifespan=lifespan)
@@ -265,29 +275,51 @@ class ChatResponse(BaseModel):
     provider:   str = ""
 
 
+async def complete_chat_turn(
+    message: str,
+    session_id: str,
+    *,
+    attachments: list[Attachment] | None = None,
+    output_channel: str = "default",
+) -> tuple[str, str]:
+    """Run one non-streaming agent turn: same persistence rules as ``POST /chat``.
+
+    Returns ``(assistant_visible_text, provider_name)``. Mutates ``_cache`` / SQLite.
+
+    Use ``output_channel="telegram"`` for the Telegram bot (plain-text-friendly system prompt);
+    the web UI uses the default.
+    """
+    attachments = attachments or []
+    history = _get_history(session_id)
+    user_content = _build_user_content(message, attachments)
+    display_files = [{"type": a.type, "filename": a.filename} for a in attachments]
+    response, provider, turn_messages, pending = await agent.run(
+        user_content, history, output_channel=output_channel
+    )
+
+    nuke_summary = _extract_nuke_summary(turn_messages)
+    if nuke_summary is not None:
+        _apply_nuke(session_id, history, nuke_summary)
+        return _format_nuke_summary(nuke_summary), provider
+
+    _patch_display_files(turn_messages, display_files)
+    history.extend(turn_messages)
+    row_id = db.append_turn(session_id, message, turn_messages)
+    _spawn_finalizer(pending, turn_messages, row_id)
+
+    return response, provider
+
+
 # ── Chat (non-streaming, kept for compat / testing) ───────────────────────────
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
-    history = _get_history(req.session_id)
-    user_content = _build_user_content(req.message, req.attachments)
-    display_files = [{"type": a.type, "filename": a.filename} for a in req.attachments]
     try:
-        response, provider, turn_messages, pending = await agent.run(
-            user_content, history
+        response, provider = await complete_chat_turn(
+            req.message, req.session_id, attachments=req.attachments
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-    nuke_summary = _extract_nuke_summary(turn_messages)
-    if nuke_summary is not None:
-        _apply_nuke(req.session_id, history, nuke_summary)
-        return ChatResponse(response=_format_nuke_summary(nuke_summary), session_id=req.session_id, provider=provider)
-
-    _patch_display_files(turn_messages, display_files)
-    history.extend(turn_messages)
-    row_id = db.append_turn(req.session_id, req.message, turn_messages)
-    _spawn_finalizer(pending, turn_messages, row_id)
 
     return ChatResponse(response=response, session_id=req.session_id, provider=provider)
 

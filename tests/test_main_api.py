@@ -53,7 +53,7 @@ def test_history_empty_for_unknown_session(client):
 # ── /chat (non-streaming) ────────────────────────────────────────────────────
 
 def test_chat_persists_turn_messages(client, monkeypatch):
-    async def fake_run(user_message, history):
+    async def fake_run(user_message, history, **kwargs):
         turn = [
             {"role": "user", "content": user_message},
             {"role": "assistant", "content": "from-fake"},
@@ -82,7 +82,7 @@ def test_chat_persists_turn_messages(client, monkeypatch):
 
 def test_chat_uses_cache_on_second_request(client, monkeypatch):
     """Second request for the same session should not re-read the DB."""
-    async def fake_run(user_message, history):
+    async def fake_run(user_message, history, **kwargs):
         return "ok", "p", [
             {"role": "user", "content": user_message},
             {"role": "assistant", "content": "ok"},
@@ -127,7 +127,7 @@ def test_chat_non_blocking_summary_patches_db_row(tmp_db, monkeypatch):
             await release.wait()
             return "[history summary of big_tool]\nDELAYED_SUMMARY"
 
-        async def fake_run(user_message, history):
+        async def fake_run(user_message, history, **kwargs):
             tool_msg = {
                 "role": "tool",
                 "name": "big_tool",
@@ -191,7 +191,7 @@ def test_chat_nuke_resets_history_to_assistant_summary(client, monkeypatch):
         {"role": "assistant", "content": "old-answer"},
     ])
 
-    async def fake_run(user_message, history):
+    async def fake_run(user_message, history, **kwargs):
         return "summary kept", "fake-provider", [
             {"role": "assistant", "content": "summary kept", "_nuke": True},
         ], []
@@ -360,7 +360,7 @@ def test_stream_turn_background_persists_without_sse_consumer(tmp_db, monkeypatc
 # ── DELETE /sessions/{id} ────────────────────────────────────────────────────
 
 def test_delete_session_clears_cache_and_db(client, monkeypatch):
-    async def fake_run(msg, h):
+    async def fake_run(msg, h, **kwargs):
         return "ok", "p", [
             {"role": "user", "content": msg},
             {"role": "assistant", "content": "ok"},

@@ -12,6 +12,26 @@ GROQ_API_KEY          = os.environ.get("GROQ_API_KEY", "")
 GEMINI_API_KEY        = os.environ.get("GEMINI_API_KEY", "")
 BRAVE_SEARCH_API_KEY  = os.environ.get("BRAVE_SEARCH_API_KEY", "")
 
+# Optional: Telegram bot long-polling transport (issue #60). Empty = disabled.
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+
+# Optional: restrict Telegram bot to these numeric user IDs (comma-separated).
+# When unset or empty, any user may message the bot. When set, all others are ignored.
+_tg_allow_raw = os.environ.get("TELEGRAM_ALLOWED_USER_IDS", "").strip()
+if not _tg_allow_raw:
+    TELEGRAM_ALLOWED_USER_IDS: frozenset[int] | None = None
+else:
+    _ids: list[int] = []
+    for _part in _tg_allow_raw.split(","):
+        _p = _part.strip()
+        if not _p:
+            continue
+        try:
+            _ids.append(int(_p))
+        except ValueError:
+            log.warning("TELEGRAM_ALLOWED_USER_IDS: skip invalid segment %r", _p)
+    TELEGRAM_ALLOWED_USER_IDS = frozenset(_ids) if _ids else None
+
 _free = os.environ.get("GEMINI_API_KEY_FREE", "")
 if _free:
     GEMINI_API_KEY_FREE_RESOLVED = _free

@@ -332,7 +332,27 @@ Table: `messages` — one row per completed turn.
 | `GET` | `/health` | Returns `{"status": "ok"}`. |
 | `GET` | `/*` | Static files from `static/` (serves the web UI). |
 
-### 8.1 SSE event types (`/chat/stream`)
+### 8.1 Telegram bot transport (optional)
+
+When `TELEGRAM_BOT_TOKEN` is set, `main.py` starts **long-polling** `getUpdates` in the FastAPI lifespan (`telegram_transport.py`). The bot shares the same SQLite history and `main.complete_chat_turn()` (non-streaming) as `POST /chat`.
+
+**Access control**: Set `TELEGRAM_ALLOWED_USER_IDS` to a comma-separated list of Telegram **user** IDs (integers). When set, updates from anyone else are ignored (no reply, no LLM call). Uses `message.from.id`, so in groups only allowlisted senders can trigger the bot. When unset, any user who finds the bot can use it—set the allowlist in production.
+
+**Session IDs**
+
+- Default active session for a private/group chat: `tg:<chat_id>`.
+- Forum topics / message threads: `tg:<chat_id>:<message_thread_id>`.
+- `/new` creates `tg:<chat_id>:s-<slug>` (or the same with `:<thread>` before `:s-`) where **slug** is five **lowercase letters** (a–z) so you can `/switch` with just that slug when it is unique. The stored `session_id` still includes numeric `chat_id` for SQLite.
+
+**Per-chat routing**: An in-memory map `(chat_id, thread_key) → active session_id` chooses which `session_id` receives plain text messages. It is **process-local** (lost on restart); sessions on disk remain, and `/sessions` + `/switch` recover them.
+
+**Commands** (text starting with `/`): `/new`, `/sessions`, `/switch` (by **name**: short slug or `default`, or full internal `session_id` if needed), `/nuke` (instructs the model to call `nuke_chat`), `/help`, `/start`. Bot copy shows only the **slug** (or the label **default** for the base session), not the full `tg:…` id.
+
+**Transport**: Bot messages use `sendMessage` with **`parse_mode: HTML`**. Incoming user text is still plain. Long replies are split at Telegram’s 4096-character boundary. No attachment forwarding from Telegram in this version.
+
+**Formatting (model)**: `main.complete_chat_turn(..., output_channel="telegram")` appends a “plain, no LaTeX/fences” system block; server output is entity-escaped; newlines stay as newlines (Telegram `parse_mode=HTML` does not support `<br>`). The **web** UI uses the default streaming prompt; history is unchanged.
+
+### 8.2 SSE event types (`/chat/stream`)
 
 | `type` | Fields | Description |
 |---|---|---|
