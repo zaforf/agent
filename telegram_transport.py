@@ -2,7 +2,10 @@
 
 Session IDs:
   ``tg:<chat_id>`` or ``tg:<chat_id>:<message_thread_id>`` for forum topics.
-``/new`` appends ``:s-<token>`` so multiple branches can coexist.
+  ``/new`` appends ``:s-`` and a **short typable** slug of lowercase **letters only** (default 5
+  characters, a–z) so you can /switch to it without retyping the full id.
+
+``sendMessage`` uses ``parse_mode: HTML``; all dynamic text is entity-escaped.
 
 Requires ``TELEGRAM_BOT_TOKEN`` in the environment. Started from ``main.py`` lifespan
 when the token is set.
@@ -11,7 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import secrets
+import string
 from contextlib import suppress
 from typing import Any
 
@@ -26,6 +31,31 @@ log = logging.getLogger(__name__)
 _active_session: dict[tuple[int, int], str] = {}
 
 _TELEGRAM_MSG_LIMIT = 4096
+_SESSION_SLUG_LEN = 5
+# Lowercase a–z only, short to type, no digits.
+_ALPH = string.ascii_lowercase
+_PARSE_MODE = "HTML"
+
+
+def _html_escape(s: str) -> str:
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _agent_reply_html(s: str) -> str:
+    """Model reply: entity-escape and turn newlines into <br> for HTML parse mode."""
+    t = _html_escape(s or "")
+    return t.replace("\n", "<br>")
+
+
+def _random_letter_slug(length: int = _SESSION_SLUG_LEN) -> str:
+    return "".join(secrets.choice(_ALPH) for _ in range(length))
+
+
+def _session_branch_slug(session_id: str) -> str | None:
+    """The letters-only part after the last ``:s-``, or None for the default branch (no ``:s-``)."""
+    if ":s-" not in session_id:
+        return None
+    return session_id.rsplit(":s-", 1)[-1]
 
 
 def _sender_user_id(message: dict[str, Any]) -> int | None:
@@ -60,9 +90,9 @@ def _prefs_key(chat_id: int, thread_key: int) -> tuple[int, int]:
 
 
 def _new_session_id(chat_id: int, thread_key: int) -> str:
-    token = secrets.token_hex(4)
+    slug = _random_letter_slug()
     base = _default_session_id(chat_id, thread_key)
-    return f"{base}:s-{token}"
+    return f"{base}:s-{slug}"
 
 
 def _active_sid(chat_id: int, thread_key: int) -> str:
@@ -74,6 +104,28 @@ def _active_sid(chat_id: int, thread_key: int) -> str:
 
 def _set_active(chat_id: int, thread_key: int, session_id: str) -> None:
     _active_session[_prefs_key(chat_id, thread_key)] = session_id
+
+
+def _resolve_session_switch(
+    want: str,
+    valid: set[str],
+) -> str | None:
+    """Map user input to a session_id: exact id, or unique short :s- slug (letters only)."""
+    w = (want or "").strip()
+    if not w:
+        return None
+    if w in valid:
+        return w
+    if re.fullmatch(r"[a-z]+", w) and 2 <= len(w) <= 12:
+        cands = [s for s in valid if (sl := _session_branch_slug(s)) is not None and sl == w]
+        if len(cands) == 1:
+            return cands[0]
+    if m := re.fullmatch(r"s-([a-z]+)", w):
+        inner = m.group(1)
+        cands2 = [s for s in valid if (sl := _session_branch_slug(s)) is not None and sl == inner]
+        if len(cands2) == 1:
+            return cands2[0]
+    return None
 
 
 def _telegram_sessions_for_chat(chat_id: int, thread_key: int) -> list[dict]:
@@ -99,12 +151,22 @@ async def _send_chat_action(
         await client.post(f"{api}/sendChatAction", json=body)
 
 
-async def _send_text(client: httpx.AsyncClient, api: str, chat_id: int, text: str, *, thread_key: int) -> None:
-    """Split on Telegram's max message length."""
+async def _send_text(
+    client: httpx.AsyncClient,
+    api: str,
+    chat_id: int,
+    text: str,
+    *,
+    thread_key: int,
+    parse_mode: str | None = _PARSE_MODE,
+) -> None:
+    """Send rich text. ``text`` must be valid Telegram HTML (we escape where needed in callers)."""
     text = text or ""
     params: dict[str, Any] = {"chat_id": chat_id}
     if thread_key:
         params["message_thread_id"] = thread_key
+    if parse_mode:
+        params["parse_mode"] = parse_mode
     while text:
         chunk = text[:_TELEGRAM_MSG_LIMIT]
         text = text[_TELEGRAM_MSG_LIMIT:]
@@ -142,13 +204,15 @@ async def _handle_command(
     if cmd == "new":
         sid = _new_session_id(chat_id, thread_key)
         _set_active(chat_id, thread_key, sid)
-        await _send_text(
-            client,
-            api,
-            chat_id,
-            f"New session.\nActive: `{sid}`\nSend a message to start.",
-            thread_key=thread_key,
+        short = _session_branch_slug(sid) or ""
+        body = (
+            "New session.\n"
+            f"Active: <b>{_html_escape(sid)}</b>\n"
         )
+        if short:
+            body += f"Short: <b>{_html_escape(short)}</b> — /switch {short}\n"
+        body += "Send a message to start."
+        await _send_text(client, api, chat_id, body, thread_key=thread_key)
         return
 
     if cmd == "sessions":
@@ -157,11 +221,14 @@ async def _handle_command(
         if not rows:
             await _send_text(client, api, chat_id, "No saved sessions for this chat yet.", thread_key=thread_key)
             return
-        lines = [f"Active: `{cur}`", ""]
+        lines: list[str] = [f"Active: <b>{_html_escape(cur)}</b>", ""]
         for i, s in enumerate(rows[:20], start=1):
             mark = " ← active" if s["session_id"] == cur else ""
-            pv = (s.get("preview") or "").replace("\n", " ")
-            lines.append(f"{i}. `{s['session_id']}` — {pv}{mark}")
+            full = s["session_id"]
+            sl = _session_branch_slug(full)
+            short_h = f" <b>{_html_escape(sl)}</b> — /switch {_html_escape(sl)}" if sl else ""
+            pv = _html_escape((s.get("preview") or "").replace("\n", " "))
+            lines.append(f"{i}. <b>{_html_escape(full)}</b>{short_h} — {pv}{mark}")
         if len(rows) > 20:
             lines.append(f"\n… and {len(rows) - 20} more")
         await _send_text(client, api, chat_id, "\n".join(lines), thread_key=thread_key)
@@ -173,23 +240,28 @@ async def _handle_command(
                 client,
                 api,
                 chat_id,
-                "Usage: /switch `<session_id>` (copy from /sessions).",
+                "Usage: /switch &lt;id&gt; or short slug from /sessions (e.g. /switch abcde).",
                 thread_key=thread_key,
             )
             return
-        want = arg.strip()
-        valid = {s["session_id"] for s in _telegram_sessions_for_chat(chat_id, thread_key)}
-        if want not in valid:
+        want_in = arg.strip()
+        valid_list = _telegram_sessions_for_chat(chat_id, thread_key)
+        valid = {s["session_id"] for s in valid_list}
+        resolved = _resolve_session_switch(want_in, valid)
+        if resolved is None:
+            h = _html_escape(want_in)
             await _send_text(
                 client,
                 api,
                 chat_id,
-                f"Unknown session for this chat: `{want}`\nUse /sessions to list.",
+                f"Unknown or ambiguous: <b>{h}</b>\nUse /sessions, then /switch the short slug (letters) or the full id.",
                 thread_key=thread_key,
             )
             return
-        _set_active(chat_id, thread_key, want)
-        await _send_text(client, api, chat_id, f"Switched to `{want}`.", thread_key=thread_key)
+        _set_active(chat_id, thread_key, resolved)
+        await _send_text(
+            client, api, chat_id, f"Switched to <b>{_html_escape(resolved)}</b>.", thread_key=thread_key
+        )
         return
 
     if cmd == "nuke":
@@ -207,28 +279,31 @@ async def _handle_command(
             )
         except Exception as e:
             log.exception("telegram /nuke failed")
-            await _send_text(client, api, chat_id, f"Error: {e}", thread_key=thread_key)
+            await _send_text(
+                client, api, chat_id, f"Error: {_html_escape(str(e))}", thread_key=thread_key
+            )
             return
-        await _send_text(client, api, chat_id, reply, thread_key=thread_key)
+        await _send_text(client, api, chat_id, _agent_reply_html(reply), thread_key=thread_key)
         return
 
     if cmd in ("start", "help"):
-        await _send_text(
-            client,
-            api,
-            chat_id,
-            "Commands:\n"
-            "/new — new session\n"
-            "/sessions — list sessions for this chat\n"
-            "/switch `<id>` — activate a session\n"
-            "/nuke — summarize & reset current session\n"
-            "/help — this text\n\n"
-            f"Active: `{_active_sid(chat_id, thread_key)}`",
-            thread_key=thread_key,
+        a = _active_sid(chat_id, thread_key)
+        help_body = (
+            "Commands (HTML formatting in bot messages):<br>"
+            "/new — new session (short <b>letters-only</b> id for /switch)<br>"
+            "/sessions — list for this chat<br>"
+            "/switch &lt;id or short slug&gt;<br>"
+            "/nuke — summarize &amp; reset current session<br>"
+            "/help — this text<br><br>"
+            f"Active: <b>{_html_escape(a)}</b>"
         )
+        await _send_text(client, api, chat_id, help_body, thread_key=thread_key)
         return
 
-    await _send_text(client, api, chat_id, f"Unknown command /{cmd}. Try /help.", thread_key=thread_key)
+    hcmd = _html_escape(cmd)
+    await _send_text(
+        client, api, chat_id, f"Unknown command /{hcmd}. Try /help.", thread_key=thread_key
+    )
 
 
 async def _handle_message(client: httpx.AsyncClient, api: str, message: dict[str, Any]) -> None:
@@ -242,7 +317,9 @@ async def _handle_message(client: httpx.AsyncClient, api: str, message: dict[str
     thread_key = _thread_key(message)
     text = (message.get("text") or "").strip()
     if not text:
-        await _send_text(client, api, chat_id, "(Only text messages are supported.)", thread_key=thread_key)
+        await _send_text(
+            client, api, chat_id, "<i>Only text messages are supported.</i>", thread_key=thread_key
+        )
         return
 
     cmd, arg = _parse_command(text)
@@ -256,9 +333,11 @@ async def _handle_message(client: httpx.AsyncClient, api: str, message: dict[str
         reply, _ = await main.complete_chat_turn(text, sid, output_channel="telegram")
     except Exception as e:
         log.exception("telegram chat failed")
-        await _send_text(client, api, chat_id, f"Error: {e}", thread_key=thread_key)
+        await _send_text(
+            client, api, chat_id, f"Error: {_html_escape(str(e))}", thread_key=thread_key
+        )
         return
-    await _send_text(client, api, chat_id, reply, thread_key=thread_key)
+    await _send_text(client, api, chat_id, _agent_reply_html(reply), thread_key=thread_key)
 
 
 async def run_telegram_polling() -> None:

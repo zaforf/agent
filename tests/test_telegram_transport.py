@@ -59,6 +59,20 @@ def test_default_and_new_session_ids():
     sid = tt._new_session_id(99, 0)
     assert sid.startswith("tg:99:s-")
     assert len(sid.split(":")) == 3
+    sl = sid.rsplit("s-", 1)[-1]
+    assert len(sl) == tt._SESSION_SLUG_LEN
+    assert sl.islower() and sl.isalpha() and sl.isascii()
+
+
+def test_resolve_session_switch_by_short_slug():
+    valid = {"tg:1", "tg:1:s-abcde", "tg:1:s-xyzab"}
+    assert tt._resolve_session_switch("tg:1:s-abcde", valid) == "tg:1:s-abcde"
+    assert tt._resolve_session_switch("abcde", valid) == "tg:1:s-abcde"
+    assert tt._resolve_session_switch("s-abcde", valid) == "tg:1:s-abcde"
+    assert tt._resolve_session_switch("nope", valid) is None
+    # two branches same slug (collision) — unresolvable as short
+    v2 = {"tg:1:s-aaaaa", "tg:9:s-aaaaa"}
+    assert tt._resolve_session_switch("aaaaa", v2) is None
 
 
 def test_parse_command():
@@ -71,8 +85,8 @@ def test_parse_command():
 def test_active_session_per_chat_and_thread():
     assert tt._active_sid(1, 0) == "tg:1"
     assert tt._active_sid(1, 0) == "tg:1"
-    tt._set_active(1, 0, "tg:1:s-deadbeef")
-    assert tt._active_sid(1, 0) == "tg:1:s-deadbeef"
+    tt._set_active(1, 0, "tg:1:s-abcde")
+    assert tt._active_sid(1, 0) == "tg:1:s-abcde"
     # Different thread → different slot
     assert tt._active_sid(1, 7) == "tg:1:7"
 
@@ -87,7 +101,9 @@ def test_command_new_sets_active():
     assert tt._active_sid(5, 0).startswith("tg:5:s-")
     sent = [c for c in client.post_calls if "sendMessage" in c[0]]
     assert sent
-    assert "New session" in (sent[0][1] or {}).get("text", "")
+    p = sent[0][1] or {}
+    assert "New session" in p.get("text", "")
+    assert p.get("parse_mode") == "HTML"
 
 
 def test_command_sessions_lists_tg_sessions_only(tmp_db, monkeypatch):
@@ -129,7 +145,7 @@ def test_command_switch_rejects_foreign_session(tmp_db, monkeypatch):
         return "x", "fake", turn, []
 
     monkeypatch.setattr(agent, "run", fake_run)
-    asyncio.run(main.complete_chat_turn("a", "tg:7:s-11111111"))
+    asyncio.run(main.complete_chat_turn("a", "tg:7:s-abcdef"))
 
     client = FakeAsyncClient()
 
@@ -142,7 +158,7 @@ def test_command_switch_rejects_foreign_session(tmp_db, monkeypatch):
     asyncio.run(_run())
     assert tt._active_sid(7, 0) == "tg:7"
     sent = [c[1]["text"] for c in client.post_calls if c[1] and "sendMessage" in c[0]]
-    assert any("Unknown session" in t for t in sent)
+    assert any("Unknown" in t and "ambiguous" in t for t in sent)
 
 
 def test_command_switch_accepts_listed_session(tmp_db, monkeypatch):
@@ -156,14 +172,15 @@ def test_command_switch_accepts_listed_session(tmp_db, monkeypatch):
         return "x", "fake", turn, []
 
     monkeypatch.setattr(agent, "run", fake_run)
-    sid = "tg:3:s-aaaaaaaa"
+    sid = "tg:3:s-zzzzz"
     asyncio.run(main.complete_chat_turn("x", sid))
 
     client = FakeAsyncClient()
 
     async def _run():
         tt._set_active(3, 0, "tg:3")
-        await tt._handle_command(client, "https://api.telegram.org/botTEST", 3, 0, "switch", sid)
+        # Short slug only (no digits)
+        await tt._handle_command(client, "https://api.telegram.org/botTEST", 3, 0, "switch", "zzzzz")
 
     asyncio.run(_run())
     assert tt._active_sid(3, 0) == sid
@@ -232,5 +249,6 @@ def test_complete_chat_turn_used_by_transport(monkeypatch):
 
     asyncio.run(_run())
     assert calls == [("tg:8", "hello tg")]
-    sent_texts = [c[1]["text"] for c in client.post_calls if c[1] and "sendMessage" in c[0]]
-    assert sent_texts[-1] == "echo:hello tg"
+    last = [c[1] for c in client.post_calls if c[1] and "sendMessage" in c[0]][-1]
+    assert last.get("parse_mode") == "HTML"
+    assert "echo:hello tg" in (last.get("text") or "")
