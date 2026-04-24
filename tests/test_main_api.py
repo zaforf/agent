@@ -200,13 +200,14 @@ def test_chat_nuke_resets_history_to_assistant_summary(client, monkeypatch):
 
     r = client.post("/chat", json={"message": "please nuke", "session_id": "n1"})
     assert r.status_code == 200
-    assert r.json()["response"] == "summary kept"
+    expected = "Chat reset via nuke. Summary:\nsummary kept"
+    assert r.json()["response"] == expected
 
     hist = db.get_history("n1")
-    assert hist == [{"role": "assistant", "content": "summary kept"}]
+    assert hist == [{"role": "assistant", "content": expected}]
 
     shown = client.get("/sessions/n1/history").json()["messages"]
-    assert shown == [{"role": "assistant", "content": "summary kept"}]
+    assert shown == [{"role": "assistant", "content": expected}]
 
 def test_chat_propagates_agent_error(client, monkeypatch):
     async def boom(*a, **kw):

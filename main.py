@@ -160,13 +160,20 @@ def _extract_nuke_summary(turn_messages: list[dict]) -> str | None:
     return (msg.get("content") or "").strip() or None
 
 
+
+
+def _format_nuke_summary(summary: str) -> str:
+    summary = summary.strip()
+    return f"Chat reset via nuke. Summary:\n{summary}" if summary else "Chat reset via nuke."
+
 def _apply_nuke(session_id: str, history: list[dict], summary: str) -> None:
     """Replace entire session history with one assistant summary message."""
-    clean_turn = [{"role": "assistant", "content": summary}]
+    formatted = _format_nuke_summary(summary)
+    clean_turn = [{"role": "assistant", "content": formatted}]
     db.clear(session_id)
     history.clear()
     history.extend(clean_turn)
-    db.append_turn(session_id, summary, clean_turn)
+    db.append_turn(session_id, formatted, clean_turn)
 
 def _build_user_content(message: str, attachments: list[Attachment]) -> "str | list":
     """Return a plain string when there are no attachments (backward-compat).
@@ -210,7 +217,7 @@ async def chat(req: ChatRequest):
     nuke_summary = _extract_nuke_summary(turn_messages)
     if nuke_summary is not None:
         _apply_nuke(req.session_id, history, nuke_summary)
-        return ChatResponse(response=nuke_summary, session_id=req.session_id, provider=provider)
+        return ChatResponse(response=_format_nuke_summary(nuke_summary), session_id=req.session_id, provider=provider)
 
     _patch_display_files(turn_messages, display_files)
     history.extend(turn_messages)

@@ -1150,8 +1150,7 @@
               loadSessions();
 
           } else if (event.type === 'cancelled') {
-            if (!agentMd) addAgentMsg('_Generation stopped._');
-            else {
+            if (agentMd) {
               const note = document.createElement('div');
               note.className = 'fallback-tag';
               note.textContent = 'generation stopped';
@@ -1165,9 +1164,7 @@
       }
 
     } catch (e) {
-      if (e && e.name === 'AbortError') {
-        addAgentMsg('_Generation stopped._');
-      } else {
+      if (!(e && e.name === 'AbortError')) {
         addAgentMsg('**Error:** ' + String(e));
       }
     } finally {
