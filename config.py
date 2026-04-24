@@ -12,6 +12,9 @@ GROQ_API_KEY          = os.environ.get("GROQ_API_KEY", "")
 GEMINI_API_KEY        = os.environ.get("GEMINI_API_KEY", "")
 BRAVE_SEARCH_API_KEY  = os.environ.get("BRAVE_SEARCH_API_KEY", "")
 
+# Optional: Telegram bot long-polling transport (issue #60). Empty = disabled.
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+
 _free = os.environ.get("GEMINI_API_KEY_FREE", "")
 if _free:
     GEMINI_API_KEY_FREE_RESOLVED = _free

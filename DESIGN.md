@@ -332,7 +332,23 @@ Table: `messages` — one row per completed turn.
 | `GET` | `/health` | Returns `{"status": "ok"}`. |
 | `GET` | `/*` | Static files from `static/` (serves the web UI). |
 
-### 8.1 SSE event types (`/chat/stream`)
+### 8.1 Telegram bot transport (optional)
+
+When `TELEGRAM_BOT_TOKEN` is set, `main.py` starts **long-polling** `getUpdates` in the FastAPI lifespan (`telegram_transport.py`). The bot shares the same SQLite history and `main.complete_chat_turn()` (non-streaming) as `POST /chat`.
+
+**Session IDs**
+
+- Default active session for a private/group chat: `tg:<chat_id>`.
+- Forum topics / message threads: `tg:<chat_id>:<message_thread_id>`.
+- `/new` creates `tg:<chat_id>:s-<token>` (or the same with `:<thread>` before `:s-`) so multiple parallel branches exist under one Telegram chat.
+
+**Per-chat routing**: An in-memory map `(chat_id, thread_key) → active session_id` chooses which `session_id` receives plain text messages. It is **process-local** (lost on restart); sessions on disk remain, and `/sessions` + `/switch` recover them.
+
+**Commands** (text starting with `/`): `/new`, `/sessions`, `/switch <session_id>`, `/nuke` (instructs the model to call `nuke_chat`), `/help`, `/start`.
+
+**Limits**: Plain text only; long replies are split at Telegram’s 4096-character boundary. No attachment forwarding from Telegram in this version.
+
+### 8.2 SSE event types (`/chat/stream`)
 
 | `type` | Fields | Description |
 |---|---|---|
