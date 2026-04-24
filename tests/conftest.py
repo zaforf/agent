@@ -35,14 +35,12 @@ def tmp_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def tmp_system_prompt(tmp_path, monkeypatch):
-    """Point SYSTEM_PROMPT_PATH at a tmp file seeded with a known marker."""
+    """Point config.SYSTEM_PROMPT_PATH at a tmp file seeded with a known marker."""
     import config
-    from tools import self_modify
 
     sp = tmp_path / "system_prompt.md"
     sp.write_text("# Test system prompt\nHello.\n")
     monkeypatch.setattr(config, "SYSTEM_PROMPT_PATH", sp)
-    monkeypatch.setattr(self_modify, "SYSTEM_PROMPT_PATH", sp)
     return sp
 
 

@@ -4,10 +4,10 @@ import json
 import logging
 import re
 from openai import AsyncOpenAI, RateLimitError, APIError, APIConnectionError
+import config
 from config import PROVIDERS
 from summarizer import summarize_gemma
 from tools import TOOL_SCHEMAS, TOOL_FUNCTIONS
-from tools.self_modify import get_system_prompt
 
 log = logging.getLogger(__name__)
 
@@ -269,16 +269,12 @@ async def _call_stream(messages: list[dict]) -> tuple:
 # ── System prompt helpers ─────────────────────────────────────────────────────
 
 def _tool_docs() -> str:
-    lines = [
-        "## Tools\n",
-        "Use the API **function / tool_calls** mechanism only (no XML or fenced code for tools).\n",
-    ]
-    for schema in TOOL_SCHEMAS:
-        fn       = schema["function"]
-        params   = fn.get("parameters", {}).get("properties", {})
-        param_str = ", ".join(f"{k}: {v.get('type','string')}" for k, v in params.items())
-        lines.append(f"**{fn['name']}**({param_str}): {fn['description']}\n")
-    return "\n".join(lines)
+    return (
+        "## Tool usage\n"
+        "Use native API function/tool_calls only (no XML or fenced tool syntax).\n"
+        "Emit at most one tool call per assistant message; wait for result before the next tool call.\n"
+        "For code edits, prefer apply_unified_patch over whole-file rewrites; read with shell_exec first so hunks match exactly.\n"
+    )
 
 
 def _build_system_prompt() -> str:
@@ -287,8 +283,9 @@ def _build_system_prompt() -> str:
     # "post-cutoff" stays abstract and the model's RLHF-trained reflex to
     # disclaim recent info as possible hallucination tends to fire even on
     # tool-grounded data. See DESIGN §10.
-    today = datetime.date.today().isoformat()
-    return f"Today's date: {today}\n\n{get_system_prompt()}\n\n{_tool_docs()}"
+    today = datetime.date.today().strftime("%A %Y-%m-%d")
+    base = config.SYSTEM_PROMPT_PATH.read_text()
+    return f"Today's date: {today}\n\n{base}\n\n{_tool_docs()}"
 
 
 # ── Tool execution helper ─────────────────────────────────────────────────────

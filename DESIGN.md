@@ -179,16 +179,7 @@ Returns a numbered markdown list of `title — url` plus a short snippet (≤ 24
 - If `BRAVE_SEARCH_API_KEY` is unset, the tool returns the stable error string `"Error: web_search disabled — set BRAVE_SEARCH_API_KEY in .env"` so the model can react. HTTP / timeout failures also return short `Error: …` strings.
 - Single endpoint (`/res/v1/web/search`), 10 s timeout, no retry — Brave's free tier is rate-limited and one failure is enough signal for the model to switch strategies.
 
-### 5.3 System prompt tools (`tools/self_modify.py`)
-
-| Tool | Description |
-|---|---|
-| `get_system_prompt()` | Read the full current system prompt from `data/system_prompt.md` |
-| `edit_system_prompt(new_prompt, reason)` | Overwrite the system prompt file |
-
-The system prompt instructs the model to always call `get_system_prompt()` before `edit_system_prompt()`, to make surgical edits only (not rewrites), and to only modify when user feedback clearly requires a permanent behavior change. The file is read fresh on every turn (via `_build_system_prompt()`) so edits take effect immediately on the next call.
-
-### 5.4 Shell tool (`tools/shell.py`)
+### 5.3 Shell tool (`tools/shell.py`)
 
 | Tool | Description |
 |---|---|
@@ -229,7 +220,7 @@ Every command is appended with `__rc=$?; echo "<sentinel>:$__rc"` on a separate 
 | `AGENT_WORKSPACE` | `<project-root>/workspace` | Workspace directory path |
 | `AGENT_SHELL_TIMEOUT` | `30` | Default per-command timeout (seconds) |
 
-### 5.5 Workspace patch tool (`tools/workspace_patch.py`)
+### 5.4 Workspace patch tool (`tools/workspace_patch.py`)
 
 | Tool | Description |
 |---|---|
@@ -338,8 +329,6 @@ Table: `messages` — one row per completed turn.
 | `DELETE` | `/sessions/{id}` | Delete a session from cache and SQLite. |
 | `GET` | `/memories` | List all Mem0 memories. |
 | `DELETE` | `/memories/{id}` | Delete a memory by ID. |
-| `GET` | `/system-prompt` | Read current system prompt. |
-| `PUT` | `/system-prompt` | Overwrite system prompt (used by UI editor). |
 | `GET` | `/health` | Returns `{"status": "ok"}`. |
 | `GET` | `/*` | Static files from `static/` (serves the web UI). |
 
@@ -374,7 +363,6 @@ Single-page app (`static/index.html`). All state is managed client-side except c
 - **Left sidebar** (sessions panel): session list with preview text and timestamp; switch, create, delete sessions
 - **Center** (chat): message feed + input bar (see §13 for file attach)
 - **Right sidebar** (memories panel): list of all Mem0 memories with per-entry delete
-- **Modal** (system prompt editor): full textarea edit + save via PUT `/system-prompt`
 
 ### 9.2 Message rendering
 
@@ -430,7 +418,7 @@ The prompt is organized into nine sections; each one is short and independent so
 - **Response style** — rendering specifics only: visible answer outside `<thought>/<thinking>/<redacted_*>` blocks, Markdown + KaTeX rendering, native `tool_calls` only.
 - **System context** — one paragraph telling the model the runtime it operates in (multi-turn loop, streaming UI, tool-step rows, full history replay, repair call on empty visible output).
 - **Context, turns, and tool results** — unified mental model: what a *turn* is; all tool results stay **raw for every LLM call in that turn**; compaction to `[history summary of <tool_name>]` after the turn ends (or via `main.py` finalizer); prior turns in replay show summaries; re-call the tool for verbatim raw on a new turn; `Takeaways:` body and summary accuracy / sparsity / `fetch_url` pagination hints.
-- **Tool strategy** — concrete per-tool decision rules: `fetch_url` (prompt vs raw with explicit 128k vs 8k semantics, pagination, invalid verification: impeaching prompt output from raw chunk 0 alone), `recall` (silent on miss), `remember` (categories and what to store / not store), `list_memories` / `delete_memory`, `get_system_prompt` then `edit_system_prompt` (read first, surgical edits, permanent changes only), `shell_exec` to read workspace files then `apply_unified_patch` for surgical edits (prefer over pasting whole files for small changes).
+- **Tool strategy** — concrete per-tool decision rules: `fetch_url` (prompt vs raw with explicit 128k vs 8k semantics, pagination, invalid verification: impeaching prompt output from raw chunk 0 alone), `recall` (silent on miss), `remember` (categories and what to store / not store), `list_memories` / `delete_memory`, `shell_exec` to read workspace files, then `apply_unified_patch` as the preferred edit path (faster/cheaper than whole-file rewrites); patch hunks must match current file text exactly.
 - **Failure handling** — tool errors are data; retry, switch strategy, or report concisely; don't loop on a failing approach.
 
 ---

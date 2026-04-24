@@ -140,22 +140,16 @@ def test_fetch_and_summarize_end_to_end(monkeypatch):
 
 
 def test_tool_call_trace_in_turn_messages():
-    """Force a tool call via get_system_prompt and verify the full trace lands
-    in `turn_messages` in order: assistant(tool_calls) → tool → assistant.
-    """
+    """Force a tool call via list_memories and verify tool trace shape."""
     import agent
     _, _, turn, _ = asyncio.run(
         agent.run(
-            "Call get_system_prompt to read the current prompt, then reply in "
-            "one short sentence with something you read.",
+            "Call list_memories, then reply in one short sentence.",
             [],
         )
     )
     roles = [m["role"] for m in turn]
-    # Minimum expected shape — there may be extra assistant/tool pairs if the
-    # model paginates, so use subsequence matching.
-    assert "user" == roles[0]
+    assert roles[0] == "user"
     assert "tool" in roles, f"no tool message emitted: {roles}"
-    # Must end with a final assistant message (the visible answer)
     assert roles[-1] == "assistant"
     assert turn[-1].get("content"), "final assistant has empty content"
