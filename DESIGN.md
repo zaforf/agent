@@ -344,10 +344,17 @@ Table: `messages` — one row per completed turn.
 | `done` | `provider: str`, `turn_messages: list` | Turn complete; `turn_messages` is the full history slice |
 | `error` | `detail: str` | Unrecoverable error |
 
-The frontend uses `turn_messages` from the `done` event to update the in-memory history cache (server-side). The client never manages history state directly.
+After a successful turn, `main.py` extends the per-session in-memory cache and appends the row to SQLite (`_persist_stream_turn` runs in the stream producer’s `finally`, so this still happens if the browser disconnects mid-stream). The UI uses `turn_messages` from the `done` event to render the completed turn; canonical persisted history is served by `GET /sessions/{id}/history`.
+
+**Server-owned streaming (per session):**
+
+- **Multiple chats**: Any number of sessions may exist in parallel; each `session_id` has its own history and at most **one** active streamed turn at a time. A second `POST /chat/stream` for the same session while a turn is still running **attaches** to that turn’s event queue (duplicate generation is not started).
+- **Client disconnect**: Closing the tab or losing the SSE connection **cancels only the HTTP response handler** for that browser; the background producer keeps running until the turn finishes, errors, or is cancelled via `/chat/stream/cancel`.
+- **Persistence**: A completed, non-cancelled turn with a non-empty assistant reply is written to SQLite even when no client was connected at completion time (disconnect-safe persistence of the **final** turn — not mid-stream partials in the DB).
 
 Cancellation semantics:
-- `main.py` tracks one active streaming task per `session_id`.
+
+- `main.py` tracks one active streaming producer task per `session_id`.
 - `POST /chat/stream/cancel` calls `task.cancel()` for that session and returns `{cancelled: true}` when a live stream existed.
 - On cancellation, the SSE stream emits `{"type":"cancelled"}` and exits.
 - Cancelled streams are **not persisted** to SQLite/history (same as error mid-stream).
