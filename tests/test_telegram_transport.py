@@ -8,6 +8,7 @@ import asyncio
 import json
 import pytest
 
+import config
 import agent
 import main
 import telegram_transport as tt
@@ -166,6 +167,50 @@ def test_command_switch_accepts_listed_session(tmp_db, monkeypatch):
 
     asyncio.run(_run())
     assert tt._active_sid(3, 0) == sid
+
+
+def test_allowed_user_ids_blocks_stranger(monkeypatch):
+    monkeypatch.setattr(config, "TELEGRAM_ALLOWED_USER_IDS", frozenset({100}))
+    calls: list[str] = []
+
+    async def fake_complete(msg: str, sid: str, *, attachments=None):
+        calls.append(msg)
+        return "no", "fake"
+
+    monkeypatch.setattr(main, "complete_chat_turn", fake_complete)
+    client = FakeAsyncClient()
+
+    async def _run():
+        await tt._handle_message(
+            client,
+            "https://api.telegram.org/botTEST",
+            {"chat": {"id": 8}, "from": {"id": 999}, "text": "hello"},
+        )
+
+    asyncio.run(_run())
+    assert calls == []
+
+
+def test_allowed_user_ids_allows_listed_user(monkeypatch):
+    monkeypatch.setattr(config, "TELEGRAM_ALLOWED_USER_IDS", frozenset({100}))
+    calls: list[str] = []
+
+    async def fake_complete(msg: str, sid: str, *, attachments=None):
+        calls.append(msg)
+        return "ok", "fake"
+
+    monkeypatch.setattr(main, "complete_chat_turn", fake_complete)
+    client = FakeAsyncClient()
+
+    async def _run():
+        await tt._handle_message(
+            client,
+            "https://api.telegram.org/botTEST",
+            {"chat": {"id": 8}, "from": {"id": 100}, "text": "hello"},
+        )
+
+    asyncio.run(_run())
+    assert calls == ["hello"]
 
 
 def test_complete_chat_turn_used_by_transport(monkeypatch):

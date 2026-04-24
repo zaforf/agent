@@ -28,6 +28,22 @@ _active_session: dict[tuple[int, int], str] = {}
 _TELEGRAM_MSG_LIMIT = 4096
 
 
+def _sender_user_id(message: dict[str, Any]) -> int | None:
+    from_user = message.get("from")
+    if not from_user or from_user.get("id") is None:
+        return None
+    return int(from_user["id"])
+
+
+def _is_sender_allowed(user_id: int | None) -> bool:
+    allowed = config.TELEGRAM_ALLOWED_USER_IDS
+    if allowed is None:
+        return True
+    if user_id is None:
+        return False
+    return user_id in allowed
+
+
 def _thread_key(message: dict[str, Any]) -> int:
     tid = message.get("message_thread_id")
     return int(tid) if tid is not None else 0
@@ -215,6 +231,11 @@ async def _handle_command(
 
 
 async def _handle_message(client: httpx.AsyncClient, api: str, message: dict[str, Any]) -> None:
+    uid = _sender_user_id(message)
+    if not _is_sender_allowed(uid):
+        log.debug("telegram: ignored message from user %s (not in TELEGRAM_ALLOWED_USER_IDS)", uid)
+        return
+
     chat = message.get("chat") or {}
     chat_id = int(chat["id"])
     thread_key = _thread_key(message)

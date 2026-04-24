@@ -336,6 +336,8 @@ Table: `messages` — one row per completed turn.
 
 When `TELEGRAM_BOT_TOKEN` is set, `main.py` starts **long-polling** `getUpdates` in the FastAPI lifespan (`telegram_transport.py`). The bot shares the same SQLite history and `main.complete_chat_turn()` (non-streaming) as `POST /chat`.
 
+**Access control**: Set `TELEGRAM_ALLOWED_USER_IDS` to a comma-separated list of Telegram **user** IDs (integers). When set, updates from anyone else are ignored (no reply, no LLM call). Uses `message.from.id`, so in groups only allowlisted senders can trigger the bot. When unset, any user who finds the bot can use it—set the allowlist in production.
+
 **Session IDs**
 
 - Default active session for a private/group chat: `tg:<chat_id>`.
