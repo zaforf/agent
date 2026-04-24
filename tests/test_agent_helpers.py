@@ -112,6 +112,7 @@ def test_build_system_prompt_includes_seeded_prompt_and_compact_tool_policy(tmp_
     assert "Test system prompt" in prompt
     assert "at most one tool call per assistant message" in prompt
     assert "workspace_search_replace" in prompt
+    assert "Do not repeat identical failing calls" in prompt
 
 
 def test_build_system_prompt_forbids_xml_tool_format(tmp_system_prompt):

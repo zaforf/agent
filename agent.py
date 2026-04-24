@@ -22,7 +22,7 @@ _clients: list[dict] = [
     for p in PROVIDERS if p["api_key"]
 ]
 
-MAX_TOOL_ITERATIONS = 10
+MAX_TOOL_ITERATIONS = 30
 
 # Closed reasoning blocks stripped from user-visible output (opening tag → matching close).
 _THINK_RE = re.compile(
@@ -104,7 +104,6 @@ _BLOCKING_SYNC_TOOLS = frozenset({
     "delete_memory",
     "shell_exec",
     "workspace_search_replace",
-    "apply_unified_patch",
 })
 
 
@@ -274,8 +273,7 @@ def _tool_docs() -> str:
         "## Tool usage\n"
         "Use native API function/tool_calls only (no XML or fenced tool syntax).\n"
         "Emit at most one tool call per assistant message; wait for result before the next tool call.\n"
-        "For code edits: prefer workspace_search_replace with a verbatim old_string from shell_exec; "
-        "use apply_unified_patch for multi-region edits when the diff is correct (context must match exactly, including indentation).\n"
+        "For code edits, use workspace_search_replace as primary. It is okay to use more sequential tool calls when each is thoughtful and based on fresh file state. Do not repeat identical failing calls; adjust snippet or strategy after each failure.\n"
     )
 
 

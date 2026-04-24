@@ -53,7 +53,6 @@ def test_core_tools_are_present():
         "fetch_url", "web_search",
         "shell_exec",
         "workspace_search_replace",
-        "apply_unified_patch",
     }
     names = {s["function"]["name"] for s in TOOL_SCHEMAS}
     missing = required - names

@@ -62,7 +62,7 @@ All Gemini calls use Google's OpenAI-compatibility endpoint (`/v1beta/openai/`) 
 
 ## 4. Agentic Loop
 
-Both `/chat` (non-streaming) and `/chat/stream` (SSE streaming) share the same logical loop. The loop runs up to `MAX_TOOL_ITERATIONS = 10` iterations before giving up with a "Reached max tool iterations" error.
+Both `/chat` (non-streaming) and `/chat/stream` (SSE streaming) share the same logical loop. The loop runs up to `MAX_TOOL_ITERATIONS = 30` iterations before giving up with a "Reached max tool iterations" error.
 
 ### 4.1 Per-iteration flow
 
@@ -220,14 +220,13 @@ Every command is appended with `__rc=$?; echo "<sentinel>:$__rc"` on a separate 
 | `AGENT_WORKSPACE` | `<project-root>/workspace` | Workspace directory path |
 | `AGENT_SHELL_TIMEOUT` | `30` | Default per-command timeout (seconds) |
 
-### 5.4 Workspace edit tools (`tools/workspace_patch.py`)
+### 5.4 Workspace edit tool (`tools/workspace_patch.py`)
 
 | Tool | Description |
 |---|---|
-| `workspace_search_replace(path, old_string, new_string, replace_all?)` | Exact substring replace in a file under `WORKSPACE` (default: one match; set `replace_all` for every occurrence) |
-| `apply_unified_patch(unified_diff)` | Apply a git-style unified diff (`---` / `+++` / `@@`) to paths under `WORKSPACE` |
+| `workspace_search_replace(path, old_string, new_string, replace_all?)` | Primary code-edit tool: exact substring replace in a file under `WORKSPACE` |
 
-Paths are the same rooted directory as `shell_exec` (`AGENT_WORKSPACE`). Read current file contents with `shell_exec` before editing. **`workspace_search_replace`** is the simplest path when the model can copy a unique verbatim span. **`apply_unified_patch`** suits multi-hunk edits; every context line in a hunk must match the file **exactly** (including leading spaces). Multi-hunk patches use **original** (pre-edit) line numbers in each `@@` header; the implementation applies hunks **top-to-bottom** and adjusts for line-count changes from earlier hunks. Pure Python (no `patch` binary). `a/` and `b/` prefixes from `git diff` are accepted; `---` / `+++` must not use absolute paths. Renames (different paths on `---` vs `+++`) are rejected. New files use `--- /dev/null` + `+++ b/relative/path`; deletes use `--- a/path` + `+++ /dev/null`. Writes are atomic (temp file + `os.replace`). Both tools run via `asyncio.to_thread` like other blocking sync tools.
+Paths are under the same rooted directory as `shell_exec` (`AGENT_WORKSPACE`). Read current file contents with `shell_exec` before editing and copy `old_string` verbatim (indentation/newlines must match). The tool rejects ambiguous matches unless `replace_all=true`. Writes are atomic (temp file + `os.replace`). Runs via `asyncio.to_thread` like other blocking sync tools.
 
 ---
 
@@ -419,7 +418,7 @@ The prompt is organized into nine sections; each one is short and independent so
 - **Response style** — rendering specifics only: visible answer outside `<thought>/<thinking>/<redacted_*>` blocks, Markdown + KaTeX rendering, native `tool_calls` only.
 - **System context** — one paragraph telling the model the runtime it operates in (multi-turn loop, streaming UI, tool-step rows, full history replay, repair call on empty visible output).
 - **Context, turns, and tool results** — unified mental model: what a *turn* is; all tool results stay **raw for every LLM call in that turn**; compaction to `[history summary of <tool_name>]` after the turn ends (or via `main.py` finalizer); prior turns in replay show summaries; re-call the tool for verbatim raw on a new turn; `Takeaways:` body and summary accuracy / sparsity / `fetch_url` pagination hints.
-- **Tool strategy** — concrete per-tool decision rules: `fetch_url` (prompt vs raw with explicit 128k vs 8k semantics, pagination, invalid verification: impeaching prompt output from raw chunk 0 alone), `recall` (silent on miss), `remember` (categories and what to store / not store), `list_memories` / `delete_memory`, `shell_exec` to read workspace files, then `workspace_search_replace` for most code edits (verbatim `old_string`) or `apply_unified_patch` when a correct multi-hunk diff is available; patch context must match exactly (indentation).
+- **Tool strategy** — concrete per-tool decision rules: `fetch_url` (prompt vs raw with explicit 128k vs 8k semantics, pagination, invalid verification: impeaching prompt output from raw chunk 0 alone), `recall` (silent on miss), `remember` (categories and what to store / not store), `list_memories` / `delete_memory`, `shell_exec` to read workspace files, then `workspace_search_replace` as the primary code-edit path (verbatim `old_string`). Prefer thoughtful sequential calls over risky bulk edits; after a failed call, change arguments/approach instead of repeating the same failing call.
 - **Failure handling** — tool errors are data; retry, switch strategy, or report concisely; don't loop on a failing approach.
 
 ---
