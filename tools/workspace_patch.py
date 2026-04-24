@@ -9,7 +9,10 @@ building a patch so hunks match.
 - **Paths:** ``a/`` and ``b/`` prefixes from ``git diff`` are stripped; the file is resolved under
   ``WORKSPACE``. Absolute paths in ``---`` / ``+++`` are rejected.
 - **Atomic writes:** temp file in the target directory, then ``os.replace``.
-- **Hunks:** applied **bottom-up** (highest ``old_start`` first) so line indices stay stable.
+- **Multi-hunk:** hunks use **original** (pre-patch) line numbers. Applied **top-to-bottom** with a
+  running line delta so insert/delete hunks compose correctly.
+- **``workspace_search_replace``:** exact substring replace — easiest when the model has a verbatim
+  slice from ``shell_exec``; avoids hand-authored unified diffs with wrong indentation.
 - **Renames:** ``---`` and ``+++`` must refer to the same workspace-relative path (no rename in one patch).
 """
 from __future__ import annotations
@@ -140,6 +143,22 @@ def _parse_file_segment(lines: list[str], idx: int) -> tuple[str | None, str | N
     return old_raw, new_raw, hunks, idx
 
 
+def _cumulative_line_delta_before(
+    hunks_sorted: list[_Hunk], before_index: int
+) -> int:
+    """Sum (new_len - old_count) for hunks whose old region ends strictly before ``before_index``.
+
+    ``before_index`` is 1-based (unified-diff line number) — first line *after* the region we care about.
+    """
+    delta = 0
+    for h in hunks_sorted:
+        old_end = h.old_start + h.old_count - 1
+        if old_end < before_index:
+            _, new_side = _split_hunk_sides(h.raw_body)
+            delta += len(new_side) - h.old_count
+    return delta
+
+
 def _apply_one_file(path: Path, hunks: list[_Hunk], is_new: bool) -> None:
     if is_new:
         if path.exists():
@@ -165,10 +184,11 @@ def _apply_one_file(path: Path, hunks: list[_Hunk], is_new: bool) -> None:
     file_lines = content.splitlines(keepends=False)
     ended_with_newline = not content or content.endswith("\n")
 
-    sorted_hunks = sorted(hunks, key=lambda h: h.old_start, reverse=True)
+    sorted_hunks = sorted(hunks, key=lambda h: (h.old_start, h.old_count))
     for h in sorted_hunks:
         old_side, new_side = _split_hunk_sides(h.raw_body)
-        start = h.old_start - 1
+        delta = _cumulative_line_delta_before(sorted_hunks, h.old_start)
+        start = h.old_start - 1 + delta
         end = start + h.old_count
         if start < 0 or end > len(file_lines):
             rel = path.relative_to(WORKSPACE.resolve())
@@ -181,7 +201,9 @@ def _apply_one_file(path: Path, hunks: list[_Hunk], is_new: bool) -> None:
             rel = path.relative_to(WORKSPACE.resolve())
             raise ValueError(
                 f"hunk context mismatch in {rel.as_posix()} at line {h.old_start}: "
-                f"expected {old_side!r}, found {actual!r}"
+                f"expected {old_side!r}, found {actual!r}. "
+                "Copy context lines exactly from the file (indentation). "
+                "For single-region edits, workspace_search_replace is easier than a unified diff."
             )
         file_lines[start:end] = new_side
 
@@ -263,7 +285,85 @@ def apply_unified_patch(unified_diff: str) -> str:
     return "; ".join(reports)
 
 
+def workspace_search_replace(
+    path: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool = False,
+) -> str:
+    """Replace ``old_string`` with ``new_string`` in a workspace file (exact match, UTF-8).
+
+    Prefer this for single edits when ``old_string`` is copied verbatim from ``shell_exec``.
+    If ``old_string`` occurs more than once and ``replace_all`` is false, raises — widen the snippet
+    or pass ``replace_all=true``.
+    """
+    if not old_string:
+        raise ValueError("old_string must be non-empty")
+
+    rel = path.strip().replace("\\", "/").lstrip("./")
+    target = _workspace_target(rel)
+    if not target.is_file():
+        raise FileNotFoundError(
+            f"not a file: {target.relative_to(WORKSPACE.resolve()).as_posix()}"
+        )
+
+    content = target.read_text(encoding="utf-8", errors="replace")
+    n = content.count(old_string)
+    if n == 0:
+        raise ValueError(
+            f"old_string not found in {rel!r} (copy exact text from the file, including whitespace)"
+        )
+    if n > 1 and not replace_all:
+        raise ValueError(
+            f"old_string matches {n} times in {rel!r}; use a longer unique snippet "
+            "or replace_all=true"
+        )
+
+    if replace_all:
+        new_content = content.replace(old_string, new_string)
+    else:
+        new_content = content.replace(old_string, new_string, 1)
+
+    _atomic_write_text(target, new_content)
+    wrel = target.relative_to(WORKSPACE.resolve()).as_posix()
+    return f"updated {wrel} ({n} replacement(s))" if replace_all else f"updated {wrel}"
+
+
 SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "workspace_search_replace",
+            "description": (
+                "Exact string replace in a workspace file. Copy old_string verbatim from shell_exec "
+                "(indentation matters). Use for one or a few edits; use apply_unified_patch for "
+                "multi-hunk changes when you have a correct git-style diff. If not unique, pass "
+                "replace_all or use a longer old_string."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path relative to workspace",
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "Exact substring to replace (must appear once unless replace_all)",
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "Replacement text",
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Replace every occurrence (default false)",
+                    },
+                },
+                "required": ["path", "old_string", "new_string"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -271,8 +371,8 @@ SCHEMAS = [
             "description": (
                 "Apply a git-style unified diff to workspace files. Use ---/+++ paths relative to "
                 "workspace (git prefixes a/ b/ are OK). One call can touch multiple files. "
-                "Use shell_exec (cat, head, sed, etc.) to read the current file before generating the "
-                "diff so hunks match. On context mismatch, re-read and regenerate the patch. "
+                "Context lines in each hunk must match the file exactly (including leading spaces). "
+                "Prefer workspace_search_replace when a single contiguous old block is enough. "
                 "Renames (different --- vs +++ paths) are not supported."
             ),
             "parameters": {
@@ -290,5 +390,6 @@ SCHEMAS = [
 ]
 
 FUNCTIONS = {
+    "workspace_search_replace": workspace_search_replace,
     "apply_unified_patch": apply_unified_patch,
 }

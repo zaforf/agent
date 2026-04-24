@@ -1,4 +1,4 @@
-"""Tests for workspace read + unified diff apply."""
+"""Tests for workspace edit tools (search-replace + unified diff)."""
 from __future__ import annotations
 
 import pytest
@@ -40,23 +40,40 @@ def test_apply_updates_file_single_hunk(ws):
     assert (ws / "f.py").read_text(encoding="utf-8") == "a = 99\nb = 2\n"
 
 
-def test_apply_two_hunks_bottom_up(ws):
-    """Second hunk at lower line number must still apply after first edits below."""
+def test_apply_two_hunks_composes_line_delta(ws):
+    """Later hunks use original line numbers; earlier hunks may change file length."""
     (ws / "t.txt").write_text("L1\nL2\nL3\nL4\n", encoding="utf-8")
     diff = """\
 --- a/t.txt
 +++ b/t.txt
-@@ -3,2 +3,2 @@
--L3
-+L3x
- L4
 @@ -1,2 +1,2 @@
 -L1
 +L1y
  L2
+@@ -3,2 +3,2 @@
+-L3
++L3x
+ L4
 """
     wp.apply_unified_patch(diff)
     assert (ws / "t.txt").read_text(encoding="utf-8") == "L1y\nL2\nL3x\nL4\n"
+
+
+def test_apply_two_hunks_first_inserts_lines(ws):
+    """First hunk inserts lines; second hunk's @@ line still refers to pre-patch file."""
+    (ws / "t.txt").write_text("a\nb\nc\nd\n", encoding="utf-8")
+    diff = """\
+--- a/t.txt
++++ b/t.txt
+@@ -2,1 +2,2 @@
+ b
++b_extra
+@@ -4,1 +5,1 @@
+-d
++D
+"""
+    wp.apply_unified_patch(diff)
+    assert (ws / "t.txt").read_text(encoding="utf-8") == "a\nb\nb_extra\nc\nD\n"
 
 
 def test_apply_deletes_file(ws):
@@ -149,3 +166,22 @@ def test_apply_preserves_missing_trailing_newline(ws):
 """
     wp.apply_unified_patch(diff)
     assert (ws / "nl.txt").read_bytes() == b"patched"
+
+
+def test_workspace_search_replace_single(ws):
+    (ws / "x.py").write_text("foo = 1\n  bar = 2\n", encoding="utf-8")
+    out = wp.workspace_search_replace("x.py", "  bar = 2\n", "  bar = 99\n")
+    assert "updated" in out
+    assert (ws / "x.py").read_text() == "foo = 1\n  bar = 99\n"
+
+
+def test_workspace_search_replace_requires_unique(ws):
+    (ws / "d.txt").write_text("a\na\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="matches 2 times"):
+        wp.workspace_search_replace("d.txt", "a\n", "b\n", replace_all=False)
+
+
+def test_workspace_search_replace_all(ws):
+    (ws / "d.txt").write_text("a\na\n", encoding="utf-8")
+    wp.workspace_search_replace("d.txt", "a\n", "x\n", replace_all=True)
+    assert (ws / "d.txt").read_text() == "x\nx\n"

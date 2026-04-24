@@ -220,13 +220,14 @@ Every command is appended with `__rc=$?; echo "<sentinel>:$__rc"` on a separate 
 | `AGENT_WORKSPACE` | `<project-root>/workspace` | Workspace directory path |
 | `AGENT_SHELL_TIMEOUT` | `30` | Default per-command timeout (seconds) |
 
-### 5.4 Workspace patch tool (`tools/workspace_patch.py`)
+### 5.4 Workspace edit tools (`tools/workspace_patch.py`)
 
 | Tool | Description |
 |---|---|
+| `workspace_search_replace(path, old_string, new_string, replace_all?)` | Exact substring replace in a file under `WORKSPACE` (default: one match; set `replace_all` for every occurrence) |
 | `apply_unified_patch(unified_diff)` | Apply a git-style unified diff (`---` / `+++` / `@@`) to paths under `WORKSPACE` |
 
-Paths are the same rooted directory as `shell_exec` (`AGENT_WORKSPACE`). Read current file contents with `shell_exec` (e.g. `cat`, `head`, `sed`) before generating a patch so hunks match. The implementation applies hunks in pure Python (no `patch` binary). `a/` and `b/` prefixes from `git diff` are accepted; `---` / `+++` must not use absolute paths. Renames (different paths on `---` vs `+++`) are rejected — edit in place or delete + add separately. Patches apply hunks bottom-up and require exact line matches for each hunk’s old side; on mismatch the tool errors so the model can re-read via shell and regenerate. New files use `--- /dev/null` + `+++ b/relative/path`; deletes use `--- a/path` + `+++ /dev/null`. Writes are atomic (temp file + `os.replace`). Runs via `asyncio.to_thread` like other blocking sync tools.
+Paths are the same rooted directory as `shell_exec` (`AGENT_WORKSPACE`). Read current file contents with `shell_exec` before editing. **`workspace_search_replace`** is the simplest path when the model can copy a unique verbatim span. **`apply_unified_patch`** suits multi-hunk edits; every context line in a hunk must match the file **exactly** (including leading spaces). Multi-hunk patches use **original** (pre-edit) line numbers in each `@@` header; the implementation applies hunks **top-to-bottom** and adjusts for line-count changes from earlier hunks. Pure Python (no `patch` binary). `a/` and `b/` prefixes from `git diff` are accepted; `---` / `+++` must not use absolute paths. Renames (different paths on `---` vs `+++`) are rejected. New files use `--- /dev/null` + `+++ b/relative/path`; deletes use `--- a/path` + `+++ /dev/null`. Writes are atomic (temp file + `os.replace`). Both tools run via `asyncio.to_thread` like other blocking sync tools.
 
 ---
 
@@ -418,7 +419,7 @@ The prompt is organized into nine sections; each one is short and independent so
 - **Response style** — rendering specifics only: visible answer outside `<thought>/<thinking>/<redacted_*>` blocks, Markdown + KaTeX rendering, native `tool_calls` only.
 - **System context** — one paragraph telling the model the runtime it operates in (multi-turn loop, streaming UI, tool-step rows, full history replay, repair call on empty visible output).
 - **Context, turns, and tool results** — unified mental model: what a *turn* is; all tool results stay **raw for every LLM call in that turn**; compaction to `[history summary of <tool_name>]` after the turn ends (or via `main.py` finalizer); prior turns in replay show summaries; re-call the tool for verbatim raw on a new turn; `Takeaways:` body and summary accuracy / sparsity / `fetch_url` pagination hints.
-- **Tool strategy** — concrete per-tool decision rules: `fetch_url` (prompt vs raw with explicit 128k vs 8k semantics, pagination, invalid verification: impeaching prompt output from raw chunk 0 alone), `recall` (silent on miss), `remember` (categories and what to store / not store), `list_memories` / `delete_memory`, `shell_exec` to read workspace files, then `apply_unified_patch` as the preferred edit path (faster/cheaper than whole-file rewrites); patch hunks must match current file text exactly.
+- **Tool strategy** — concrete per-tool decision rules: `fetch_url` (prompt vs raw with explicit 128k vs 8k semantics, pagination, invalid verification: impeaching prompt output from raw chunk 0 alone), `recall` (silent on miss), `remember` (categories and what to store / not store), `list_memories` / `delete_memory`, `shell_exec` to read workspace files, then `workspace_search_replace` for most code edits (verbatim `old_string`) or `apply_unified_patch` when a correct multi-hunk diff is available; patch context must match exactly (indentation).
 - **Failure handling** — tool errors are data; retry, switch strategy, or report concisely; don't loop on a failing approach.
 
 ---

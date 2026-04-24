@@ -103,6 +103,7 @@ _BLOCKING_SYNC_TOOLS = frozenset({
     "list_memories",
     "delete_memory",
     "shell_exec",
+    "workspace_search_replace",
     "apply_unified_patch",
 })
 
@@ -273,7 +274,8 @@ def _tool_docs() -> str:
         "## Tool usage\n"
         "Use native API function/tool_calls only (no XML or fenced tool syntax).\n"
         "Emit at most one tool call per assistant message; wait for result before the next tool call.\n"
-        "For code edits, prefer apply_unified_patch over whole-file rewrites; read with shell_exec first so hunks match exactly.\n"
+        "For code edits: prefer workspace_search_replace with a verbatim old_string from shell_exec; "
+        "use apply_unified_patch for multi-region edits when the diff is correct (context must match exactly, including indentation).\n"
     )
 
 
