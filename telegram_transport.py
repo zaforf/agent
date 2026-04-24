@@ -287,10 +287,9 @@ async def _handle_command(
 
     if cmd in ("start", "help"):
         a = _active_sid(chat_id, thread_key)
-        # Telegram parse_mode=HTML: no <br>; newlines in the string are line breaks in chat.
         help_body = (
-            "Commands (bot uses HTML for bold, etc.):\n"
-            "/new — new session (short <b>letters-only</b> id for /switch)\n"
+            "Commands:\n"
+            "/new — new session (short letters-only id for /switch)\n"
             "/sessions — list for this chat\n"
             "/switch &lt;id or short slug&gt;\n"
             "/nuke — summarize &amp; reset current session\n"
