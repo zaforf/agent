@@ -203,6 +203,7 @@ async def _handle_command(
                 "The summary must preserve everything important for continuing work."
                 + extra,
                 sid,
+                output_channel="telegram",
             )
         except Exception as e:
             log.exception("telegram /nuke failed")
@@ -252,7 +253,7 @@ async def _handle_message(client: httpx.AsyncClient, api: str, message: dict[str
     sid = _active_sid(chat_id, thread_key)
     await _send_chat_action(client, api, chat_id, thread_key=thread_key)
     try:
-        reply, _ = await main.complete_chat_turn(text, sid)
+        reply, _ = await main.complete_chat_turn(text, sid, output_channel="telegram")
     except Exception as e:
         log.exception("telegram chat failed")
         await _send_text(client, api, chat_id, f"Error: {e}", thread_key=thread_key)

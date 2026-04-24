@@ -115,6 +115,13 @@ def test_build_system_prompt_includes_seeded_prompt_and_compact_tool_policy(tmp_
     assert "Do not repeat identical failing calls" in prompt
 
 
+def test_build_system_prompt_telegram_channel_adds_plain_text_rules(tmp_system_prompt):
+    prompt = agent._build_system_prompt(output_channel="telegram")
+    assert "Test system prompt" in prompt
+    assert "Output (Telegram)" in prompt
+    assert "no Markdown" in prompt
+
+
 def test_build_system_prompt_forbids_xml_tool_format(tmp_system_prompt):
     prompt = agent._build_system_prompt()
     # The generated tool docs section tells the model to use native tool_calls

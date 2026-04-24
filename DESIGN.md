@@ -350,6 +350,8 @@ When `TELEGRAM_BOT_TOKEN` is set, `main.py` starts **long-polling** `getUpdates`
 
 **Limits**: Plain text only; long replies are split at Telegram’s 4096-character boundary. No attachment forwarding from Telegram in this version.
 
+**Formatting**: The bot uses default `sendMessage` (no HTML/MarkdownV2). `main.complete_chat_turn(..., output_channel="telegram")` appends a short “plain text, no LaTeX/fences” system block so the model’s visible replies read well in chat. The same session in the **web** UI still uses the normal system prompt in streaming mode (unchanged for `POST /chat/stream`); history stores user text and assistant turns as usual.
+
 ### 8.2 SSE event types (`/chat/stream`)
 
 | `type` | Fields | Description |

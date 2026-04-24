@@ -280,16 +280,22 @@ async def complete_chat_turn(
     session_id: str,
     *,
     attachments: list[Attachment] | None = None,
+    output_channel: str = "default",
 ) -> tuple[str, str]:
     """Run one non-streaming agent turn: same persistence rules as ``POST /chat``.
 
     Returns ``(assistant_visible_text, provider_name)``. Mutates ``_cache`` / SQLite.
+
+    Use ``output_channel="telegram"`` for the Telegram bot (plain-text-friendly system prompt);
+    the web UI uses the default.
     """
     attachments = attachments or []
     history = _get_history(session_id)
     user_content = _build_user_content(message, attachments)
     display_files = [{"type": a.type, "filename": a.filename} for a in attachments]
-    response, provider, turn_messages, pending = await agent.run(user_content, history)
+    response, provider, turn_messages, pending = await agent.run(
+        user_content, history, output_channel=output_channel
+    )
 
     nuke_summary = _extract_nuke_summary(turn_messages)
     if nuke_summary is not None:

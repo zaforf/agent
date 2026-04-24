@@ -290,7 +290,19 @@ def _tool_docs() -> str:
     )
 
 
-def _build_system_prompt() -> str:
+# Appended to system when `output_channel=telegram` (no Markdown/HTML: Telegram
+# sends plain `sendMessage` with default parse mode).
+_TELEGRAM_FORMAT_APPEND = (
+    "\n## Output (Telegram)\n"
+    "The user is on Telegram. Your visible replies are sent as plain text: "
+    "no Markdown, no HTML, no `fenced` code blocks, and no LaTeX/KaTeX. "
+    "Use line breaks, short lines, simple '-' bullets or numbered lines, and plain wording. "
+    "For code, either very short one-line snippets or 'say file path + what to change' — "
+    "not multi-line listings unless the user explicitly wants code pasted.\n"
+)
+
+
+def _build_system_prompt(*, output_channel: str = "default") -> str:
     # Inject today's date so the model has a concrete present to reason
     # against its January 2025 training cutoff. Without this anchor,
     # "post-cutoff" stays abstract and the model's RLHF-trained reflex to
@@ -298,7 +310,10 @@ def _build_system_prompt() -> str:
     # tool-grounded data. See DESIGN §10.
     today = datetime.date.today().strftime("%A %Y-%m-%d")
     base = config.SYSTEM_PROMPT_PATH.read_text()
-    return f"Today's date: {today}\n\n{base}\n\n{_tool_docs()}"
+    out = f"Today's date: {today}\n\n{base}\n\n{_tool_docs()}"
+    if output_channel == "telegram":
+        out += _TELEGRAM_FORMAT_APPEND
+    return out
 
 
 # ── Tool execution helper ─────────────────────────────────────────────────────
@@ -422,7 +437,10 @@ async def _apply_finished_summaries(
 # ── Non-streaming run (used by /chat endpoint) ────────────────────────────────
 
 async def run(
-    user_content: "str | list", history: list[dict]
+    user_content: "str | list",
+    history: list[dict],
+    *,
+    output_channel: str = "default",
 ) -> tuple[str, str, list[dict], list[tuple[dict, asyncio.Task]]]:
     """Returns (final_response, provider, turn_messages, pending_summaries).
 
@@ -443,8 +461,9 @@ async def run(
     """
     history = _sanitize_history(history)
     _user_text = _user_content_as_text(user_content)
+    system_prompt = _build_system_prompt(output_channel=output_channel)
     messages = [
-        {"role": "system", "content": _build_system_prompt()},
+        {"role": "system", "content": system_prompt},
         *history,
         {"role": "user", "content": user_content},
     ]
@@ -518,7 +537,12 @@ async def run(
 
 # ── Streaming run (used by /chat/stream endpoint) ─────────────────────────────
 
-async def run_stream(user_content: "str | list", history: list[dict]):
+async def run_stream(
+    user_content: "str | list",
+    history: list[dict],
+    *,
+    output_channel: str = "default",
+):
     """
     Async generator yielding event dicts:
       {"type": "tool_call",   "name": str, "args": dict}
@@ -538,8 +562,9 @@ async def run_stream(user_content: "str | list", history: list[dict]):
     """
     history = _sanitize_history(history)
     _user_text = _user_content_as_text(user_content)
+    system_prompt = _build_system_prompt(output_channel=output_channel)
     messages = [
-        {"role": "system", "content": _build_system_prompt()},
+        {"role": "system", "content": system_prompt},
         *history,
         {"role": "user", "content": user_content},
     ]

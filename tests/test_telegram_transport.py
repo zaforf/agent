@@ -93,7 +93,7 @@ def test_command_new_sets_active():
 def test_command_sessions_lists_tg_sessions_only(tmp_db, monkeypatch):
     monkeypatch.setattr(main, "_cache", {})
 
-    async def fake_run(user_content, history):
+    async def fake_run(user_content, history, **kwargs):
         turn = [
             {"role": "user", "content": user_content},
             {"role": "assistant", "content": "ok"},
@@ -121,7 +121,7 @@ def test_command_sessions_lists_tg_sessions_only(tmp_db, monkeypatch):
 def test_command_switch_rejects_foreign_session(tmp_db, monkeypatch):
     monkeypatch.setattr(main, "_cache", {})
 
-    async def fake_run(user_content, history):
+    async def fake_run(user_content, history, **kwargs):
         turn = [
             {"role": "user", "content": user_content},
             {"role": "assistant", "content": "x"},
@@ -148,7 +148,7 @@ def test_command_switch_rejects_foreign_session(tmp_db, monkeypatch):
 def test_command_switch_accepts_listed_session(tmp_db, monkeypatch):
     monkeypatch.setattr(main, "_cache", {})
 
-    async def fake_run(user_content, history):
+    async def fake_run(user_content, history, **kwargs):
         turn = [
             {"role": "user", "content": user_content},
             {"role": "assistant", "content": "x"},
@@ -173,7 +173,7 @@ def test_allowed_user_ids_blocks_stranger(monkeypatch):
     monkeypatch.setattr(config, "TELEGRAM_ALLOWED_USER_IDS", frozenset({100}))
     calls: list[str] = []
 
-    async def fake_complete(msg: str, sid: str, *, attachments=None):
+    async def fake_complete(msg: str, sid: str, *, attachments=None, **kwargs):
         calls.append(msg)
         return "no", "fake"
 
@@ -195,7 +195,7 @@ def test_allowed_user_ids_allows_listed_user(monkeypatch):
     monkeypatch.setattr(config, "TELEGRAM_ALLOWED_USER_IDS", frozenset({100}))
     calls: list[str] = []
 
-    async def fake_complete(msg: str, sid: str, *, attachments=None):
+    async def fake_complete(msg: str, sid: str, *, attachments=None, **kwargs):
         calls.append(msg)
         return "ok", "fake"
 
@@ -216,7 +216,7 @@ def test_allowed_user_ids_allows_listed_user(monkeypatch):
 def test_complete_chat_turn_used_by_transport(monkeypatch):
     calls: list[tuple[str, str]] = []
 
-    async def fake_complete(msg: str, sid: str, *, attachments=None):
+    async def fake_complete(msg: str, sid: str, *, attachments=None, **kwargs):
         calls.append((sid, msg))
         return f"echo:{msg}", "fake"
 
