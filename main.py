@@ -3,7 +3,7 @@ import io
 import json
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Literal
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -41,6 +41,71 @@ _cache: dict[str, list[dict]] = {}
 # without this, Python may garbage-collect an in-flight fire-and-forget task.
 _background_tasks: set[asyncio.Task] = set()
 
+
+
+
+class _StreamTurnState:
+    """Server-owned lifecycle for one streaming turn per session."""
+
+    def __init__(self, session_id: str, req_message: str, display_files: list[dict]):
+        self.session_id = session_id
+        self.req_message = req_message
+        self.display_files = display_files
+        self.queue: asyncio.Queue[dict | None] = asyncio.Queue()
+        self.turn_messages: list[dict] = []
+        self.pending: list[tuple[dict, asyncio.Task]] = []
+        self.full_response = ""
+        self.nuke_summary: str | None = None
+        self.completed = False
+        self.was_cancelled = False
+        self.task: asyncio.Task | None = None
+
+
+_active_stream_turns: dict[str, _StreamTurnState] = {}
+
+
+async def _persist_stream_turn(state: _StreamTurnState) -> None:
+    """Persist or reset history after producer completion (disconnect-safe)."""
+    history = _get_history(state.session_id)
+
+    if state.nuke_summary is not None:
+        _apply_nuke(state.session_id, history, state.nuke_summary)
+        return
+
+    if (not state.was_cancelled) and state.full_response and state.turn_messages:
+        history.extend(state.turn_messages)
+        row_id = db.append_turn(state.session_id, state.req_message, state.turn_messages)
+        _spawn_finalizer(state.pending, state.turn_messages, row_id)
+
+
+async def _run_stream_turn(
+    state: _StreamTurnState,
+    user_content: "str | list",
+    history: list[dict],
+) -> None:
+    """Background producer: runs agent stream, queues SSE events, persists on completion."""
+    try:
+        async for event in agent.run_stream(user_content, history):
+            if event.get("type") == "text_chunk":
+                state.full_response += event.get("text", "")
+            elif event.get("type") == "done":
+                state.turn_messages = event.get("turn_messages", [])
+                state.pending = event.pop("pending_summaries", [])
+                state.nuke_summary = _extract_nuke_summary(state.turn_messages)
+                if state.nuke_summary is None:
+                    _patch_display_files(state.turn_messages, state.display_files)
+            await state.queue.put(event)
+    except asyncio.CancelledError:
+        state.was_cancelled = True
+        await state.queue.put({"type": "cancelled"})
+        raise
+    except Exception as e:
+        await state.queue.put({"type": "error", "detail": str(e)})
+    finally:
+        with suppress(Exception):
+            await _persist_stream_turn(state)
+        state.completed = True
+        await state.queue.put(None)
 
 def _get_history(session_id: str) -> list[dict]:
     if session_id not in _cache:
@@ -229,66 +294,45 @@ async def chat(req: ChatRequest):
 
 # ── Chat (streaming SSE) ───────────────────────────────────────────────────────
 
-_active_stream_tasks: dict[str, asyncio.Task] = {}
-
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest):
     history = _get_history(req.session_id)
     user_content = _build_user_content(req.message, req.attachments)
     display_files = [{"type": a.type, "filename": a.filename} for a in req.attachments]
 
+    # One active producer per session. A new request for same session while one
+    # is running attaches to existing stream events instead of starting duplicate generation.
+    state = _active_stream_turns.get(req.session_id)
+    if state is None or state.completed:
+        state = _StreamTurnState(req.session_id, req.message, display_files)
+        state.task = asyncio.create_task(_run_stream_turn(state, user_content, history))
+        _active_stream_turns[req.session_id] = state
+
     async def generate():
-        full_response  = ""
-        turn_messages: list[dict] = []
-        pending: list[tuple[dict, asyncio.Task]] = []
-        was_cancelled = False
-        nuke_summary: str | None = None
-        this_task = asyncio.current_task()
-        if this_task is not None:
-            _active_stream_tasks[req.session_id] = this_task
-
         try:
-            async for event in agent.run_stream(user_content, history):
-                if event["type"] == "text_chunk":
-                    full_response += event["text"]
-                elif event["type"] == "done":
-                    turn_messages = event.get("turn_messages", [])
-                    # Pop tasks before serializing — they are not JSON-safe and
-                    # are handed to the background finalizer below.
-                    pending = event.pop("pending_summaries", [])
-                    nuke_summary = _extract_nuke_summary(turn_messages)
-                    if nuke_summary is None:
-                        _patch_display_files(turn_messages, display_files)
-
-                yield f"data: {json.dumps(event)}\n\n"
-
+            while True:
+                item = await state.queue.get()
+                if item is None:
+                    break
+                yield f"data: {json.dumps(item)}\n\n"
         except asyncio.CancelledError:
-            was_cancelled = True
-            yield f"data: {json.dumps({'type': 'cancelled'})}\n\n"
-            return
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
+            # Client disconnected; generation continues server-side for durability.
             return
         finally:
-            if this_task is not None and _active_stream_tasks.get(req.session_id) is this_task:
-                _active_stream_tasks.pop(req.session_id, None)
-
-        if nuke_summary is not None:
-            _apply_nuke(req.session_id, history, nuke_summary)
-        elif (not was_cancelled) and full_response and turn_messages:
-            history.extend(turn_messages)
-            row_id = db.append_turn(req.session_id, req.message, turn_messages)
-            _spawn_finalizer(pending, turn_messages, row_id)
+            # Cleanup finished states.
+            cur = _active_stream_turns.get(req.session_id)
+            if cur is state and state.completed:
+                _active_stream_turns.pop(req.session_id, None)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @app.post("/chat/stream/cancel")
 async def chat_stream_cancel(req: StreamCancelRequest):
-    task = _active_stream_tasks.get(req.session_id)
-    if task is None or task.done():
+    state = _active_stream_turns.get(req.session_id)
+    if state is None or state.task is None or state.task.done():
         return {"cancelled": False}
-    task.cancel()
+    state.task.cancel()
     return {"cancelled": True}
 
 
