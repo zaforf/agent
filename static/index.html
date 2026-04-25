@@ -454,16 +454,15 @@
     /* Paste chip — large paste collapsed into a compact inline placeholder */
     .paste-chip {
       background: var(--panel);
-      border: 1px solid var(--accent);
+      border: 1px solid var(--border-2);
       border-radius: 3px;
-      padding: 1px 6px;
+      padding: 1px 5px;
       font-size: 13px;
       font-family: var(--mono);
-      color: var(--accent);
+      color: var(--text-2);
       user-select: none;
       cursor: default;
       white-space: nowrap;
-      opacity: 0.75;
     }
 
     /* File chips displayed in sent user bubble */
@@ -1325,7 +1324,7 @@
   /** Collapse a large paste into a compact inline chip; store full text for serialization. */
   function insertPasteChip(pasteId, text) {
     const nLines = text.split('\n').length;
-    const label  = nLines > 1 ? `[paste · ${nLines} lines]` : `[paste · ${text.length} chars]`;
+    const label  = nLines > 1 ? `[paste - ${nLines} lines]` : `[paste - ${text.length} chars]`;
 
     const chip = document.createElement('span');
     chip.className       = 'paste-chip';
