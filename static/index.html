@@ -699,6 +699,7 @@
         { left: '\\(', right: '\\)', display: false },
       ],
       throwOnError: false,
+      errorColor:   'inherit',
     });
   }
 
@@ -764,7 +765,7 @@
   }
 
   function isNearBottom(el) {
-    return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   }
 
   function scheduleMathRender(el) {
@@ -1129,7 +1130,7 @@
       if (agentMd) {
         agentMd.innerHTML = renderStreamingMarkdown(bubbleBuffer);
         if (_hasMath(bubbleBuffer)) renderMath(agentMd);
-        scrollFeed();
+        if (stickToBottom) scrollFeed(true);
       }
       _charDrainId = requestAnimationFrame(_drainCharQueue);
     }
