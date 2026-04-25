@@ -451,6 +451,21 @@
       white-space: nowrap;
     }
 
+    /* Paste chip — large paste collapsed into a compact inline placeholder */
+    .paste-chip {
+      background: var(--panel);
+      border: 1px solid var(--accent);
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: 13px;
+      font-family: var(--mono);
+      color: var(--accent);
+      user-select: none;
+      cursor: default;
+      white-space: nowrap;
+      opacity: 0.75;
+    }
+
     /* File chips displayed in sent user bubble */
     .msg-files {
       display: flex;
@@ -1243,10 +1258,16 @@
 
   // fileId → { type, filename, content }
   const attachedFiles = new Map();
+  // pasteId → full pasted text string
+  const pastedTexts = new Map();
+
+  const _PASTE_THRESHOLD_LINES = 5;
+  const _PASTE_THRESHOLD_CHARS = 500;
 
   function clearInput() {
     input.innerHTML = '';
     attachedFiles.clear();
+    pastedTexts.clear();
   }
 
   /** Parse the contenteditable div into { text, attachments }. */
@@ -1262,6 +1283,9 @@
       } else if (node.classList?.contains('file-chip')) {
         const fileData = attachedFiles.get(node.dataset.fileId);
         if (fileData) attachments.push(fileData);
+      } else if (node.classList?.contains('paste-chip')) {
+        const pasted = pastedTexts.get(node.dataset.pasteId);
+        if (pasted != null) textParts.push(pasted);
       } else {
         const isBlock = node.nodeName === 'DIV' || node.nodeName === 'P';
         if (isBlock && textParts.length && !textParts[textParts.length - 1].endsWith('\n')) {
@@ -1282,6 +1306,32 @@
     chip.contentEditable = 'false';
     chip.dataset.fileId  = fileId;
     chip.textContent     = filename.length > 24 ? filename.slice(0, 21) + '…' : filename;
+
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && input.contains(sel.anchorNode)) {
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(chip);
+      range.setStartAfter(chip);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else {
+      input.appendChild(chip);
+    }
+    input.focus();
+  }
+
+  /** Collapse a large paste into a compact inline chip; store full text for serialization. */
+  function insertPasteChip(pasteId, text) {
+    const nLines = text.split('\n').length;
+    const label  = nLines > 1 ? `[paste · ${nLines} lines]` : `[paste · ${text.length} chars]`;
+
+    const chip = document.createElement('span');
+    chip.className       = 'paste-chip';
+    chip.contentEditable = 'false';
+    chip.dataset.pasteId = pasteId;
+    chip.textContent     = label;
 
     const sel = window.getSelection();
     if (sel && sel.rangeCount > 0 && input.contains(sel.anchorNode)) {
@@ -1405,16 +1455,23 @@
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   });
 
-  // Strip rich formatting on paste — keep plain text only.
+  // Strip rich formatting on paste. Collapse large pastes into a compact chip.
   input.addEventListener('paste', e => {
     e.preventDefault();
     const text = e.clipboardData.getData('text/plain');
-    document.execCommand('insertText', false, text);
+    const nLines = text.split('\n').length;
+    if (nLines >= _PASTE_THRESHOLD_LINES || text.length >= _PASTE_THRESHOLD_CHARS) {
+      const pasteId = Math.random().toString(36).slice(2);
+      pastedTexts.set(pasteId, text);
+      insertPasteChip(pasteId, text);
+    } else {
+      document.execCommand('insertText', false, text);
+    }
   });
 
   // Clean up any stray <br> Chrome inserts when the div becomes empty.
   input.addEventListener('input', () => {
-    if (!input.textContent.trim() && !input.querySelector('.file-chip')) {
+    if (!input.textContent.trim() && !input.querySelector('.file-chip, .paste-chip')) {
       input.innerHTML = '';
     }
   });
