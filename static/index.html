@@ -1124,8 +1124,7 @@
 
     function _drainCharQueue() {
       if (!_charQueue) { _charDrainId = null; return; }
-      const nl   = _charQueue.indexOf('\n');
-      const take = nl !== -1 ? nl + 1 : Math.max(1, Math.ceil(_charQueue.length / 8));
+      const take = Math.max(1, Math.ceil(_charQueue.length / 8));
       bubbleBuffer += _charQueue.slice(0, take);
       _charQueue    = _charQueue.slice(take);
       if (agentMd) {
