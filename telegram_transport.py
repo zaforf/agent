@@ -156,6 +156,18 @@ async def _send_chat_action(
         await client.post(f"{api}/sendChatAction", json=body)
 
 
+async def _typing_loop(
+    client: httpx.AsyncClient, api: str, chat_id: int, *, thread_key: int
+) -> None:
+    """Re-send typing every 4 s until cancelled (Telegram indicator expires after ~5 s)."""
+    try:
+        while True:
+            await _send_chat_action(client, api, chat_id, thread_key=thread_key)
+            await asyncio.sleep(4)
+    except asyncio.CancelledError:
+        pass
+
+
 async def _send_text(
     client: httpx.AsyncClient,
     api: str,
@@ -269,6 +281,7 @@ async def _handle_command(
         hint = arg.strip()
         extra = f"\n\nUser note: {hint}" if hint else ""
         await _send_text(client, api, chat_id, "Nuking session (summarizing and resetting)…", thread_key=thread_key)
+        typing = asyncio.create_task(_typing_loop(client, api, chat_id, thread_key=thread_key))
         try:
             reply, _ = await main.complete_chat_turn(
                 "Use the nuke_chat tool now to reset this conversation. "
@@ -278,11 +291,13 @@ async def _handle_command(
                 output_channel="telegram",
             )
         except Exception as e:
+            typing.cancel()
             log.exception("telegram /nuke failed")
             await _send_text(
                 client, api, chat_id, f"Error: {_html_escape(str(e))}", thread_key=thread_key
             )
             return
+        typing.cancel()
         await _send_text(client, api, chat_id, _agent_reply_for_tg(reply), thread_key=thread_key)
         return
 
@@ -329,15 +344,17 @@ async def _handle_message(client: httpx.AsyncClient, api: str, message: dict[str
         return
 
     sid = _active_sid(chat_id, thread_key)
-    await _send_chat_action(client, api, chat_id, thread_key=thread_key)
+    typing = asyncio.create_task(_typing_loop(client, api, chat_id, thread_key=thread_key))
     try:
         reply, _ = await main.complete_chat_turn(text, sid, output_channel="telegram")
     except Exception as e:
+        typing.cancel()
         log.exception("telegram chat failed")
         await _send_text(
             client, api, chat_id, f"Error: {_html_escape(str(e))}", thread_key=thread_key
         )
         return
+    typing.cancel()
     await _send_text(client, api, chat_id, _agent_reply_for_tg(reply), thread_key=thread_key)
 
 
