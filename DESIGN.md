@@ -130,7 +130,7 @@ All memories are stored under the single user ID `"user"`.
 
 | Tool | Description |
 |---|---|
-| `remember(content, category)` | Store a durable fact. Categories: `user`, `preference`, `fact`, `project`. Only for facts worth recalling in a future conversation. Implementation uses Mem0 **`infer=False`** so the exact string is embedded and written to Qdrant; Mem0’s default **`infer=True`** path uses an LLM to extract facts and can persist nothing if extraction fails, which made `recall` / `list_memories` look empty despite a “Stored” reply. |
+| `remember(content, category)` | Store a durable fact. Categories: `user`, `preference`, `fact`, `project`. Prefer **atomic** entries when practical (see system prompt). Only for facts worth recalling in a future conversation. **`MEM0_REMEMBER_INFER`** (default **false**): `infer=False` embeds the exact `content`. Set **`MEM0_REMEMBER_INFER=1`** to use Mem0 **`infer=True`** so the **Gemini** Mem0 LLM (`MEM0_LLM_MODEL`) may extract or split text into multiple stored facts—useful with current Gemini-backed extraction; still nondeterministic and may persist nothing if extraction returns no facts. |
 | `recall(query)` | Semantic search over stored memories. Returns up to 5 results. |
 | `list_memories()` | List all memories with IDs and categories. |
 | `delete_memory(memory_id)` | Delete a specific memory by full ID. |

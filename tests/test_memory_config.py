@@ -28,6 +28,19 @@ def test_mem0_config_uses_gemini_embedder_and_dims(monkeypatch):
     assert cfg["vector_store"]["config"]["embedding_model_dims"] == 768
 
 
+def test_mem0_remember_infer_parses_env(monkeypatch):
+    import importlib
+
+    import config
+
+    monkeypatch.setenv("MEM0_REMEMBER_INFER", "1")
+    importlib.reload(config)
+    assert config.MEM0_REMEMBER_INFER is True
+    monkeypatch.setenv("MEM0_REMEMBER_INFER", "")
+    importlib.reload(config)
+    assert config.MEM0_REMEMBER_INFER is False
+
+
 def test_memory_tools_are_blocking_for_async_loop():
     """Mem0 work must not block the event loop (gunicorn worker timeouts)."""
     assert "remember" in agent._BLOCKING_SYNC_TOOLS

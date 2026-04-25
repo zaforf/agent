@@ -47,14 +47,13 @@ def _get_memory() -> Memory:
 
 
 def remember(content: str, category: str = "fact") -> str:
-    # infer=False: embed and persist the string as-is. With infer=True (mem0 default),
-    # LLM extraction can fail or return no facts — then nothing is written to Qdrant
-    # but the tool still looked "successful", so recall/list stay empty.
+    # infer flag from config: False = store exact string; True = Mem0 LLM may extract/split
+    # (see MEM0_REMEMBER_INFER). Extraction can still return no new facts; monitor if recall feels empty.
     _get_memory().add(
         content,
         user_id=USER_ID,
         metadata={"category": category},
-        infer=False,
+        infer=config.MEM0_REMEMBER_INFER,
     )
     return f"Stored: {content}"
 

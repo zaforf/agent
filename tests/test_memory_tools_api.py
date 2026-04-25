@@ -40,17 +40,25 @@ def test_get_all_api_calls_get_all_with_filters():
     mock_mem.get_all.assert_called_once_with(filters={"user_id": memory.USER_ID})
 
 
-def test_remember_persists_with_infer_false():
-    """infer=False guarantees Qdrant write of the tool string; infer=True can no-op."""
+def test_remember_persists_with_infer_flag_from_config(monkeypatch):
+    """remember() passes config.MEM0_REMEMBER_INFER to mem0.add (default False)."""
     mock_mem = MagicMock()
     mock_mem.add.return_value = {"results": [{"id": "1", "memory": "x", "event": "ADD"}]}
 
+    monkeypatch.setattr(memory.config, "MEM0_REMEMBER_INFER", False)
     with patch.object(memory, "_get_memory", return_value=mock_mem):
         memory.remember("favorite color is blue", category="preference")
-
     mock_mem.add.assert_called_once_with(
         "favorite color is blue",
         user_id=memory.USER_ID,
         metadata={"category": "preference"},
         infer=False,
+    )
+
+    mock_mem.reset_mock()
+    monkeypatch.setattr(memory.config, "MEM0_REMEMBER_INFER", True)
+    with patch.object(memory, "_get_memory", return_value=mock_mem):
+        memory.remember("a", category="fact")
+    mock_mem.add.assert_called_once_with(
+        "a", user_id=memory.USER_ID, metadata={"category": "fact"}, infer=True
     )
