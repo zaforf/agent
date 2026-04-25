@@ -54,3 +54,12 @@ def test_remember_persists_with_infer_false():
         metadata={"category": "preference"},
         infer=False,
     )
+
+
+def test_remember_schema_mentions_atomic_memories():
+    remember_schema = next(
+        s for s in memory.SCHEMAS if s["function"]["name"] == "remember"
+    )
+    desc = remember_schema["function"]["description"]
+    assert "Prefer atomic memories" in desc
+    assert "one distinct fact/preference per call" in desc

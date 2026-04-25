@@ -98,6 +98,7 @@ SCHEMAS = [
             "name": "remember",
             "description": (
                 "Store a durable fact to long-term memory. "
+                "Prefer atomic memories: one distinct fact/preference per call unless multiple points are inseparable. "
                 "ONLY call for facts worth recalling in a completely different future conversation: "
                 "user's name, skills, ongoing projects, strong preferences, important context. "
                 "Do NOT store: what was asked in this conversation, temporary context, "
