@@ -699,6 +699,7 @@
         { left: '\\(', right: '\\)', display: false },
       ],
       throwOnError: false,
+      errorColor:   'inherit',
     });
   }
 
@@ -764,7 +765,7 @@
   }
 
   function isNearBottom(el) {
-    return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   }
 
   function scheduleMathRender(el) {
@@ -1110,6 +1111,30 @@
     let remembered    = false;
     let providerUsed  = null;
 
+    // Char-by-char animation state
+    let _charQueue   = '';
+    let _charDrainId = null;
+
+    function _hasMath(t) { return /\$|\\\[|\\\(/.test(t); }
+
+    function _flushQueue() {
+      if (_charDrainId !== null) { cancelAnimationFrame(_charDrainId); _charDrainId = null; }
+      if (_charQueue) { bubbleBuffer += _charQueue; _charQueue = ''; }
+    }
+
+    function _drainCharQueue() {
+      if (!_charQueue) { _charDrainId = null; return; }
+      const take = Math.max(1, Math.ceil(_charQueue.length / 8));
+      bubbleBuffer += _charQueue.slice(0, take);
+      _charQueue    = _charQueue.slice(take);
+      if (agentMd) {
+        agentMd.innerHTML = renderStreamingMarkdown(bubbleBuffer);
+        if (_hasMath(bubbleBuffer)) renderMath(agentMd);
+        if (stickToBottom) scrollFeed(true);
+      }
+      _charDrainId = requestAnimationFrame(_drainCharQueue);
+    }
+
     try {
       // Yield so the browser can paint the user bubble before we open the
       // network stream (otherwise some engines batch layout until after fetch
@@ -1168,11 +1193,12 @@
 
           } else if (event.type === 'tool_call') {
             console.debug('[agent] tool_call:', event.name, event.args);
+            _flushQueue();
             // Finalize the current text bubble before appending tool steps,
             // then reset so the next text_chunk creates a new bubble after them.
             if (agentMd) {
               agentMd.innerHTML = renderMarkdown(bubbleBuffer);
-              setTimeout(() => renderMath(agentMd), 0);
+              renderMath(agentMd);
               agentMd = null;
               bubbleBuffer = '';
             }
@@ -1188,17 +1214,14 @@
 
           } else if (event.type === 'text_chunk') {
             _hideThinking();
-            if (!agentMd) {
-              agentMd = createAgentBubble(null);
-            }
-            textBuffer   += event.text;
-            bubbleBuffer += event.text;
-            agentMd.innerHTML = renderStreamingMarkdown(bubbleBuffer);
-            scheduleMathRender(agentMd);
-            scrollFeed();
+            if (!agentMd) agentMd = createAgentBubble(null);
+            textBuffer  += event.text;
+            _charQueue  += event.text;
+            if (_charDrainId === null) _charDrainId = requestAnimationFrame(_drainCharQueue);
 
           } else if (event.type === 'done') {
             providerUsed = event.provider;
+            _flushQueue();
             console.debug('[agent] done, provider:', providerUsed,
               'response chars:', textBuffer.length);
             if (event.turn_messages && event.turn_messages.length === 1 && event.turn_messages[0].role === 'assistant') {
@@ -1210,7 +1233,7 @@
             }
             if (agentMd) {
               agentMd.innerHTML = renderMarkdown(bubbleBuffer);
-              setTimeout(() => renderMath(agentMd), 0);
+              renderMath(agentMd);
 
               const primary = 'gemini-gemma4-31b';
               if (providerUsed && providerUsed !== primary) {
@@ -1226,6 +1249,7 @@
               loadSessions();
 
           } else if (event.type === 'cancelled') {
+            _flushQueue();
             if (agentMd) {
               const note = document.createElement('div');
               note.className = 'fallback-tag';
@@ -1244,6 +1268,7 @@
         addAgentMsg('**Error:** ' + String(e));
       }
     } finally {
+      _flushQueue();
       currentStreamController = null;
       isStreaming = false;
       sendBtn.textContent = 'Send';
