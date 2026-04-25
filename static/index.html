@@ -189,6 +189,7 @@
     #messages {
       flex: 1;
       overflow-y: auto;
+      overflow-anchor: none;
       padding: 24px 16px;
     }
 
@@ -1128,9 +1129,11 @@
       bubbleBuffer += _charQueue.slice(0, take);
       _charQueue    = _charQueue.slice(take);
       if (agentMd) {
+        const savedTop = stickToBottom ? null : messagesEl.scrollTop;
         agentMd.innerHTML = renderStreamingMarkdown(bubbleBuffer);
         if (_hasMath(bubbleBuffer)) renderMath(agentMd);
         if (stickToBottom) scrollFeed(true);
+        else messagesEl.scrollTop = savedTop;
       }
       _charDrainId = requestAnimationFrame(_drainCharQueue);
     }
