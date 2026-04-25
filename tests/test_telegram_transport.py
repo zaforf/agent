@@ -236,6 +236,8 @@ def test_allowed_user_ids_allows_listed_user(monkeypatch):
 
 
 def test_complete_chat_turn_used_by_transport(monkeypatch):
+    # Disable allowlist so the test is hermetic regardless of local .env.
+    monkeypatch.setattr(config, "TELEGRAM_ALLOWED_USER_IDS", None)
     calls: list[tuple[str, str]] = []
 
     async def fake_complete(msg: str, sid: str, *, attachments=None, **kwargs):
@@ -249,7 +251,7 @@ def test_complete_chat_turn_used_by_transport(monkeypatch):
         await tt._handle_message(
             client,
             "https://api.telegram.org/botTEST",
-            {"chat": {"id": 8}, "text": "hello tg"},
+            {"chat": {"id": 8}, "from": {"id": 42}, "text": "hello tg"},
         )
 
     asyncio.run(_run())
