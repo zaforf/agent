@@ -189,7 +189,7 @@
     #messages {
       flex: 1;
       overflow-y: auto;
-      padding: 24px 16px;
+      padding: 24px 16px 48px;
     }
 
     /* Constrain content width, centered */
@@ -583,7 +583,7 @@
         z-index: 60;
       }
       .panel-header { padding: 10px 12px; }
-      #messages { padding: 14px 10px; }
+      #messages { padding: 14px 10px 40px; }
       .msg-inner { gap: 12px; }
       #bar-wrap { padding: 8px 10px; }
       #bar { gap: 6px; }
@@ -790,8 +790,8 @@
           scrollFeed(true);
           return;
         }
-        assistants[assistants.length - 1].scrollIntoView({ block: 'end', behavior: 'auto' });
-        stickToBottom = isNearBottom(messagesEl);
+        scrollFeed(true);
+        stickToBottom = true;
       });
     });
   }
