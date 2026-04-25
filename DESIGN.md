@@ -395,7 +395,7 @@ Single-page app (`static/index.html`). All state is managed client-side except c
 
 **User messages**: plain text, pre-wrap, dark bubble.
 
-**Agent messages**: markdown rendered via Marked.js with `breaks: true, gfm: true`. LaTeX rendered via KaTeX `auto-render`. Each text segment between tool calls gets its own bubble.
+**Agent messages**: markdown rendered via Marked.js with `breaks: true, gfm: true`. LaTeX rendered via KaTeX `auto-render`. Each text segment between tool calls gets its own bubble. Fenced code blocks are syntax-highlighted via **highlight.js** (GitHub theme) and include a per-block **Copy** button (hover-to-reveal on desktop; always visible on mobile) that writes the raw code text to the clipboard.
 
 **Tool steps**: collapsible rows between bubbles. Collapsed: shows direction tag (`>`/`<`), tool name, and a short meta hint (first arg value or result character count). Expanded: shows full args/result (capped at 600 chars display).
 

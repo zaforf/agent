@@ -8,6 +8,10 @@
   <!-- Marked (markdown) -->
   <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
 
+  <!-- highlight.js (syntax highlighting) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/styles/github.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js"></script>
+
   <!-- KaTeX (LaTeX math) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
@@ -349,6 +353,36 @@
       font-size: 0.85em;
       line-height: 1.55;
     }
+
+    /* Code block wrapper (copy button + syntax highlight) */
+    .code-block {
+      position: relative;
+      margin: 0.65em 0;
+    }
+    .code-block pre { margin: 0; }
+    /* Let the pre container own the background; hljs adds only color spans */
+    .code-block .hljs { background: transparent; padding: 0; }
+    .copy-btn {
+      position: absolute;
+      top: 7px;
+      right: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-2);
+      font-family: var(--font);
+      font-size: 11px;
+      padding: 3px 8px;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+      user-select: none;
+      z-index: 1;
+    }
+    .code-block:hover .copy-btn,
+    .copy-btn:focus { opacity: 1; }
+    .copy-btn.copied { color: var(--call-accent); border-color: var(--call-accent); opacity: 1; }
+    @media (max-width: 760px) { .copy-btn { opacity: 0.75; } }
     .md-content a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
     .md-content strong { font-weight: 600; }
 
@@ -599,6 +633,25 @@
   // ── Markdown / Math setup ─────────────────────────────────
 
   marked.setOptions({ breaks: true, gfm: true });
+  marked.use({
+    renderer: {
+      code(token) {
+        // token is an object in marked v12; guard against any calling convention
+        const text = String((token && token.text != null) ? token.text : (token || ''));
+        const lang = token && typeof token === 'object' ? token.lang : null;
+        let highlighted;
+        try {
+          if (typeof hljs === 'undefined') throw new Error('hljs not loaded');
+          highlighted = (lang && hljs.getLanguage(lang))
+            ? hljs.highlight(text, { language: lang }).value
+            : hljs.highlightAuto(text).value;
+        } catch {
+          highlighted = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+        return `<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="hljs">${highlighted}</code></pre></div>\n`;
+      }
+    }
+  });
 
   function renderMarkdown(text) {
     return marked.parse(text);
@@ -656,6 +709,15 @@
       .replace(/&/g,'&amp;')
       .replace(/</g,'&lt;')
       .replace(/>/g,'&gt;');
+  }
+
+  function copyCode(btn) {
+    const code = btn.nextElementSibling.querySelector('code').textContent;
+    navigator.clipboard.writeText(code).then(() => {
+      btn.textContent = 'Copied';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1200);
+    }).catch(() => {});
   }
 
   function fmtDate(ts) {
