@@ -87,7 +87,9 @@ class _ThinkStripper:
 
     def finalize(self) -> str:
         if self._state == "buffering":
-            out = self._buf          # unclosed block — return it so response isn't empty
+            # Unclosed thinking block: treat as malformed hidden reasoning and
+            # drop it rather than leaking dangling tags like "<thought".
+            out = ""
         else:                        # scanning
             pm  = self._PARTIAL_OPEN_RE.search(self._buf)
             out = self._buf[:pm.start()] if pm else self._buf
@@ -167,7 +169,16 @@ def _sanitize_history(history: list[dict]) -> list[dict]:
 
 
 def _visible_after_think(text: str) -> str:
-    return _THINK_RE.sub("", text or "").strip()
+    cleaned = _THINK_RE.sub("", text or "")
+    # Handle malformed/unclosed reasoning tags defensively so visible output
+    # never contains dangling "<thought"/"<thinking" fragments at tail.
+    cleaned = re.sub(
+        r"<(thought|think|thinking|redacted_reasoning|redacted_thinking)(?:\b[^>]*)?$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return cleaned.strip()
 
 
 def _extract_nuke_summary(tool_result: str) -> str | None:
@@ -290,15 +301,13 @@ def _tool_docs() -> str:
     )
 
 
-# Appended to system when `output_channel=telegram` (no Markdown/HTML: Telegram
-# sends plain `sendMessage` with default parse mode).
+# Appended to system when `output_channel=telegram`.
 _TELEGRAM_FORMAT_APPEND = (
     "\n## Output (Telegram)\n"
-    "The user is on Telegram. Your visible replies are sent as plain text: "
-    "no Markdown, no HTML, no `fenced` code blocks, and no LaTeX/KaTeX. "
-    "Use line breaks, short lines, simple '-' bullets or numbered lines, and plain wording. "
-    "For code, either very short one-line snippets or 'say file path + what to change' — "
-    "not multi-line listings unless the user explicitly wants code pasted.\n"
+    "The user is on Telegram. Keep visible replies plain and compact: no Markdown emphasis, "
+    "no double-asterisk bold (`**text**`), no HTML tags, no fenced code blocks, and no LaTeX/KaTeX. "
+    "Use simple lines/bullets and direct wording. "
+    "For code, prefer very short one-line snippets or describe file path + what to change unless the user explicitly asks to paste code.\n"
 )
 
 
@@ -497,7 +506,9 @@ async def run(
                 response2, provider2 = await _call(repair_messages, use_tools=False)
                 provider_used = provider2
                 content2 = response2.choices[0].message.content or ""
-                final = _visible_after_think(content2) or content2.strip()
+                # Never fall back to raw repair text; malformed/unclosed thought
+                # tags in repair output must not leak to users.
+                final = _visible_after_think(content2)
             if not final:
                 final = "(No visible response from the model.)"
             # Store stripped visible content in history, consistent with

@@ -327,6 +327,16 @@ def test_repair_call_on_empty_visible(monkeypatch, tmp_system_prompt, providers)
     assert last_user["content"] == agent._REPAIR_USER
 
 
+def test_repair_does_not_fallback_to_raw_thinking_text(monkeypatch, tmp_system_prompt, providers):
+    """If repair output still has only malformed thought text, return placeholder."""
+    providers([[
+        make_response(content="<thought>scratch</thought>"),
+        make_response(content="<thought"),
+    ]])
+    response, _, _, _ = asyncio.run(agent.run("go", []))
+    assert response == "(No visible response from the model.)"
+
+
 def test_repair_not_triggered_when_visible_text_present(monkeypatch, tmp_system_prompt, providers):
     p = providers([[make_response(content="<thought>scratch</thought>hi there")]])
     response, _, _, _ = asyncio.run(agent.run("go", []))

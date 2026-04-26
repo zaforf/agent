@@ -35,6 +35,11 @@ def test_visible_after_think_handles_none():
     assert agent._visible_after_think(None) == ""
 
 
+def test_visible_after_think_strips_unclosed_opening_tag_tail():
+    # Malformed generation can end with an unclosed opening reasoning tag.
+    assert agent._visible_after_think("ok <thought") == "ok"
+
+
 # Note: unclosed `<thought>` blocks are intentionally NOT pinned here. An
 # unclosed tag is a model malfunction; the repair pass in the agent loop
 # (see `test_repair_call_on_empty_visible`) is the actual recovery mechanism,
@@ -121,7 +126,8 @@ def test_build_system_prompt_telegram_channel_adds_plain_text_rules(tmp_system_p
     prompt = agent._build_system_prompt(output_channel="telegram")
     assert "Test system prompt" in prompt
     assert "Output (Telegram)" in prompt
-    assert "no Markdown" in prompt
+    assert "no Markdown emphasis" in prompt
+    assert "no double-asterisk bold" in prompt
 
 
 def test_build_system_prompt_forbids_xml_tool_format(tmp_system_prompt):
