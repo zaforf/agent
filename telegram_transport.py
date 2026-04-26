@@ -417,6 +417,7 @@ async def _handle_message(client: httpx.AsyncClient, api: str, message: dict[str
     producer = asyncio.create_task(
         main._run_stream_turn(state, text, history, output_channel="telegram")
     )
+    typing = asyncio.create_task(_typing_loop(client, api, chat_id, thread_key=thread_key))
 
     partial = ""
     last_sent = ""
@@ -455,8 +456,10 @@ async def _handle_message(client: httpx.AsyncClient, api: str, message: dict[str
                     await _send_text(
                         client, api, chat_id, f"Error: {detail}", thread_key=thread_key
                     )
+                typing.cancel()
         await producer
     except Exception as e:
+        typing.cancel()
         log.exception("telegram chat failed")
         producer.cancel()
         with suppress(Exception):
@@ -466,6 +469,7 @@ async def _handle_message(client: httpx.AsyncClient, api: str, message: dict[str
         )
         return
 
+    typing.cancel()
     final = _agent_reply_for_tg(state.full_response)
     if not final:
         final = "(No visible response from the model.)"

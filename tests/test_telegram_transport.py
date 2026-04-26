@@ -271,6 +271,8 @@ def test_partial_stream_edit_and_sanitization(tmp_db, monkeypatch):
     assert any("hi there" in (e.get("text") or "") for e in edits)
     assert all("**" not in (e.get("text") or "") for e in edits)
     assert all("<thinking>" not in (e.get("text") or "") for e in edits)
+    actions = [body for url, body in client.post_calls if url.endswith("/sendChatAction")]
+    assert actions, "typing indicator should run during generation"
 
 
 def test_agent_reply_for_tg_strips_think_and_double_asterisk():
