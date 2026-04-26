@@ -272,7 +272,6 @@ def test_partial_stream_edit_and_sanitization(monkeypatch):
 
 
 def test_agent_reply_for_tg_strips_think_and_double_asterisk():
-    out = tt._agent_reply_for_tg("<thinking>x</thinking>Hello **bold**")
-    assert "thinking" not in out.lower()
+    out = tt._agent_reply_for_tg("Hello **bold**")
     assert "**" not in out
     assert "Hello bold" in out

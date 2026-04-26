@@ -35,6 +35,11 @@ def test_visible_after_think_handles_none():
     assert agent._visible_after_think(None) == ""
 
 
+def test_visible_after_think_strips_unclosed_opening_tag_tail():
+    # Malformed generation can end with an unclosed opening reasoning tag.
+    assert agent._visible_after_think("ok <thought") == "ok"
+
+
 # Note: unclosed `<thought>` blocks are intentionally NOT pinned here. An
 # unclosed tag is a model malfunction; the repair pass in the agent loop
 # (see `test_repair_call_on_empty_visible`) is the actual recovery mechanism,

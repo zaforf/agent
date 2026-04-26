@@ -87,7 +87,9 @@ class _ThinkStripper:
 
     def finalize(self) -> str:
         if self._state == "buffering":
-            out = self._buf          # unclosed block — return it so response isn't empty
+            # Unclosed thinking block: treat as malformed hidden reasoning and
+            # drop it rather than leaking dangling tags like "<thought".
+            out = ""
         else:                        # scanning
             pm  = self._PARTIAL_OPEN_RE.search(self._buf)
             out = self._buf[:pm.start()] if pm else self._buf
@@ -167,7 +169,16 @@ def _sanitize_history(history: list[dict]) -> list[dict]:
 
 
 def _visible_after_think(text: str) -> str:
-    return _THINK_RE.sub("", text or "").strip()
+    cleaned = _THINK_RE.sub("", text or "")
+    # Handle malformed/unclosed reasoning tags defensively so visible output
+    # never contains dangling "<thought"/"<thinking" fragments at tail.
+    cleaned = re.sub(
+        r"<(thought|think|thinking|redacted_reasoning|redacted_thinking)(?:\b[^>]*)?$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return cleaned.strip()
 
 
 def _extract_nuke_summary(tool_result: str) -> str | None:

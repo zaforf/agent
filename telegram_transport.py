@@ -37,12 +37,10 @@ _ALPH = string.ascii_lowercase
 _PARSE_MODE = "HTML"
 
 
-_THINK_BLOCK_RE = re.compile(
-    r"<(thought|think|thinking|redacted_reasoning|redacted_thinking)[\s>].*?</\1>",
-    re.IGNORECASE | re.DOTALL,
-)
-_THINK_TAG_RE = re.compile(
-    r"</?(thought|think|thinking|redacted_reasoning|redacted_thinking)\b[^>]*>",
+# Defensive Telegram-side cleanup only for malformed leftovers (e.g. "<thought"
+# with no closing '>'). Normal closed thought blocks are stripped in agent.py.
+_THINK_MALFORMED_OPEN_RE = re.compile(
+    r"<(?:thought|think|thinking|redacted_reasoning|redacted_thinking)\b[^>]*$",
     re.IGNORECASE,
 )
 
@@ -54,12 +52,11 @@ def _html_escape(s: str) -> str:
 def _agent_reply_for_tg(s: str) -> str:
     """Sanitize model text for Telegram send/edit.
 
-    Removes leaked thinking tags/blocks and strips markdown bold markers (`**`)
-    so responses do not show literal formatting syntax in Telegram.
+    Strips markdown bold markers (`**`) plus malformed trailing thought starts
+    (defensive fallback) so responses stay clean in Telegram.
     """
     t = s or ""
-    t = _THINK_BLOCK_RE.sub("", t)
-    t = _THINK_TAG_RE.sub("", t)
+    t = _THINK_MALFORMED_OPEN_RE.sub("", t)
     t = t.replace("**", "")
     return _html_escape(t)
 
