@@ -216,7 +216,8 @@ def test_allowed_user_ids_blocks_stranger(monkeypatch):
     assert calls == []
 
 
-def test_allowed_user_ids_allows_listed_user(monkeypatch):
+def test_allowed_user_ids_allows_listed_user(tmp_db, monkeypatch):
+    monkeypatch.setattr(main, "_cache", {})
     monkeypatch.setattr(config, "TELEGRAM_ALLOWED_USER_IDS", frozenset({100}))
     calls: list[tuple[str, str]] = []
 
@@ -241,7 +242,8 @@ def test_allowed_user_ids_allows_listed_user(monkeypatch):
     assert calls == [("tg:8", "hello")]
 
 
-def test_partial_stream_edit_and_sanitization(monkeypatch):
+def test_partial_stream_edit_and_sanitization(tmp_db, monkeypatch):
+    monkeypatch.setattr(main, "_cache", {})
     # Disable allowlist so the test is hermetic regardless of local .env.
     monkeypatch.setattr(config, "TELEGRAM_ALLOWED_USER_IDS", None)
 
