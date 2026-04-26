@@ -43,6 +43,14 @@ _THINK_MALFORMED_OPEN_RE = re.compile(
     r"<(?:thought|think|thinking|redacted_reasoning|redacted_thinking)\b[^>]*$",
     re.IGNORECASE,
 )
+_THINK_BLOCK_RE = re.compile(
+    r"<(thought|think|thinking|redacted_reasoning|redacted_thinking)[\s>].*?</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
+_THINK_TAG_RE = re.compile(
+    r"</?(thought|think|thinking|redacted_reasoning|redacted_thinking)\b[^>]*>",
+    re.IGNORECASE,
+)
 
 
 def _html_escape(s: str) -> str:
@@ -52,10 +60,12 @@ def _html_escape(s: str) -> str:
 def _agent_reply_for_tg(s: str) -> str:
     """Sanitize model text for Telegram send/edit.
 
-    Strips markdown bold markers (`**`) plus malformed trailing thought starts
-    (defensive fallback) so responses stay clean in Telegram.
+    Normal path should already strip thoughts in agent stream. This keeps a
+    minimal defense-in-depth layer for Telegram rendering.
     """
     t = s or ""
+    t = _THINK_BLOCK_RE.sub("", t)
+    t = _THINK_TAG_RE.sub("", t)
     t = _THINK_MALFORMED_OPEN_RE.sub("", t)
     t = t.replace("**", "")
     return _html_escape(t)
