@@ -47,13 +47,14 @@ def _get_memory() -> Memory:
 
 
 def remember(content: str, category: str = "fact") -> str:
-    # infer flag from config: False = store exact string; True = Mem0 LLM may extract/split
-    # (see MEM0_REMEMBER_INFER). Extraction can still return no new facts; monitor if recall feels empty.
+    # infer=False: embed and persist the string as-is. With infer=True (mem0 default),
+    # LLM extraction can fail or return no facts — then nothing is written to Qdrant
+    # but the tool still looked "successful", so recall/list stay empty.
     _get_memory().add(
         content,
         user_id=USER_ID,
         metadata={"category": category},
-        infer=config.MEM0_REMEMBER_INFER,
+        infer=False,
     )
     return f"Stored: {content}"
 
@@ -97,6 +98,7 @@ SCHEMAS = [
             "name": "remember",
             "description": (
                 "Store a durable fact to long-term memory. "
+                "Prefer atomic memories: one distinct fact/preference per call unless multiple points are inseparable. "
                 "ONLY call for facts worth recalling in a completely different future conversation: "
                 "user's name, skills, ongoing projects, strong preferences, important context. "
                 "Do NOT store: what was asked in this conversation, temporary context, "

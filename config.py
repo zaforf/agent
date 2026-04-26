@@ -96,8 +96,3 @@ GEMINI_EMBEDDING_DIMS = int(os.environ.get("GEMINI_EMBEDDING_DIMS", "768"))
 # Mem0 LLM (fact extraction on remember, etc.) — native Gemini API via mem0, not Groq.
 # Default: Gemma 4 26B MoE (lighter than 31B; avoids Groq free-tier TPM limits on large prompts).
 MEM0_LLM_MODEL = os.environ.get("MEM0_LLM_MODEL", "gemma-4-26b-a4b-it")
-
-# `remember()`: if True, pass infer=True to Mem0 (LLM may split one string into several stored facts).
-# If False (default), embed the exact `content` (deterministic; no extraction no-op). See DESIGN §5.1.
-_mem0_infer = os.environ.get("MEM0_REMEMBER_INFER", "").strip().lower()
-MEM0_REMEMBER_INFER = _mem0_infer in ("1", "true", "yes", "on")
