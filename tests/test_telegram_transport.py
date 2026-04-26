@@ -275,6 +275,51 @@ def test_partial_stream_edit_and_sanitization(tmp_db, monkeypatch):
     assert actions, "typing indicator should run during generation"
 
 
+def test_typing_cancelled_on_done_event(tmp_db, monkeypatch):
+    monkeypatch.setattr(main, "_cache", {})
+    monkeypatch.setattr(config, "TELEGRAM_ALLOWED_USER_IDS", None)
+
+    async def fake_run_stream_turn(state, user_content, history, *, output_channel="default"):
+        state.full_response = "done text"
+        await state.queue.put({"type": "text_chunk", "text": "done text"})
+        # Explicit done event should stop typing immediately.
+        await state.queue.put({"type": "done", "provider": "fake", "turn_messages": []})
+        state.completed = True
+        await state.queue.put(None)
+
+    monkeypatch.setattr(main, "_run_stream_turn", fake_run_stream_turn)
+
+    cancel_called = {"value": False}
+
+    class _DummyTask:
+        def cancel(self):
+            cancel_called["value"] = True
+
+    orig_create_task = asyncio.create_task
+
+    def fake_create_task(coro):
+        # typing loop only; let other tasks run normally
+        name = getattr(getattr(coro, "cr_code", None), "co_name", "")
+        if name == "_typing_loop":
+            # Avoid un-awaited coroutine warning when we intercept task creation.
+            coro.close()
+            return _DummyTask()
+        return orig_create_task(coro)
+
+    monkeypatch.setattr(tt.asyncio, "create_task", fake_create_task)
+    client = FakeAsyncClient()
+
+    async def _run():
+        await tt._handle_message(
+            client,
+            "https://api.telegram.org/botTEST",
+            {"chat": {"id": 8}, "from": {"id": 42}, "text": "hello"},
+        )
+
+    asyncio.run(_run())
+    assert cancel_called["value"], "typing loop should be cancelled on done event"
+
+
 def test_agent_reply_for_tg_strips_think_and_double_asterisk():
     out = tt._agent_reply_for_tg("Hello **bold**")
     assert "**" not in out

@@ -437,6 +437,10 @@ async def _handle_message(client: httpx.AsyncClient, api: str, message: dict[str
             ev = await state.queue.get()
             if ev is None:
                 break
+            if ev.get("type") == "done":
+                # Stop typing as soon as model generation is done; no need to
+                # keep indicator alive while persistence/finalization drains.
+                typing.cancel()
             if ev.get("type") == "text_chunk":
                 partial += ev.get("text", "")
                 # Telegram edit throttling + size guard for in-progress preview.
