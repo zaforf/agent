@@ -121,7 +121,8 @@ def test_build_system_prompt_telegram_channel_adds_plain_text_rules(tmp_system_p
     prompt = agent._build_system_prompt(output_channel="telegram")
     assert "Test system prompt" in prompt
     assert "Output (Telegram)" in prompt
-    assert "no Markdown" in prompt
+    assert "no Markdown emphasis" in prompt
+    assert "no double-asterisk bold" in prompt
 
 
 def test_build_system_prompt_forbids_xml_tool_format(tmp_system_prompt):

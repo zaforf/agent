@@ -290,15 +290,13 @@ def _tool_docs() -> str:
     )
 
 
-# Appended to system when `output_channel=telegram` (no Markdown/HTML: Telegram
-# sends plain `sendMessage` with default parse mode).
+# Appended to system when `output_channel=telegram`.
 _TELEGRAM_FORMAT_APPEND = (
     "\n## Output (Telegram)\n"
-    "The user is on Telegram. Your visible replies are sent as plain text: "
-    "no Markdown, no HTML, no `fenced` code blocks, and no LaTeX/KaTeX. "
-    "Use line breaks, short lines, simple '-' bullets or numbered lines, and plain wording. "
-    "For code, either very short one-line snippets or 'say file path + what to change' — "
-    "not multi-line listings unless the user explicitly wants code pasted.\n"
+    "The user is on Telegram. Keep visible replies plain and compact: no Markdown emphasis, "
+    "no double-asterisk bold (`**text**`), no HTML tags, no fenced code blocks, and no LaTeX/KaTeX. "
+    "Use simple lines/bullets and direct wording. "
+    "For code, prefer very short one-line snippets or describe file path + what to change unless the user explicitly asks to paste code.\n"
 )
 
 

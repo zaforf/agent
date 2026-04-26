@@ -46,6 +46,9 @@ class FakeAsyncClient:
 
     async def post(self, url: str, json: dict | None = None, **kwargs):
         self.post_calls.append((url, json))
+        if url.endswith('/sendMessage'):
+            mid = len([u for u, _ in self.post_calls if u.endswith('/sendMessage')])
+            return _FakeResponse(payload={"ok": True, "result": {"message_id": mid}})
         return _FakeResponse()
 
     async def get(self, url: str, params: dict | None = None, **kwargs):
@@ -215,13 +218,16 @@ def test_allowed_user_ids_blocks_stranger(monkeypatch):
 
 def test_allowed_user_ids_allows_listed_user(monkeypatch):
     monkeypatch.setattr(config, "TELEGRAM_ALLOWED_USER_IDS", frozenset({100}))
-    calls: list[str] = []
+    calls: list[tuple[str, str]] = []
 
-    async def fake_complete(msg: str, sid: str, *, attachments=None, **kwargs):
-        calls.append(msg)
-        return "ok", "fake"
+    async def fake_run_stream_turn(state, user_content, history, *, output_channel="default"):
+        calls.append((state.session_id, user_content))
+        state.full_response = "ok"
+        await state.queue.put({"type": "text_chunk", "text": "ok"})
+        state.completed = True
+        await state.queue.put(None)
 
-    monkeypatch.setattr(main, "complete_chat_turn", fake_complete)
+    monkeypatch.setattr(main, "_run_stream_turn", fake_run_stream_turn)
     client = FakeAsyncClient()
 
     async def _run():
@@ -232,19 +238,22 @@ def test_allowed_user_ids_allows_listed_user(monkeypatch):
         )
 
     asyncio.run(_run())
-    assert calls == ["hello"]
+    assert calls == [("tg:8", "hello")]
 
 
-def test_complete_chat_turn_used_by_transport(monkeypatch):
+def test_partial_stream_edit_and_sanitization(monkeypatch):
     # Disable allowlist so the test is hermetic regardless of local .env.
     monkeypatch.setattr(config, "TELEGRAM_ALLOWED_USER_IDS", None)
-    calls: list[tuple[str, str]] = []
 
-    async def fake_complete(msg: str, sid: str, *, attachments=None, **kwargs):
-        calls.append((sid, msg))
-        return f"echo:{msg}", "fake"
+    async def fake_run_stream_turn(state, user_content, history, *, output_channel="default"):
+        assert output_channel == "telegram"
+        # Simulate leaked think tags and markdown bold in model text.
+        state.full_response = "<thinking>private</thinking>hi **there**"
+        await state.queue.put({"type": "text_chunk", "text": "hi **there**"})
+        state.completed = True
+        await state.queue.put(None)
 
-    monkeypatch.setattr(main, "complete_chat_turn", fake_complete)
+    monkeypatch.setattr(main, "_run_stream_turn", fake_run_stream_turn)
     client = FakeAsyncClient()
 
     async def _run():
@@ -255,7 +264,15 @@ def test_complete_chat_turn_used_by_transport(monkeypatch):
         )
 
     asyncio.run(_run())
-    assert calls == [("tg:8", "hello tg")]
-    last = [c[1] for c in client.post_calls if c[1] and "sendMessage" in c[0]][-1]
-    assert last.get("parse_mode") == "HTML"
-    assert "echo:hello tg" in (last.get("text") or "")
+    edits = [body for url, body in client.post_calls if url.endswith("/editMessageText")]
+    assert edits, "expected editMessageText calls for partial streaming"
+    assert any("hi there" in (e.get("text") or "") for e in edits)
+    assert all("**" not in (e.get("text") or "") for e in edits)
+    assert all("<thinking>" not in (e.get("text") or "") for e in edits)
+
+
+def test_agent_reply_for_tg_strips_think_and_double_asterisk():
+    out = tt._agent_reply_for_tg("<thinking>x</thinking>Hello **bold**")
+    assert "thinking" not in out.lower()
+    assert "**" not in out
+    assert "Hello bold" in out

@@ -1,5 +1,6 @@
 import asyncio
 import io
+import inspect
 import json
 import logging
 import os
@@ -92,10 +93,14 @@ async def _run_stream_turn(
     state: _StreamTurnState,
     user_content: "str | list",
     history: list[dict],
+    *,
+    output_channel: str = "default",
 ) -> None:
     """Background producer: runs agent stream, queues SSE events, persists on completion."""
     try:
-        async for event in agent.run_stream(user_content, history):
+        run_stream_sig = inspect.signature(agent.run_stream)
+        kwargs = {"output_channel": output_channel} if "output_channel" in run_stream_sig.parameters else {}
+        async for event in agent.run_stream(user_content, history, **kwargs):
             if event.get("type") == "text_chunk":
                 state.full_response += event.get("text", "")
             elif event.get("type") == "done":

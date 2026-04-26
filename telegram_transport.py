@@ -37,13 +37,31 @@ _ALPH = string.ascii_lowercase
 _PARSE_MODE = "HTML"
 
 
+_THINK_BLOCK_RE = re.compile(
+    r"<(thought|think|thinking|redacted_reasoning|redacted_thinking)[\s>].*?</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
+_THINK_TAG_RE = re.compile(
+    r"</?(thought|think|thinking|redacted_reasoning|redacted_thinking)\b[^>]*>",
+    re.IGNORECASE,
+)
+
+
 def _html_escape(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _agent_reply_for_tg(s: str) -> str:
-    """Model reply: entity-escape. Newlines are kept as \\n (Telegram HTML has no <br>)."""
-    return _html_escape(s or "")
+    """Sanitize model text for Telegram send/edit.
+
+    Removes leaked thinking tags/blocks and strips markdown bold markers (`**`)
+    so responses do not show literal formatting syntax in Telegram.
+    """
+    t = s or ""
+    t = _THINK_BLOCK_RE.sub("", t)
+    t = _THINK_TAG_RE.sub("", t)
+    t = t.replace("**", "")
+    return _html_escape(t)
 
 
 def _random_letter_slug(length: int = _SESSION_SLUG_LEN) -> str:
@@ -190,6 +208,54 @@ async def _send_text(
         r = await client.post(f"{api}/sendMessage", json={**params, "text": chunk})
         if r.status_code != 200:
             log.warning("telegram sendMessage failed: %s %s", r.status_code, r.text[:500])
+
+
+async def _send_text_get_message_id(
+    client: httpx.AsyncClient,
+    api: str,
+    chat_id: int,
+    text: str,
+    *,
+    thread_key: int,
+    parse_mode: str | None = _PARSE_MODE,
+) -> int | None:
+    """Send one message and return Telegram message_id (or None on failure)."""
+    body: dict[str, Any] = {"chat_id": chat_id, "text": text}
+    if thread_key:
+        body["message_thread_id"] = thread_key
+    if parse_mode:
+        body["parse_mode"] = parse_mode
+    r = await client.post(f"{api}/sendMessage", json=body)
+    if r.status_code != 200:
+        log.warning("telegram sendMessage failed: %s %s", r.status_code, r.text[:500])
+        return None
+    try:
+        data = r.json()
+        if data.get("ok") and data.get("result", {}).get("message_id") is not None:
+            return int(data["result"]["message_id"])
+    except Exception:
+        pass
+    return None
+
+
+async def _edit_text(
+    client: httpx.AsyncClient,
+    api: str,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    *,
+    thread_key: int,
+    parse_mode: str | None = _PARSE_MODE,
+) -> None:
+    """Best-effort edit for streaming preview updates."""
+    body: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id, "text": text}
+    if thread_key:
+        body["message_thread_id"] = thread_key
+    if parse_mode:
+        body["parse_mode"] = parse_mode
+    with suppress(Exception):
+        await client.post(f"{api}/editMessageText", json=body)
 
 
 def _parse_command(text: str) -> tuple[str | None, str]:
@@ -344,18 +410,86 @@ async def _handle_message(client: httpx.AsyncClient, api: str, message: dict[str
         return
 
     sid = _active_sid(chat_id, thread_key)
-    typing = asyncio.create_task(_typing_loop(client, api, chat_id, thread_key=thread_key))
+    # Start with a tiny placeholder and stream progress via edits.
+    message_id = await _send_text_get_message_id(
+        client, api, chat_id, "…", thread_key=thread_key, parse_mode=None
+    )
+
+    history = main._get_history(sid)
+    state = main._StreamTurnState(sid, text, [])
+    producer = asyncio.create_task(
+        main._run_stream_turn(state, text, history, output_channel="telegram")
+    )
+
+    partial = ""
+    last_sent = ""
+    last_edit_ts = 0.0
     try:
-        reply, _ = await main.complete_chat_turn(text, sid, output_channel="telegram")
+        while True:
+            ev = await state.queue.get()
+            if ev is None:
+                break
+            if ev.get("type") == "text_chunk":
+                partial += ev.get("text", "")
+                # Telegram edit throttling + size guard for in-progress preview.
+                now = asyncio.get_running_loop().time()
+                if message_id is not None and (now - last_edit_ts) >= 0.8:
+                    preview = _agent_reply_for_tg(partial)
+                    if len(preview) > 3500:
+                        preview = preview[:3500] + "…"
+                    if preview and preview != last_sent:
+                        await _edit_text(
+                            client, api, chat_id, message_id, preview, thread_key=thread_key
+                        )
+                        last_sent = preview
+                        last_edit_ts = now
+            elif ev.get("type") == "error":
+                detail = _html_escape(ev.get("detail") or "stream error")
+                if message_id is not None:
+                    await _edit_text(
+                        client,
+                        api,
+                        chat_id,
+                        message_id,
+                        f"Error: {detail}",
+                        thread_key=thread_key,
+                    )
+                else:
+                    await _send_text(
+                        client, api, chat_id, f"Error: {detail}", thread_key=thread_key
+                    )
+        await producer
     except Exception as e:
-        typing.cancel()
         log.exception("telegram chat failed")
+        producer.cancel()
+        with suppress(Exception):
+            await producer
         await _send_text(
             client, api, chat_id, f"Error: {_html_escape(str(e))}", thread_key=thread_key
         )
         return
-    typing.cancel()
-    await _send_text(client, api, chat_id, _agent_reply_for_tg(reply), thread_key=thread_key)
+
+    final = _agent_reply_for_tg(state.full_response)
+    if not final:
+        final = "(No visible response from the model.)"
+
+    # Finalize preview message; if too long, keep preview and send full as follow-up chunks.
+    if message_id is not None:
+        if len(final) <= _TELEGRAM_MSG_LIMIT:
+            await _edit_text(client, api, chat_id, message_id, final, thread_key=thread_key)
+        else:
+            await _edit_text(
+                client,
+                api,
+                chat_id,
+                message_id,
+                "Reply is long; sending full output below…",
+                thread_key=thread_key,
+                parse_mode=None,
+            )
+            await _send_text(client, api, chat_id, final, thread_key=thread_key)
+    else:
+        await _send_text(client, api, chat_id, final, thread_key=thread_key)
 
 
 async def run_telegram_polling() -> None:

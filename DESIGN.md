@@ -348,9 +348,11 @@ When `TELEGRAM_BOT_TOKEN` is set, `main.py` starts **long-polling** `getUpdates`
 
 **Commands** (text starting with `/`): `/new`, `/sessions`, `/switch` (by **name**: short slug or `default`, or full internal `session_id` if needed), `/nuke` (instructs the model to call `nuke_chat`), `/help`, `/start`. Bot copy shows only the **slug** (or the label **default** for the base session), not the full `tg:…` id.
 
-**Transport**: Bot messages use `sendMessage` with **`parse_mode: HTML`**. Incoming user text is still plain. Long replies are split at Telegram’s 4096-character boundary. No attachment forwarding from Telegram in this version.
+**Transport**: Bot messages use `sendMessage` with **`parse_mode: HTML`**. Incoming user text is still plain. No attachment forwarding from Telegram in this version.
 
-**Formatting (model)**: `main.complete_chat_turn(..., output_channel="telegram")` appends a “plain, no LaTeX/fences” system block; server output is entity-escaped; newlines stay as newlines (Telegram `parse_mode=HTML` does not support `<br>`). The **web** UI uses the default streaming prompt; history is unchanged.
+**Live output**: normal chat messages are now streamed to Telegram by creating one placeholder message and updating it with `editMessageText` as chunks arrive. On completion, the edited message becomes the final reply (or a short notice + follow-up full send if the final text exceeds Telegram edit size comfort).
+
+**Formatting (model)**: `agent.run(..., output_channel="telegram")` appends a Telegram addendum: plain text style, no markdown emphasis (`**`), no HTML tags, no fenced code, no LaTeX. Server-side send/edit sanitization also strips leaked thought tags (`<thought>/<thinking>/<redacted_*>`) and removes literal `**` before escaping HTML.
 
 ### 8.2 SSE event types (`/chat/stream`)
 
