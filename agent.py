@@ -506,7 +506,9 @@ async def run(
                 response2, provider2 = await _call(repair_messages, use_tools=False)
                 provider_used = provider2
                 content2 = response2.choices[0].message.content or ""
-                final = _visible_after_think(content2) or content2.strip()
+                # Never fall back to raw repair text; malformed/unclosed thought
+                # tags in repair output must not leak to users.
+                final = _visible_after_think(content2)
             if not final:
                 final = "(No visible response from the model.)"
             # Store stripped visible content in history, consistent with
