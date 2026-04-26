@@ -279,3 +279,12 @@ def test_agent_reply_for_tg_strips_think_and_double_asterisk():
     out = tt._agent_reply_for_tg("Hello **bold**")
     assert "**" not in out
     assert "Hello bold" in out
+
+
+def test_agent_reply_for_tg_strips_full_thought_block_prefix():
+    out = tt._agent_reply_for_tg(
+        "<thought>I'll search for the release date of Jujutsu Kaisen Season 3.</thought>"
+        "Jujutsu Kaisen Season 3 premiered on January 8, 2026."
+    )
+    assert "thought" not in out.lower()
+    assert "Jujutsu Kaisen Season 3 premiered on January 8, 2026." in out
