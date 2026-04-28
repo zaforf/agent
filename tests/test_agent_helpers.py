@@ -132,6 +132,8 @@ def test_repo_system_prompt_covers_tool_payload_discipline():
     assert "intent–action gap" in text
     assert "Fill-the-form" in text
     assert "Mirror the payload" in text
+    assert "Do **not** use bare `$...$` inline delimiters" in text
+    assert "use `$$...$$` (or `\\[...\\]`) delimiters only" in text
 
 
 def test_build_system_prompt_telegram_channel_adds_plain_text_rules(tmp_system_prompt):

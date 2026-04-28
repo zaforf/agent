@@ -700,9 +700,7 @@
     renderMathInElement(el, {
       delimiters: [
         { left: '$$', right: '$$', display: true  },
-        { left: '$',  right: '$',  display: false },
         { left: '\\[', right: '\\]', display: true  },
-        { left: '\\(', right: '\\)', display: false },
       ],
       throwOnError: false,
       errorColor:   'inherit',
@@ -1121,7 +1119,7 @@
     let _charQueue   = '';
     let _charDrainId = null;
 
-    function _hasMath(t) { return /\$|\\\[|\\\(/.test(t); }
+    function _hasMath(t) { return /\$|\\\[/.test(t); }
 
     function _flushQueue() {
       if (_charDrainId !== null) { cancelAnimationFrame(_charDrainId); _charDrainId = null; }
