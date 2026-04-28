@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import types
+from pathlib import Path
 
 import pytest
 
@@ -116,10 +117,23 @@ def test_build_system_prompt_includes_seeded_prompt_and_compact_tool_policy(tmp_
     prompt = agent._build_system_prompt()
     assert "Test system prompt" in prompt
     assert "at most one tool call per assistant message" in prompt
+    assert "Never emit empty arguments" in prompt
+    assert "prose does not substitute" in prompt
     assert "workspace_search_replace" in prompt
     assert "Do not repeat identical failing calls" in prompt
     assert "short, unique old_string snippets" in prompt
     assert "Avoid whole-file old/new payloads" in prompt
+
+
+def test_repo_system_prompt_covers_tool_payload_discipline():
+    """Shipped system prompt should nudge against empty `{}` tool calls (intent–action gap)."""
+    root = Path(__file__).resolve().parent.parent
+    text = (root / "data" / "system_prompt.md").read_text()
+    assert "intent–action gap" in text
+    assert "Fill-the-form" in text
+    assert "Mirror the payload" in text
+    assert "Do **not** use bare `$...$` inline delimiters" in text
+    assert "use `$$...$$` (or `\\[...\\]`) delimiters only" in text
 
 
 def test_build_system_prompt_telegram_channel_adds_plain_text_rules(tmp_system_prompt):

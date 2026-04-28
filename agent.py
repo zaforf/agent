@@ -297,6 +297,7 @@ def _tool_docs() -> str:
         "## Tool usage\n"
         "Use native API function/tool_calls only (no XML or fenced tool syntax).\n"
         "Emit at most one tool call per assistant message; wait for result before the next tool call.\n"
+        "Never emit empty arguments: every required field must be present in the tool JSON; prose does not substitute for arguments. After missing-argument errors, fix fields—do not retry `{}` or the same empty pattern.\n"
         "For code edits, use workspace_search_replace as primary. Keep replacements narrow and surgical: use short, unique old_string snippets around only the target lines. Avoid whole-file old/new payloads unless the user explicitly asks for a full rewrite. It is okay to use multiple sequential calls when each call is thoughtful and based on fresh file state. Do not repeat identical failing calls; after a failure, change snippet or strategy.\n"
     )
 
