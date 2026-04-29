@@ -673,8 +673,132 @@
     }
   });
 
+  // ── LaTeX / KaTeX hygiene (before Markdown) ───────────────────────────────
+  // Models often emit "|" or "/|" instead of "\" so KaTeX never sees real
+  // commands, or they wrap whole sentences in $...$ (math eats spaces). We
+  // repair known command prefixes inside math segments and unwrap prose-like
+  // inline $...$ so the rest of the sentence renders as normal text.
+
+  const _MATH_CMD_PIPE_FIX = new RegExp(
+    '(^|[^\\\\])\\|(' +
+      'text|mathrm|mathbf|mathit|operatorname|sqrt|frac|sum|prod|int|lim|log|ln|sin|cos|tan|exp|' +
+      'cdot|times|div|pm|mp|ast|star|circ|bullet|' +
+      'sign|' +
+      'leq|geq|neq|approx|equiv|sim|propto|ll|gg|subset|supset|in|notin|cap|cup|land|lor|neg|' +
+      'forall|exists|nabla|partial|infty|aleph|' +
+      'alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|mu|nu|xi|' +
+      'pi|varpi|rho|varrho|sigma|varsigma|tau|upsilon|phi|varphi|chi|psi|omega|' +
+      'Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega|' +
+      'cdots|ldots|vdots|ddots|cdots' +
+    ')\\b',
+    'g',
+  );
+
+  function _fixMathSegmentContent(inner) {
+    let s = inner;
+    // "/|" is often a corrupted "\|" (norm) or missing "\" before a command
+    s = s.replace(/\/\|/g, '\\|');
+    // Word + "/|" → word + "\|"
+    s = s.replace(/(\w)\/\|/g, '$1\\|');
+    // "|cmd" where cmd is a common LaTeX command (corrupted backslash)
+    s = s.replace(_MATH_CMD_PIPE_FIX, '$1\\$2');
+    // Stray "/word{" when the model meant "\word{" (e.g. "/|" already fixed)
+    s = s.replace(/\/(text|frac|sqrt|sum|prod|int|lim|mathrm|mathbf)\{/g, '\\$1{');
+    return s;
+  }
+
+  function _shouldUnwrapInlineMath(inner) {
+    const t = inner.trim();
+    if (t.length === 0) return false;
+    // Short, tight expressions — keep as math
+    if (t.length <= 48 && !/\s{2,}/.test(t) && !/[.!?][\s]*[A-Za-z]/.test(t)) {
+      // Skip common English inside \text{...} (e.g. "\text{for all}")
+      if (!/\b(vector|meaning|written|since|target|secret|trying|Imagine|Oracle|unit|Worst|Noise|don't|isn't|doesn't|can't)\b/i.test(t))
+        return false;
+    }
+    if (/[A-Za-z]{2,}'[A-Za-z]{2,}/.test(t)) return true;
+    // Stuck-together words inside "math" (e.g. "meaningits", "vectoris")
+    if (/[a-z]{3,}(its|know|was|but)\b/i.test(t)) return true;
+    if (/\b(vector|meaning|written|since|target|secret|trying|Imagine|Oracle|unit|Worst|Noise)\b/i.test(t)) return true;
+    if ((t.match(/\s/g) || []).length >= 3 && t.length > 28) return true;
+    if (/[.!?][\s]*[A-Za-z]/.test(t)) return true;
+    return false;
+  }
+
+  function _sanitizeBracketMath(s, open, close, replOpen, replClose) {
+    let out = '';
+    let i = 0;
+    while (i < s.length) {
+      const start = s.indexOf(open, i);
+      if (start === -1) {
+        out += s.slice(i);
+        break;
+      }
+      out += s.slice(i, start);
+      const end = s.indexOf(close, start + open.length);
+      if (end === -1) {
+        out += s.slice(start);
+        break;
+      }
+      const inner = s.slice(start + open.length, end);
+      out += replOpen + _fixMathSegmentContent(inner) + replClose;
+      i = end + close.length;
+    }
+    return out;
+  }
+
+  function _sanitizeDollarMath(s) {
+    let out = '';
+    let i = 0;
+    while (i < s.length) {
+      if (s.startsWith('$$', i)) {
+        const j = s.indexOf('$$', i + 2);
+        if (j === -1) {
+          out += s.slice(i);
+          break;
+        }
+        const inner = s.slice(i + 2, j);
+        out += '$$' + _fixMathSegmentContent(inner) + '$$';
+        i = j + 2;
+        continue;
+      }
+      if (s[i] === '$') {
+        const j = s.indexOf('$', i + 1);
+        if (j === -1) {
+          out += s.slice(i);
+          break;
+        }
+        const inner = s.slice(i + 1, j);
+        if (_shouldUnwrapInlineMath(inner)) {
+          out += inner;
+        } else {
+          out += '$' + _fixMathSegmentContent(inner) + '$';
+        }
+        i = j + 1;
+        continue;
+      }
+      const next = s.indexOf('$', i);
+      if (next === -1) {
+        out += s.slice(i);
+        break;
+      }
+      out += s.slice(i, next);
+      i = next;
+    }
+    return out;
+  }
+
+  /** Run before `marked.parse` on agent markdown to reduce KaTeX breakage. */
+  function sanitizeAgentMathForMarkdown(raw) {
+    let s = String(raw ?? '');
+    s = _sanitizeBracketMath(s, '\\[', '\\]', '\\[', '\\]');
+    s = _sanitizeBracketMath(s, '\\(', '\\)', '\\(', '\\)');
+    s = _sanitizeDollarMath(s);
+    return s;
+  }
+
   function renderMarkdown(text) {
-    return marked.parse(text);
+    return marked.parse(sanitizeAgentMathForMarkdown(text));
   }
 
   /**
@@ -692,7 +816,7 @@
       .replace(/```[\s\S]*$/, '');
     const singles = (noFences.match(/`/g) || []).length;
     if (singles % 2 !== 0) text += '`';
-    return marked.parse(text);
+    return marked.parse(sanitizeAgentMathForMarkdown(text));
   }
 
   function renderMath(el) {
@@ -700,7 +824,9 @@
     renderMathInElement(el, {
       delimiters: [
         { left: '$$', right: '$$', display: true  },
+        { left: '$',  right: '$',  display: false },
         { left: '\\[', right: '\\]', display: true  },
+        { left: '\\(', right: '\\)', display: false },
       ],
       throwOnError: false,
       errorColor:   'inherit',
@@ -1119,7 +1245,7 @@
     let _charQueue   = '';
     let _charDrainId = null;
 
-    function _hasMath(t) { return /\$|\\\[/.test(t); }
+    function _hasMath(t) { return /\$|\\\[|\\\(/.test(t); }
 
     function _flushQueue() {
       if (_charDrainId !== null) { cancelAnimationFrame(_charDrainId); _charDrainId = null; }
