@@ -1647,43 +1647,58 @@
   // - Alt+K: toggle memories panel (right)
   // - Alt+L: open attachment picker
   // - Alt+1..Alt+9 / Alt+0: switch sessions 1..10
-  document.addEventListener('keydown', e => {
-    if (e.defaultPrevented || e.isComposing) return;
-    if (!e.altKey || e.ctrlKey || e.metaKey) return;
+  function _isAltOnlyShortcutEvent(e) {
+    return !!(e.altKey && !e.ctrlKey && !e.metaKey && !e.isComposing);
+  }
 
-    const code = e.code;
-    if (code === 'KeyN') {
-      e.preventDefault();
-      newSession();
-      return;
-    }
-    if (code === 'KeyL') {
-      e.preventDefault();
-      document.getElementById('file-input').click();
-      return;
-    }
-    if (code === 'KeyJ') {
-      e.preventDefault();
-      togglePanel('sessions-panel', 'btn-sessions');
-      return;
-    }
-    if (code === 'KeyK') {
-      e.preventDefault();
-      togglePanel('mem-panel', 'btn-mem');
-      return;
-    }
+  function _shortcutKeyId(e) {
+    // Use physical key first; fall back to legacy keyCode on some mac layouts.
+    return e.code || (
+      e.keyCode === 78 ? 'KeyN' :
+      e.keyCode === 74 ? 'KeyJ' :
+      e.keyCode === 75 ? 'KeyK' :
+      e.keyCode === 76 ? 'KeyL' :
+      e.keyCode === 48 ? 'Digit0' :
+      e.keyCode === 49 ? 'Digit1' :
+      e.keyCode === 50 ? 'Digit2' :
+      e.keyCode === 51 ? 'Digit3' :
+      e.keyCode === 52 ? 'Digit4' :
+      e.keyCode === 53 ? 'Digit5' :
+      e.keyCode === 54 ? 'Digit6' :
+      e.keyCode === 55 ? 'Digit7' :
+      e.keyCode === 56 ? 'Digit8' :
+      e.keyCode === 57 ? 'Digit9' :
+      ''
+    );
+  }
+
+  function _runAltShortcutByKeyId(keyId) {
+    if (keyId === 'KeyN') { newSession(); return true; }
+    if (keyId === 'KeyL') { document.getElementById('file-input').click(); return true; }
+    if (keyId === 'KeyJ') { togglePanel('sessions-panel', 'btn-sessions'); return true; }
+    if (keyId === 'KeyK') { togglePanel('mem-panel', 'btn-mem'); return true; }
     const digitToIndex = {
       Digit1: 0, Digit2: 1, Digit3: 2, Digit4: 3, Digit5: 4,
       Digit6: 5, Digit7: 6, Digit8: 7, Digit9: 8, Digit0: 9,
     };
-    if (Object.prototype.hasOwnProperty.call(digitToIndex, code)) {
-      e.preventDefault();
-      const idx = digitToIndex[code];
-      // Refresh list opportunistically so index maps to latest ordering.
+    if (Object.prototype.hasOwnProperty.call(digitToIndex, keyId)) {
+      const idx = digitToIndex[keyId];
       if (!sessionsCache.length) loadSessions().finally(() => switchSessionByIndex(idx));
       else switchSessionByIndex(idx);
+      return true;
     }
-  });
+    return false;
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.defaultPrevented || !_isAltOnlyShortcutEvent(e)) return;
+    const handled = _runAltShortcutByKeyId(_shortcutKeyId(e));
+    if (!handled) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // On some mac layouts, Option dead-key text may still be queued.
+    if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+  }, true);
 
   // Strip rich formatting on paste. Collapse large pastes into a compact chip.
   input.addEventListener('paste', e => {
