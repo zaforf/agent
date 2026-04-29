@@ -1629,12 +1629,13 @@
   });
 
   // Global keyboard shortcuts (work even when #input is focused).
-  // Chosen as Alt+ combos to avoid clobbering normal typing.
+  // Chosen as Option/Alt-only to avoid overriding first-class browser shortcuts
+  // like Cmd+N / Cmd+1 tab switching on macOS.
   // - Alt+N: new chat
-  // - Alt+1..Alt+0: switch to sessions 1..10 in current sidebar order
-  // - Alt+[: toggle sessions panel (left)
-  // - Alt+]: toggle memories panel (right)
-  // - Alt+U: open attachment picker
+  // - Alt+0: switch to first session in current sidebar order
+  // - Alt+L: toggle sessions panel (left)
+  // - Alt+R: toggle memories panel (right)
+  // - Alt+O: open attachment picker
   document.addEventListener('keydown', e => {
     if (e.defaultPrevented || e.isComposing) return;
     if (!e.altKey || e.ctrlKey || e.metaKey) return;
@@ -1645,31 +1646,26 @@
       newSession();
       return;
     }
-    if (code === 'KeyU') {
+    if (code === 'KeyO') {
       e.preventDefault();
       document.getElementById('file-input').click();
       return;
     }
-    if (code === 'BracketLeft') {
+    if (code === 'KeyL') {
       e.preventDefault();
       togglePanel('sessions-panel', 'btn-sessions');
       return;
     }
-    if (code === 'BracketRight') {
+    if (code === 'KeyR') {
       e.preventDefault();
       togglePanel('mem-panel', 'btn-mem');
       return;
     }
-
-    const digitToIndex = {
-      Digit1: 0, Digit2: 1, Digit3: 2, Digit4: 3, Digit5: 4,
-      Digit6: 5, Digit7: 6, Digit8: 7, Digit9: 8, Digit0: 9,
-    };
-    if (Object.prototype.hasOwnProperty.call(digitToIndex, code)) {
+    if (code === 'Digit0') {
       e.preventDefault();
-      // Refresh list opportunistically so numbers map to latest ordering.
-      if (!sessionsCache.length) loadSessions().finally(() => switchSessionByIndex(digitToIndex[code]));
-      else switchSessionByIndex(digitToIndex[code]);
+      // Refresh list opportunistically so index maps to latest ordering.
+      if (!sessionsCache.length) loadSessions().finally(() => switchSessionByIndex(0));
+      else switchSessionByIndex(0);
     }
   });
 

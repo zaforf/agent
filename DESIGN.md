@@ -430,16 +430,17 @@ Session ID is stored in `localStorage` as `"sid"`. Survives page reloads and bro
 
 Global shortcuts are implemented in `static/index.html` and intentionally work even when focus is in the contenteditable input:
 
-- `Ctrl/Cmd + Shift + N` — new session (`newSession()`), then focus input.
-- `Ctrl/Cmd + Shift + S` — toggle sessions panel.
-- `Ctrl/Cmd + Shift + M` — toggle memories panel.
-- `Ctrl/Cmd + Shift + O` — open file picker (`#file-input.click()`).
-- `Alt + 1..9` — switch to sessions index 1..9 from latest `/sessions` list.
-- `Alt + 0` — switch to sessions index 10.
+- `Alt/Option + N` — new session (`newSession()`), then focus input.
+- `Alt/Option + L` — toggle sessions panel.
+- `Alt/Option + R` — toggle memories panel.
+- `Alt/Option + O` — open file picker (`#file-input.click()`).
+- `Alt/Option + 1..9` — switch to sessions index 1..9 from latest `/sessions` list.
+- `Alt/Option + 0` — switch to sessions index 10.
 
 Guardrails:
-- Shortcuts are ignored during IME composition and when `Ctrl/Cmd+Alt` are both pressed.
-- Single-key shortcuts are not bound (to avoid disrupting normal typing in the textbox).
+- Browser-native `Cmd/Ctrl` shortcuts are untouched (`Cmd+N`, `Cmd+1`, etc.).
+- Shortcuts are ignored during IME composition and when `Ctrl` or `Cmd` is pressed.
+- Option shortcuts call `preventDefault()` so no alternate character is inserted into the textbox.
 
 ---
 
