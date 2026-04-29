@@ -852,6 +852,7 @@
   let mathRenderTimer = null;
 
   let sid = localStorage.getItem('sid') || newSid();
+  let sessionsCache = [];
   localStorage.setItem('sid', sid);
 
   function newSid() { return Math.random().toString(36).slice(2); }
@@ -922,15 +923,20 @@
 
   /** Run after history DOM + KaTeX so heights match rendered math (Bugbot: defer scroll past setTimeout math). */
   function scrollToLastAssistantAfterLayout() {
-    requestAnimationFrame(() => {
+    return new Promise(resolve => {
       requestAnimationFrame(() => {
-        const assistants = feed.querySelectorAll('.row.agent');
-        if (!assistants.length) {
+        requestAnimationFrame(() => {
+          const assistants = feed.querySelectorAll('.row.agent');
+          if (!assistants.length) {
+            scrollFeed(true);
+            stickToBottom = true;
+            resolve();
+            return;
+          }
           scrollFeed(true);
-          return;
-        }
-        scrollFeed(true);
-        stickToBottom = true;
+          stickToBottom = true;
+          resolve();
+        });
       });
     });
   }
@@ -1060,28 +1066,33 @@
   // ── History ───────────────────────────────────────────────
 
   async function loadHistory() {
-    feed.innerHTML = '';
-    const res  = await fetch(`/sessions/${sid}/history`);
-    const data = await res.json();
-    for (const msg of data.messages) {
-      if (msg.role === 'user') {
-        addUserMsg(msg.content, msg.attachments || [], false);
-      } else {
-        // Render stored tool steps before the assistant message
-        for (const step of (msg.steps || [])) {
-          if (step.type === 'tool_call')
-            addStep('tool-call', step.name, step.args, false);
-          else if (step.type === 'tool_result')
-            addStep('tool-result', step.name, step.result, false);
+    messagesEl.style.visibility = 'hidden';
+    try {
+      feed.innerHTML = '';
+      const res  = await fetch(`/sessions/${sid}/history`);
+      const data = await res.json();
+      for (const msg of data.messages) {
+        if (msg.role === 'user') {
+          addUserMsg(msg.content, msg.attachments || [], false);
+        } else {
+          // Render stored tool steps before the assistant message
+          for (const step of (msg.steps || [])) {
+            if (step.type === 'tool_call')
+              addStep('tool-call', step.name, step.args, false);
+            else if (step.type === 'tool_result')
+              addStep('tool-result', step.name, step.result, false);
+          }
+          addAgentMsg(msg.content, false, true);
         }
-        addAgentMsg(msg.content, false, true);
       }
+      if (!data.messages.length) {
+        feed.innerHTML = '<div class="empty-hint">New session — say something.</div>';
+      }
+      await scrollToLastAssistantAfterLayout();
+      highlightSession();
+    } finally {
+      messagesEl.style.visibility = '';
     }
-    if (!data.messages.length) {
-      feed.innerHTML = '<div class="empty-hint">New session — say something.</div>';
-    }
-    scrollToLastAssistantAfterLayout();
-    highlightSession();
   }
 
   // ── Sessions ──────────────────────────────────────────────
@@ -1091,6 +1102,7 @@
     list.innerHTML = '';
     const res  = await fetch('/sessions');
     const data = await res.json();
+    sessionsCache = Array.isArray(data.sessions) ? data.sessions : [];
     if (!data.sessions.length) {
       list.innerHTML = '<div class="empty-hint">No sessions yet.</div>';
       return;
@@ -1107,7 +1119,7 @@
           </div>
           <button class="sess-del" title="Delete" onclick="deleteSession('${s.session_id}',event)">×</button>
         </div>`;
-      el.addEventListener('click', () => switchSession(s.session_id));
+      el.addEventListener('click', () => { void switchSession(s.session_id); });
       list.appendChild(el);
     }
   }
@@ -1118,11 +1130,17 @@
     });
   }
 
-  function switchSession(newSid) {
+  async function switchSession(newSid) {
     sid = newSid;
     localStorage.setItem('sid', sid);
-    loadHistory();
+    await loadHistory();
     highlightSession();
+    input.focus();
+  }
+
+  function switchSessionByIndex(idx0) {
+    if (!Number.isInteger(idx0) || idx0 < 0 || idx0 >= sessionsCache.length) return;
+    void switchSession(sessionsCache[idx0].session_id);
   }
 
   async function newSession() {
@@ -1130,6 +1148,7 @@
     localStorage.setItem('sid', sid);
     await loadHistory();
     if (document.getElementById('sessions-panel').classList.contains('open')) loadSessions();
+    input.focus();
   }
 
   async function deleteSession(id, e) {
@@ -1620,6 +1639,67 @@
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   });
+
+  // Global keyboard shortcuts (work even when #input is focused).
+  // Chosen as Option/Alt-only to avoid overriding first-class browser shortcuts
+  // like Cmd+N / Cmd+1 tab switching on macOS.
+  // - Alt+N: new chat
+  // - Alt+J: toggle sessions panel (left)
+  // - Alt+K: toggle memories panel (right)
+  // - Alt+L: open attachment picker
+  // - Alt+1..Alt+9 / Alt+0: switch sessions 1..10
+  function _isAltOnlyShortcutEvent(e) {
+    return !!(e.altKey && !e.ctrlKey && !e.metaKey);
+  }
+
+  function _shortcutKeyId(e) {
+    // Use physical key first; fall back to legacy keyCode on some mac layouts.
+    return e.code || (
+      e.keyCode === 78 ? 'KeyN' :
+      e.keyCode === 74 ? 'KeyJ' :
+      e.keyCode === 75 ? 'KeyK' :
+      e.keyCode === 76 ? 'KeyL' :
+      e.keyCode === 48 ? 'Digit0' :
+      e.keyCode === 49 ? 'Digit1' :
+      e.keyCode === 50 ? 'Digit2' :
+      e.keyCode === 51 ? 'Digit3' :
+      e.keyCode === 52 ? 'Digit4' :
+      e.keyCode === 53 ? 'Digit5' :
+      e.keyCode === 54 ? 'Digit6' :
+      e.keyCode === 55 ? 'Digit7' :
+      e.keyCode === 56 ? 'Digit8' :
+      e.keyCode === 57 ? 'Digit9' :
+      ''
+    );
+  }
+
+  function _runAltShortcutByKeyId(keyId) {
+    if (keyId === 'KeyN') { newSession(); return true; }
+    if (keyId === 'KeyL') { document.getElementById('file-input').click(); return true; }
+    if (keyId === 'KeyJ') { togglePanel('sessions-panel', 'btn-sessions'); return true; }
+    if (keyId === 'KeyK') { togglePanel('mem-panel', 'btn-mem'); return true; }
+    const digitToIndex = {
+      Digit1: 0, Digit2: 1, Digit3: 2, Digit4: 3, Digit5: 4,
+      Digit6: 5, Digit7: 6, Digit8: 7, Digit9: 8, Digit0: 9,
+    };
+    if (Object.prototype.hasOwnProperty.call(digitToIndex, keyId)) {
+      const idx = digitToIndex[keyId];
+      if (!sessionsCache.length) loadSessions().finally(() => switchSessionByIndex(idx));
+      else switchSessionByIndex(idx);
+      return true;
+    }
+    return false;
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.defaultPrevented || !_isAltOnlyShortcutEvent(e)) return;
+    const keyId = _shortcutKeyId(e);
+    const handled = _runAltShortcutByKeyId(keyId);
+    if (!handled) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+  }, true);
 
   // Strip rich formatting on paste. Collapse large pastes into a compact chip.
   input.addEventListener('paste', e => {
