@@ -923,15 +923,20 @@
 
   /** Run after history DOM + KaTeX so heights match rendered math (Bugbot: defer scroll past setTimeout math). */
   function scrollToLastAssistantAfterLayout() {
-    requestAnimationFrame(() => {
+    return new Promise(resolve => {
       requestAnimationFrame(() => {
-        const assistants = feed.querySelectorAll('.row.agent');
-        if (!assistants.length) {
+        requestAnimationFrame(() => {
+          const assistants = feed.querySelectorAll('.row.agent');
+          if (!assistants.length) {
+            scrollFeed(true);
+            stickToBottom = true;
+            resolve();
+            return;
+          }
           scrollFeed(true);
-          return;
-        }
-        scrollFeed(true);
-        stickToBottom = true;
+          stickToBottom = true;
+          resolve();
+        });
       });
     });
   }
@@ -1061,28 +1066,33 @@
   // ── History ───────────────────────────────────────────────
 
   async function loadHistory() {
-    feed.innerHTML = '';
-    const res  = await fetch(`/sessions/${sid}/history`);
-    const data = await res.json();
-    for (const msg of data.messages) {
-      if (msg.role === 'user') {
-        addUserMsg(msg.content, msg.attachments || [], false);
-      } else {
-        // Render stored tool steps before the assistant message
-        for (const step of (msg.steps || [])) {
-          if (step.type === 'tool_call')
-            addStep('tool-call', step.name, step.args, false);
-          else if (step.type === 'tool_result')
-            addStep('tool-result', step.name, step.result, false);
+    messagesEl.style.visibility = 'hidden';
+    try {
+      feed.innerHTML = '';
+      const res  = await fetch(`/sessions/${sid}/history`);
+      const data = await res.json();
+      for (const msg of data.messages) {
+        if (msg.role === 'user') {
+          addUserMsg(msg.content, msg.attachments || [], false);
+        } else {
+          // Render stored tool steps before the assistant message
+          for (const step of (msg.steps || [])) {
+            if (step.type === 'tool_call')
+              addStep('tool-call', step.name, step.args, false);
+            else if (step.type === 'tool_result')
+              addStep('tool-result', step.name, step.result, false);
+          }
+          addAgentMsg(msg.content, false, true);
         }
-        addAgentMsg(msg.content, false, true);
       }
+      if (!data.messages.length) {
+        feed.innerHTML = '<div class="empty-hint">New session — say something.</div>';
+      }
+      await scrollToLastAssistantAfterLayout();
+      highlightSession();
+    } finally {
+      messagesEl.style.visibility = '';
     }
-    if (!data.messages.length) {
-      feed.innerHTML = '<div class="empty-hint">New session — say something.</div>';
-    }
-    scrollToLastAssistantAfterLayout();
-    highlightSession();
   }
 
   // ── Sessions ──────────────────────────────────────────────
