@@ -685,6 +685,25 @@
    * emits `<br>`, which splits the formula and breaks KaTeX. TeX row breaks
    * need `\\` before newline; normalize lone `\` + NL → `\\` + NL inside math.
    */
+  function _normalizeTeXRowBreaksInMathInner(inner) {
+    let s = inner;
+    // Lone `\` + optional spaces + newline: Markdown hard break → TeX `\\` + NL.
+    // Does not match `\\`+NL: after first `\` the next char is `\`, not \s or NL.
+    s = s.replace(/(^|[^\\])\\(\s*)(\r\n|\n|\r)/g, '$1\\\\$2$3');
+    // Models often emit `\ ` between matrix rows; TeX needs `\\` before next row.
+    s = s.replace(/(^|[^\\])\\([ \t]+)(?=[\d(&])/g, '$1\\\\$2');
+    return s;
+  }
+
+  /** Raw model text: bracket delims escaped, not yet through Marked. */
+  function _bracketMathDelimsBalanced(t) {
+    const oB = (t.match(/\\\[/g) || []).length;
+    const cB = (t.match(/\\\]/g) || []).length;
+    const oP = (t.match(/\\\(/g) || []).length;
+    const cP = (t.match(/\\\)/g) || []).length;
+    return oB === cB && oP === cP;
+  }
+
   function _doubleBackslashBeforeNewlineInMathSegments(s, open, close) {
     let i = 0;
     let out = '';
@@ -702,10 +721,7 @@
         out += s.slice(start);
         break;
       }
-      let inner = s.slice(start + olen, end);
-      // Lone `\`+NL is a Markdown hard break; TeX `\\`+NL must stay (second `\`
-      // is preceded by `\`, so [^\\] does not match before that pair).
-      inner = inner.replace(/(^|[^\\])\\(\r\n|\n|\r)/g, '$1\\\\$2');
+      let inner = _normalizeTeXRowBreaksInMathInner(s.slice(start + olen, end));
       out += open + inner + close;
       i = end + clen;
     }
@@ -1192,7 +1208,8 @@
       if (agentMd) {
         const savedTop = stickToBottom ? null : messagesEl.scrollTop;
         agentMd.innerHTML = renderStreamingMarkdown(bubbleBuffer);
-        if (_hasMath(bubbleBuffer)) renderMath(agentMd);
+        if (_hasMath(bubbleBuffer) && _bracketMathDelimsBalanced(bubbleBuffer))
+          renderMath(agentMd);
         if (stickToBottom) scrollFeed(true);
         else messagesEl.scrollTop = savedTop;
       }
