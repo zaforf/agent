@@ -426,6 +426,21 @@ Calls `GET /sessions/{id}/history` which returns the display-friendly format (`g
 
 Session ID is stored in `localStorage` as `"sid"`. Survives page reloads and browser restarts. Cleared only by `newSession()` or explicit deletion.
 
+### 9.6 Keyboard shortcuts
+
+Global shortcuts are implemented in `static/index.html` and intentionally work even when focus is in the contenteditable input:
+
+- `Ctrl/Cmd + Shift + N` — new session (`newSession()`), then focus input.
+- `Ctrl/Cmd + Shift + S` — toggle sessions panel.
+- `Ctrl/Cmd + Shift + M` — toggle memories panel.
+- `Ctrl/Cmd + Shift + O` — open file picker (`#file-input.click()`).
+- `Alt + 1..9` — switch to sessions index 1..9 from latest `/sessions` list.
+- `Alt + 0` — switch to sessions index 10.
+
+Guardrails:
+- Shortcuts are ignored during IME composition and when `Ctrl/Cmd+Alt` are both pressed.
+- Single-key shortcuts are not bound (to avoid disrupting normal typing in the textbox).
+
 ---
 
 ## 10. System Prompt
