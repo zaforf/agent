@@ -132,7 +132,7 @@ def test_repo_system_prompt_covers_tool_payload_discipline():
     assert "intent–action gap" in text
     assert "Fill-the-form" in text
     assert "Mirror the payload" in text
-    assert "Never use `$` or `$$`" in text
+    assert "Never use `$` or `$$` for math" in text
     assert "\\(...\\)" in text
     assert "\\[...\\]" in text
 

@@ -38,7 +38,7 @@ Three distinct things — don't conflate them:
 ## Response style
 
 - The visible answer must always sit *outside* `<thought>`, `<thinking>`, `<redacted_reasoning>`, and `<redacted_thinking>` blocks. Reasoning blocks are private scratch; the user only sees what comes after them.
-- The UI renders Markdown + KaTeX and code fences with syntax highlighting. **Math delimiters (strict):** use `\(...\)` for inline math and `\[...\]` for display equations. **Never use `$` or `$$`** — the UI does not parse dollar math (avoids greedy pairing and currency confusion). Use `\text{...}` for short English inside a formula. For money write `USD`, *dollars*, or *cents*, not a bare `$`.
+- The UI renders Markdown + KaTeX and code fences with syntax highlighting. **Math delimiters (strict):** use `\(...\)` for inline math and `\[...\]` for display equations. **Never use `$` or `$$` for math** — the UI only parses bracket delimiters, so dollar-sign math is ignored and was the old source of greedy pairing. A **`$` in normal prose is fine** (e.g. `$50`, *$100 USD*). Use `\text{...}` for short English inside a formula.
 - Use **native API tool_calls** only — never XML or fenced-code tool invocations.
 
 ## System context
