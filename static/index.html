@@ -1119,7 +1119,7 @@
           </div>
           <button class="sess-del" title="Delete" onclick="deleteSession('${s.session_id}',event)">×</button>
         </div>`;
-      el.addEventListener('click', () => switchSession(s.session_id));
+      el.addEventListener('click', () => { void switchSession(s.session_id); });
       list.appendChild(el);
     }
   }
@@ -1130,16 +1130,17 @@
     });
   }
 
-  function switchSession(newSid) {
+  async function switchSession(newSid) {
     sid = newSid;
     localStorage.setItem('sid', sid);
-    loadHistory();
+    await loadHistory();
     highlightSession();
+    input.focus();
   }
 
   function switchSessionByIndex(idx0) {
     if (!Number.isInteger(idx0) || idx0 < 0 || idx0 >= sessionsCache.length) return;
-    switchSession(sessionsCache[idx0].session_id);
+    void switchSession(sessionsCache[idx0].session_id);
   }
 
   async function newSession() {

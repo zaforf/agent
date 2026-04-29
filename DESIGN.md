@@ -440,7 +440,8 @@ Global shortcuts are implemented in `static/index.html` and intentionally work e
 Guardrails:
 - Browser-native `Cmd/Ctrl` shortcuts are untouched (`Cmd+N`, `Cmd+1`, etc.).
 - Shortcuts are ignored during IME composition and when `Ctrl` or `Cmd` is pressed.
-- Option shortcuts call `preventDefault()` so no alternate character is inserted into the textbox.
+- Option shortcuts are bound in capture phase and call `preventDefault()` + `stopPropagation()` so macOS Option dead-key characters are not inserted into the textbox.
+- Session switches (`switchSession`) await history load and then focus the input.
 
 ---
 
