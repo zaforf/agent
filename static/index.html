@@ -673,8 +673,28 @@
     }
   });
 
+  /**
+   * CommonMark/Marked treat `\(` as "escaped (" → output is plain `(`, so KaTeX
+   * never sees the delimiter. Double the backslash on LaTeX math delimiters only
+   * (outside fenced ``` blocks) so the HTML text contains literal `\(` / `\[` for
+   * renderMathInElement. See DESIGN §9.2.
+   */
+  function escapeBracketMathDelimitersForMarked(raw) {
+    const s = String(raw ?? '');
+    const parts = s.split(/(```[\s\S]*?```)/g);
+    for (let i = 0; i < parts.length; i++) {
+      if (parts[i].startsWith('```')) continue;
+      parts[i] = parts[i]
+        .replace(/\\\(/g, '\\\\(')
+        .replace(/\\\)/g, '\\\\)')
+        .replace(/\\\[/g, '\\\\[')
+        .replace(/\\\]/g, '\\\\]');
+    }
+    return parts.join('');
+  }
+
   function renderMarkdown(text) {
-    return marked.parse(text);
+    return marked.parse(escapeBracketMathDelimitersForMarked(text));
   }
 
   /**
@@ -692,7 +712,7 @@
       .replace(/```[\s\S]*$/, '');
     const singles = (noFences.match(/`/g) || []).length;
     if (singles % 2 !== 0) text += '`';
-    return marked.parse(text);
+    return marked.parse(escapeBracketMathDelimitersForMarked(text));
   }
 
   function renderMath(el) {
