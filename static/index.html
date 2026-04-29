@@ -679,16 +679,53 @@
    * (outside fenced ``` blocks) so the HTML text contains literal `\(` / `\[` for
    * renderMathInElement. See DESIGN §9.2.
    */
+  /**
+   * After delimiter doubling, `\\[` ... `\\]` / `\\(` ... `\\)` contain TeX.
+   * A single `\` before newline is a CommonMark "hard line break" → Marked
+   * emits `<br>`, which splits the formula and breaks KaTeX. TeX row breaks
+   * need `\\` before newline; normalize lone `\` + NL → `\\` + NL inside math.
+   */
+  function _doubleBackslashBeforeNewlineInMathSegments(s, open, close) {
+    let i = 0;
+    let out = '';
+    const olen = open.length;
+    const clen = close.length;
+    while (i < s.length) {
+      const start = s.indexOf(open, i);
+      if (start === -1) {
+        out += s.slice(i);
+        break;
+      }
+      out += s.slice(i, start);
+      const end = s.indexOf(close, start + olen);
+      if (end === -1) {
+        out += s.slice(start);
+        break;
+      }
+      let inner = s.slice(start + olen, end);
+      // Lone `\`+NL is a Markdown hard break; TeX `\\`+NL must stay (second `\`
+      // is preceded by `\`, so [^\\] does not match before that pair).
+      inner = inner.replace(/(^|[^\\])\\(\r\n|\n|\r)/g, '$1\\\\$2');
+      out += open + inner + close;
+      i = end + clen;
+    }
+    return out;
+  }
+
   function escapeBracketMathDelimitersForMarked(raw) {
     const s = String(raw ?? '');
     const parts = s.split(/(```[\s\S]*?```)/g);
     for (let i = 0; i < parts.length; i++) {
       if (parts[i].startsWith('```')) continue;
-      parts[i] = parts[i]
+      let chunk = parts[i]
         .replace(/\\\(/g, '\\\\(')
         .replace(/\\\)/g, '\\\\)')
         .replace(/\\\[/g, '\\\\[')
         .replace(/\\\]/g, '\\\\]');
+      // Must run after delimiter doubling: open/close are 3-char sequences \\[ \\] \\( \\)
+      chunk = _doubleBackslashBeforeNewlineInMathSegments(chunk, '\\\\[', '\\\\]');
+      chunk = _doubleBackslashBeforeNewlineInMathSegments(chunk, '\\\\(', '\\\\)');
+      parts[i] = chunk;
     }
     return parts.join('');
   }
