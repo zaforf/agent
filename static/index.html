@@ -707,9 +707,19 @@
     return s;
   }
 
+  /** Inline $...$ that spans many words or a sentence is almost always a greedy
+   *  pair from a dropped/closing `$` — unwrap so prose is not math-mode. */
+  const _INLINE_MATH_MAX_CHARS = 80;
+
   function _shouldUnwrapInlineMath(inner) {
     const t = inner.trim();
     if (t.length === 0) return false;
+    // Long spans are never legitimate inline math in chat (use $$ for blocks).
+    if (t.length > _INLINE_MATH_MAX_CHARS) return true;
+    const wordCount = t.split(/\s+/).filter(Boolean).length;
+    if (wordCount > 10) return true;
+    // Sentence break inside the span: ". You" or stuck ".You" (missing space).
+    if (/[.!?][\s]*[A-Za-z]/.test(t) || /[.!?][A-Z]/.test(t)) return true;
     // Short, tight expressions — keep as math
     if (t.length <= 48 && !/\s{2,}/.test(t) && !/[.!?][\s]*[A-Za-z]/.test(t)) {
       // Skip common English inside \text{...} (e.g. "\text{for all}")
@@ -720,8 +730,8 @@
     // Stuck-together words inside "math" (e.g. "meaningits", "vectoris")
     if (/[a-z]{3,}(its|know|was|but)\b/i.test(t)) return true;
     if (/\b(vector|meaning|written|since|target|secret|trying|Imagine|Oracle|unit|Worst|Noise)\b/i.test(t)) return true;
+    if (/\b(you|we|they|your|our|their|don't|doesn't|didn't|won't|can't|isn't|aren't|wasn't|weren't)\b/i.test(t)) return true;
     if ((t.match(/\s/g) || []).length >= 3 && t.length > 28) return true;
-    if (/[.!?][\s]*[A-Za-z]/.test(t)) return true;
     return false;
   }
 
