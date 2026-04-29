@@ -1648,7 +1648,7 @@
   // - Alt+L: open attachment picker
   // - Alt+1..Alt+9 / Alt+0: switch sessions 1..10
   function _isAltOnlyShortcutEvent(e) {
-    return !!(e.altKey && !e.ctrlKey && !e.metaKey && !e.isComposing);
+    return !!(e.altKey && !e.ctrlKey && !e.metaKey);
   }
 
   function _shortcutKeyId(e) {
@@ -1690,13 +1690,29 @@
     return false;
   }
 
+  // macOS Option dead-keys (notably ⌥N) can queue composition text even when
+  // keydown is prevented. Keep a short suppression window after handled
+  // shortcuts to block leaked accent insertion into the contenteditable input.
+  let _suppressOptionDeadTextUntil = 0;
+
   document.addEventListener('keydown', e => {
     if (e.defaultPrevented || !_isAltOnlyShortcutEvent(e)) return;
     const handled = _runAltShortcutByKeyId(_shortcutKeyId(e));
     if (!handled) return;
+    _suppressOptionDeadTextUntil = performance.now() + 450;
     e.preventDefault();
     e.stopPropagation();
     // On some mac layouts, Option dead-key text may still be queued.
+    if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+  }, true);
+
+  document.addEventListener('beforeinput', e => {
+    if (performance.now() > _suppressOptionDeadTextUntil) return;
+    const t = e.target;
+    if (!(t === input || input.contains(t))) return;
+    if (!String(e.inputType || '').startsWith('insert')) return;
+    e.preventDefault();
+    e.stopPropagation();
     if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
   }, true);
 
@@ -1717,6 +1733,17 @@
   // Clean up any stray <br> Chrome inserts when the div becomes empty.
   input.addEventListener('input', () => {
     if (!input.textContent.trim() && !input.querySelector('.file-chip, .paste-chip')) {
+      input.innerHTML = '';
+    }
+  });
+
+  // macOS Option dead-key fallback: if a dead-key slip still commits a tiny
+  // accent text node right after a handled shortcut, scrub it.
+  input.addEventListener('compositionend', () => {
+    if (!window.__lastAltShortcutTs) return;
+    if (Date.now() - window.__lastAltShortcutTs > 350) return;
+    const txt = input.textContent || '';
+    if (txt.length <= 2 && !input.querySelector('.file-chip, .paste-chip')) {
       input.innerHTML = '';
     }
   });
