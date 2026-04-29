@@ -1642,7 +1642,8 @@
   // Chosen as Option/Alt-only to avoid overriding first-class browser shortcuts
   // like Cmd+N / Cmd+1 tab switching on macOS.
   // - Alt+N: new chat
-  // - Alt+0: switch to first session in current sidebar order
+  // - Alt+1..Alt+9: switch to sessions 1..9 in current sidebar order
+  // - Alt+0: switch to session 10 in current sidebar order
   // - Alt+L: toggle sessions panel (left)
   // - Alt+R: toggle memories panel (right)
   // - Alt+O: open attachment picker
@@ -1671,11 +1672,16 @@
       togglePanel('mem-panel', 'btn-mem');
       return;
     }
-    if (code === 'Digit0') {
+    const digitToIndex = {
+      Digit1: 0, Digit2: 1, Digit3: 2, Digit4: 3, Digit5: 4,
+      Digit6: 5, Digit7: 6, Digit8: 7, Digit9: 8, Digit0: 9,
+    };
+    if (Object.prototype.hasOwnProperty.call(digitToIndex, code)) {
       e.preventDefault();
+      const idx = digitToIndex[code];
       // Refresh list opportunistically so index maps to latest ordering.
-      if (!sessionsCache.length) loadSessions().finally(() => switchSessionByIndex(0));
-      else switchSessionByIndex(0);
+      if (!sessionsCache.length) loadSessions().finally(() => switchSessionByIndex(idx));
+      else switchSessionByIndex(idx);
     }
   });
 
