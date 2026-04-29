@@ -830,10 +830,12 @@
   function renderMath(el) {
     if (typeof renderMathInElement === 'undefined') return;
     renderMathInElement(el, {
-      // Match system prompt: LaTeX bracket delimiters only (no $ / $$).
+      // Primary delimiters are bracket LaTeX; `$...$` is tolerated as fallback
+      // for model slip-ups so inline variables still render.
       delimiters: [
         { left: '\\[', right: '\\]', display: true  },
         { left: '\\(', right: '\\)', display: false },
+        { left: '$',  right: '$',  display: false },
       ],
       throwOnError: false,
       errorColor:   'inherit',
