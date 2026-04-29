@@ -728,6 +728,37 @@
     return out;
   }
 
+  const _MATH_NL_SENTINEL = '@@MATH_NL_SENTINEL_9f2b@@';
+
+  function _encodeMathNewlinesForMarked(s, open, close) {
+    let i = 0;
+    let out = '';
+    const olen = open.length;
+    const clen = close.length;
+    while (i < s.length) {
+      const start = s.indexOf(open, i);
+      if (start === -1) {
+        out += s.slice(i);
+        break;
+      }
+      out += s.slice(i, start);
+      const end = s.indexOf(close, start + olen);
+      if (end === -1) {
+        out += s.slice(start);
+        break;
+      }
+      let inner = s.slice(start + olen, end);
+      inner = inner.replace(/\r\n|\n|\r/g, _MATH_NL_SENTINEL);
+      out += open + inner + close;
+      i = end + clen;
+    }
+    return out;
+  }
+
+  function _restoreMathNewlinesFromMarkedHtml(html) {
+    return String(html ?? '').replaceAll(_MATH_NL_SENTINEL, '\n');
+  }
+
   function escapeBracketMathDelimitersForMarked(raw) {
     const s = String(raw ?? '');
     const parts = s.split(/(```[\s\S]*?```)/g);
@@ -741,13 +772,17 @@
       // Must run after delimiter doubling: open/close are 3-char sequences \\[ \\] \\( \\)
       chunk = _doubleBackslashBeforeNewlineInMathSegments(chunk, '\\\\[', '\\\\]');
       chunk = _doubleBackslashBeforeNewlineInMathSegments(chunk, '\\\\(', '\\\\)');
+      chunk = _encodeMathNewlinesForMarked(chunk, '\\\\[', '\\\\]');
+      chunk = _encodeMathNewlinesForMarked(chunk, '\\\\(', '\\\\)');
       parts[i] = chunk;
     }
     return parts.join('');
   }
 
   function renderMarkdown(text) {
-    return marked.parse(escapeBracketMathDelimitersForMarked(text));
+    return _restoreMathNewlinesFromMarkedHtml(
+      marked.parse(escapeBracketMathDelimitersForMarked(text))
+    );
   }
 
   /**
@@ -765,7 +800,9 @@
       .replace(/```[\s\S]*$/, '');
     const singles = (noFences.match(/`/g) || []).length;
     if (singles % 2 !== 0) text += '`';
-    return marked.parse(escapeBracketMathDelimitersForMarked(text));
+    return _restoreMathNewlinesFromMarkedHtml(
+      marked.parse(escapeBracketMathDelimitersForMarked(text))
+    );
   }
 
   function renderMath(el) {
