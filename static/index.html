@@ -1690,49 +1690,11 @@
     return false;
   }
 
-  // macOS Option dead-keys (notably ⌥N) can queue composition text even when
-  // keydown is prevented. Keep a short suppression window after handled
-  // shortcuts to block leaked accent insertion into the contenteditable input.
-  let _suppressOptionDeadTextUntil = 0;
-  let _pendingOptionNCompose = false;
-
   document.addEventListener('keydown', e => {
     if (e.defaultPrevented || !_isAltOnlyShortcutEvent(e)) return;
     const keyId = _shortcutKeyId(e);
     const handled = _runAltShortcutByKeyId(keyId);
     if (!handled) return;
-    if (keyId === 'KeyN') _pendingOptionNCompose = true;
-    _suppressOptionDeadTextUntil = performance.now() + 450;
-    e.preventDefault();
-    e.stopPropagation();
-    // On some mac layouts, Option dead-key text may still be queued.
-    if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
-  }, true);
-
-  // If ⌥N still arms a dead-key compose state, the next printable key can get
-  // transformed (e.g. "a" -> "ã"). Intercept once and insert the raw key.
-  document.addEventListener('keydown', e => {
-    if (!_pendingOptionNCompose) return;
-    if (e.defaultPrevented) return;
-    // Ignore pure modifier presses while waiting for the next real key.
-    if (e.key === 'Shift' || e.key === 'Alt' || e.key === 'Meta' || e.key === 'Control') return;
-    // Any non-alt key exits the pending compose guard.
-    const t = e.target;
-    const inInput = (t === input || input.contains(t));
-    if (inInput && !e.altKey && !e.metaKey && !e.ctrlKey && typeof e.key === 'string' && e.key.length === 1) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
-      document.execCommand('insertText', false, e.key);
-    }
-    _pendingOptionNCompose = false;
-  }, true);
-
-  document.addEventListener('beforeinput', e => {
-    if (performance.now() > _suppressOptionDeadTextUntil) return;
-    const t = e.target;
-    if (!(t === input || input.contains(t))) return;
-    if (!String(e.inputType || '').startsWith('insert')) return;
     e.preventDefault();
     e.stopPropagation();
     if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
@@ -1758,16 +1720,6 @@
       input.innerHTML = '';
     }
   });
-
-  // If compose starts right after a handled shortcut, cancel it and clear guard.
-  input.addEventListener('compositionstart', e => {
-    if (performance.now() > _suppressOptionDeadTextUntil && !_pendingOptionNCompose) return;
-    e.preventDefault();
-    _pendingOptionNCompose = false;
-    if ((input.textContent || '').length <= 2 && !input.querySelector('.file-chip, .paste-chip')) {
-      input.innerHTML = '';
-    }
-  }, true);
 
   // Wire file-input change handler.
   document.getElementById('file-input').addEventListener('change', handleFilePicker);

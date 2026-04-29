@@ -440,7 +440,7 @@ Global shortcuts are implemented in `static/index.html` and intentionally work e
 Guardrails:
 - Browser-native `Cmd/Ctrl` shortcuts are untouched (`Cmd+N`, `Cmd+1`, etc.).
 - Shortcuts are ignored during IME composition and when `Ctrl` or `Cmd` is pressed.
-- Option shortcuts are bound in capture phase and call `preventDefault()` + `stopPropagation()`. For macOS dead-key layouts, `keydown` also maps `Alt+Dead` + physical key (`N/J/K/L`) and `beforeinput`/`compositionend` scrub any queued dead-key residue in the contenteditable.
+- Option shortcuts are bound in capture phase and call `preventDefault()` + `stopPropagation()` so handled shortcuts do not insert text in the contenteditable.
 - Session switches (`switchSession`) await history load and then focus the input.
 
 ---
