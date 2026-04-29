@@ -1148,6 +1148,7 @@
     localStorage.setItem('sid', sid);
     await loadHistory();
     if (document.getElementById('sessions-panel').classList.contains('open')) loadSessions();
+    input.focus();
   }
 
   async function deleteSession(id, e) {
