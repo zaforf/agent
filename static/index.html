@@ -729,6 +729,7 @@
   }
 
   const _MATH_NL_SENTINEL = '@@MATH_NL_SENTINEL_9f2b@@';
+  const _MATH_BS_SENTINEL = '@@MATH_BS_SENTINEL_3c7d@@';
 
   function _encodeMathNewlinesForMarked(s, open, close) {
     let i = 0;
@@ -755,8 +756,35 @@
     return out;
   }
 
+  function _encodeMathBackslashesForMarked(s, open, close) {
+    let i = 0;
+    let out = '';
+    const olen = open.length;
+    const clen = close.length;
+    while (i < s.length) {
+      const start = s.indexOf(open, i);
+      if (start === -1) {
+        out += s.slice(i);
+        break;
+      }
+      out += s.slice(i, start);
+      const end = s.indexOf(close, start + olen);
+      if (end === -1) {
+        out += s.slice(start);
+        break;
+      }
+      let inner = s.slice(start + olen, end);
+      inner = inner.replace(/\\/g, _MATH_BS_SENTINEL);
+      out += open + inner + close;
+      i = end + clen;
+    }
+    return out;
+  }
+
   function _restoreMathNewlinesFromMarkedHtml(html) {
-    return String(html ?? '').replaceAll(_MATH_NL_SENTINEL, '\n');
+    return String(html ?? '')
+      .replaceAll(_MATH_NL_SENTINEL, '\n')
+      .replaceAll(_MATH_BS_SENTINEL, '\\');
   }
 
   function escapeBracketMathDelimitersForMarked(raw) {
@@ -772,6 +800,9 @@
       // Must run after delimiter doubling: open/close are 3-char sequences \\[ \\] \\( \\)
       chunk = _doubleBackslashBeforeNewlineInMathSegments(chunk, '\\\\[', '\\\\]');
       chunk = _doubleBackslashBeforeNewlineInMathSegments(chunk, '\\\\(', '\\\\)');
+      // Protect TeX backslashes from Marked escapes inside math payload.
+      chunk = _encodeMathBackslashesForMarked(chunk, '\\\\[', '\\\\]');
+      chunk = _encodeMathBackslashesForMarked(chunk, '\\\\(', '\\\\)');
       chunk = _encodeMathNewlinesForMarked(chunk, '\\\\[', '\\\\]');
       chunk = _encodeMathNewlinesForMarked(chunk, '\\\\(', '\\\\)');
       parts[i] = chunk;
