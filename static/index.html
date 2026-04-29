@@ -1642,11 +1642,10 @@
   // Chosen as Option/Alt-only to avoid overriding first-class browser shortcuts
   // like Cmd+N / Cmd+1 tab switching on macOS.
   // - Alt+N: new chat
-  // - Alt+1..Alt+9: switch to sessions 1..9 in current sidebar order
-  // - Alt+0: switch to session 10 in current sidebar order
-  // - Alt+L: toggle sessions panel (left)
-  // - Alt+R: toggle memories panel (right)
-  // - Alt+O: open attachment picker
+  // - Alt+J: toggle sessions panel (left)
+  // - Alt+K: toggle memories panel (right)
+  // - Alt+L: open attachment picker
+  // - Alt+1..Alt+9 / Alt+0: switch sessions 1..10
   document.addEventListener('keydown', e => {
     if (e.defaultPrevented || e.isComposing) return;
     if (!e.altKey || e.ctrlKey || e.metaKey) return;
@@ -1657,17 +1656,17 @@
       newSession();
       return;
     }
-    if (code === 'KeyO') {
+    if (code === 'KeyL') {
       e.preventDefault();
       document.getElementById('file-input').click();
       return;
     }
-    if (code === 'KeyL') {
+    if (code === 'KeyJ') {
       e.preventDefault();
       togglePanel('sessions-panel', 'btn-sessions');
       return;
     }
-    if (code === 'KeyR') {
+    if (code === 'KeyK') {
       e.preventDefault();
       togglePanel('mem-panel', 'btn-mem');
       return;

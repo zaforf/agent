@@ -431,9 +431,9 @@ Session ID is stored in `localStorage` as `"sid"`. Survives page reloads and bro
 Global shortcuts are implemented in `static/index.html` and intentionally work even when focus is in the contenteditable input:
 
 - `Alt/Option + N` — new session (`newSession()`), then focus input.
-- `Alt/Option + L` — toggle sessions panel.
-- `Alt/Option + R` — toggle memories panel.
-- `Alt/Option + O` — open file picker (`#file-input.click()`).
+- `Alt/Option + J` — toggle sessions panel.
+- `Alt/Option + K` — toggle memories panel.
+- `Alt/Option + L` — open file picker (`#file-input.click()`).
 - `Alt/Option + 1..9` — switch to sessions index 1..9 from latest `/sessions` list.
 - `Alt/Option + 0` — switch to sessions index 10.
 
