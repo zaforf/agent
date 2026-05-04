@@ -656,7 +656,7 @@
   marked.use({
     renderer: {
       code(token) {
-        // token is an object in marked v12; guard against any calling convention
+        // token is an object in marked v12; guard against any calling conventions
         const text = String((token && token.text != null) ? token.text : (token || ''));
         const lang = token && typeof token === 'object' ? token.lang : null;
         let highlighted;
@@ -1152,7 +1152,7 @@
   }
 
   async function deleteSession(id, e) {
-    e.stopPropagation();
+    if (e && e.stopPropagation) e.stopPropagation();
     if (!confirm('Delete this session?')) return;
     await fetch(`/sessions/${id}`, { method: 'DELETE' });
     if (id === sid) newSession();
@@ -1644,6 +1644,7 @@
   // Chosen as Option/Alt-only to avoid overriding first-class browser shortcuts
   // like Cmd+N / Cmd+1 tab switching on macOS.
   // - Alt+N: new chat
+  // - Alt+M: delete chat
   // - Alt+J: toggle sessions panel (left)
   // - Alt+K: toggle memories panel (right)
   // - Alt+L: open attachment picker
@@ -1656,6 +1657,7 @@
     // Use physical key first; fall back to legacy keyCode on some mac layouts.
     return e.code || (
       e.keyCode === 78 ? 'KeyN' :
+      e.keyCode === 77 ? 'KeyM' :
       e.keyCode === 74 ? 'KeyJ' :
       e.keyCode === 75 ? 'KeyK' :
       e.keyCode === 76 ? 'KeyL' :
@@ -1675,6 +1677,7 @@
 
   function _runAltShortcutByKeyId(keyId) {
     if (keyId === 'KeyN') { newSession(); return true; }
+    if (keyId === 'KeyM') { deleteSession(sid); return true; }
     if (keyId === 'KeyL') { document.getElementById('file-input').click(); return true; }
     if (keyId === 'KeyJ') { togglePanel('sessions-panel', 'btn-sessions'); return true; }
     if (keyId === 'KeyK') { togglePanel('mem-panel', 'btn-mem'); return true; }
