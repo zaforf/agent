@@ -1645,12 +1645,13 @@
   // like Cmd+N / Cmd+1 tab switching on macOS.
   // - Alt+N: new chat
   // - Alt+M: delete chat
-  // - Alt+J: toggle sessions panel (left)
-  // - Alt+K: toggle memories panel (right)
-  // - Alt+L: open attachment picker
-  // - Alt+U: scroll to previous user message
-  // - Alt+I: scroll to next user message
+  // - Alt+U: toggle sessions panel (left)
+  // - Alt+I: toggle memories panel (right)
+  // - Alt+O: open attachment picker
+  // - Alt+K: scroll to previous user message (vim-K = up)
+  // - Alt+J: scroll to next user message   (vim-J = down)
   // - Alt+1..Alt+9 / Alt+0: switch sessions 1..10
+  // Tab: focus input
   function _isAltOnlyShortcutEvent(e) {
     return !!(e.altKey && !e.ctrlKey && !e.metaKey);
   }
@@ -1662,7 +1663,7 @@
       e.keyCode === 77 ? 'KeyM' :
       e.keyCode === 74 ? 'KeyJ' :
       e.keyCode === 75 ? 'KeyK' :
-      e.keyCode === 76 ? 'KeyL' :
+      e.keyCode === 79 ? 'KeyO' :
       e.keyCode === 85 ? 'KeyU' :
       e.keyCode === 73 ? 'KeyI' :
       e.keyCode === 48 ? 'Digit0' :
@@ -1679,9 +1680,19 @@
     );
   }
 
-  let _kbRepeat = false;
+  let _kbRepeat     = false;
+  let _navDest      = null;   // tracks scroll destination during smooth animation
+  let _navDestTimer = null;
+  let _navRepeatLast = 0;
+  const _NAV_REPEAT_MS = 150; // ms between steps while key is held — raise to slow down
 
   function _navToUserMsg(dir) {
+    // Throttle held-key repeat to _NAV_REPEAT_MS.
+    if (_kbRepeat) {
+      const now = Date.now();
+      if (now - _navRepeatLast < _NAV_REPEAT_MS) return;
+      _navRepeatLast = now;
+    }
     const rows = [...feed.querySelectorAll('.row.user')];
     if (!rows.length) return;
     // Stable row positions in scroll-content coords — immune to mid-animation BCR drift.
@@ -1690,19 +1701,21 @@
       while (el && el !== messagesEl) { top += el.offsetTop; el = el.offsetParent; }
       return top;
     });
-    const st = messagesEl.scrollTop;
+    // Use pending destination if mid-animation so rapid presses step correctly.
+    const st = _navDest !== null ? _navDest : messagesEl.scrollTop;
     let idx;
     if (dir === 'up') {
-      // Last row whose top is clearly above the 16 px alignment point.
       idx = -1;
       for (let i = 0; i < rowTops.length; i++) { if (rowTops[i] < st + 12) idx = i; }
       if (idx === -1) idx = 0;
     } else {
-      // First row whose top is clearly below the 16 px alignment point.
       idx = rowTops.findIndex(t => t > st + 20);
       if (idx === -1) idx = rows.length - 1;
     }
     const destTop = Math.max(0, rowTops[idx] - 16);
+    _navDest = destTop;
+    clearTimeout(_navDestTimer);
+    _navDestTimer = setTimeout(() => { _navDest = null; }, _kbRepeat ? 50 : 400);
     messagesEl.scrollTo({ top: destTop, behavior: _kbRepeat ? 'instant' : 'smooth' });
     stickToBottom = (messagesEl.scrollHeight - destTop - messagesEl.clientHeight) < 40;
   }
@@ -1710,11 +1723,11 @@
   function _runAltShortcutByKeyId(keyId) {
     if (keyId === 'KeyN') { newSession(); return true; }
     if (keyId === 'KeyM') { deleteSession(sid); return true; }
-    if (keyId === 'KeyL') { document.getElementById('file-input').click(); return true; }
-    if (keyId === 'KeyJ') { togglePanel('sessions-panel', 'btn-sessions'); return true; }
-    if (keyId === 'KeyK') { togglePanel('mem-panel', 'btn-mem'); return true; }
-    if (keyId === 'KeyU') { _navToUserMsg('up');   return true; }
-    if (keyId === 'KeyI') { _navToUserMsg('down'); return true; }
+    if (keyId === 'KeyO') { document.getElementById('file-input').click(); return true; }
+    if (keyId === 'KeyU') { togglePanel('sessions-panel', 'btn-sessions'); return true; }
+    if (keyId === 'KeyI') { togglePanel('mem-panel', 'btn-mem'); return true; }
+    if (keyId === 'KeyK') { _navToUserMsg('up');   return true; }
+    if (keyId === 'KeyJ') { _navToUserMsg('down'); return true; }
     const digitToIndex = {
       Digit1: 0, Digit2: 1, Digit3: 2, Digit4: 3, Digit5: 4,
       Digit6: 5, Digit7: 6, Digit8: 7, Digit9: 8, Digit0: 9,
@@ -1738,6 +1751,14 @@
     e.stopPropagation();
     if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
   }, true);
+
+  // Tab focuses the input from anywhere on the page.
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Tab' && !e.altKey && !e.ctrlKey && !e.metaKey && document.activeElement !== input) {
+      e.preventDefault();
+      input.focus();
+    }
+  });
 
   // Strip rich formatting on paste. Collapse large pastes into a compact chip.
   input.addEventListener('paste', e => {
