@@ -1687,9 +1687,10 @@
     let anchor = rows.findIndex(r => r.getBoundingClientRect().top - cTop >= -10);
     if (anchor === -1) anchor = rows.length - 1;
     const target = rows[dir === 'up' ? Math.max(0, anchor - 1) : Math.min(rows.length - 1, anchor + 1)];
-    const relTop = target.getBoundingClientRect().top - cTop;
-    messagesEl.scrollTop += relTop - 16;
-    stickToBottom = isNearBottom(messagesEl);
+    const relTop  = target.getBoundingClientRect().top - cTop;
+    const destTop = messagesEl.scrollTop + relTop - 16;
+    messagesEl.scrollTo({ top: destTop, behavior: 'smooth' });
+    stickToBottom = (messagesEl.scrollHeight - destTop - messagesEl.clientHeight) < 40;
   }
 
   function _runAltShortcutByKeyId(keyId) {
