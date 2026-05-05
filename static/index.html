@@ -1395,6 +1395,7 @@
             if (agentMd) {
               agentMd.innerHTML = renderMarkdown(bubbleBuffer);
               renderMath(agentMd);
+              if (stickToBottom) requestAnimationFrame(() => scrollFeed(true));
 
               const primary = 'gemini-gemma4-31b';
               if (providerUsed && providerUsed !== primary) {
@@ -1645,8 +1646,8 @@
   // like Cmd+N / Cmd+1 tab switching on macOS.
   // - Alt+N: new chat
   // - Alt+M: delete chat
-  // - Alt+U: toggle sessions panel (left)
-  // - Alt+I: toggle memories panel (right)
+  // - Alt+H: toggle sessions panel (left)
+  // - Alt+L: toggle memories panel (right)
   // - Alt+O: open attachment picker
   // - Alt+K: scroll to previous user message (vim-K = up)
   // - Alt+J: scroll to next user message   (vim-J = down)
@@ -1664,8 +1665,8 @@
       e.keyCode === 74 ? 'KeyJ' :
       e.keyCode === 75 ? 'KeyK' :
       e.keyCode === 79 ? 'KeyO' :
-      e.keyCode === 85 ? 'KeyU' :
-      e.keyCode === 73 ? 'KeyI' :
+      e.keyCode === 72 ? 'KeyH' :
+      e.keyCode === 76 ? 'KeyL' :
       e.keyCode === 48 ? 'Digit0' :
       e.keyCode === 49 ? 'Digit1' :
       e.keyCode === 50 ? 'Digit2' :
@@ -1684,7 +1685,7 @@
   let _navDest      = null;   // tracks scroll destination during smooth animation
   let _navDestTimer = null;
   let _navRepeatLast = 0;
-  const _NAV_REPEAT_MS = 150; // ms between steps while key is held — raise to slow down
+  const _NAV_REPEAT_MS = 50; // ms between steps while key is held — raise to slow down
 
   function _navToUserMsg(dir) {
     // Throttle held-key repeat to _NAV_REPEAT_MS.
@@ -1724,8 +1725,8 @@
     if (keyId === 'KeyN') { newSession(); return true; }
     if (keyId === 'KeyM') { deleteSession(sid); return true; }
     if (keyId === 'KeyO') { document.getElementById('file-input').click(); return true; }
-    if (keyId === 'KeyU') { togglePanel('sessions-panel', 'btn-sessions'); return true; }
-    if (keyId === 'KeyI') { togglePanel('mem-panel', 'btn-mem'); return true; }
+    if (keyId === 'KeyH') { togglePanel('sessions-panel', 'btn-sessions'); return true; }
+    if (keyId === 'KeyL') { togglePanel('mem-panel', 'btn-mem'); return true; }
     if (keyId === 'KeyK') { _navToUserMsg('up');   return true; }
     if (keyId === 'KeyJ') { _navToUserMsg('down'); return true; }
     const digitToIndex = {
