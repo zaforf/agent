@@ -1681,14 +1681,11 @@
     );
   }
 
-  let _kbRepeat     = false;
-  let _navDest      = null;   // tracks scroll destination during smooth animation
-  let _navDestTimer = null;
+  let _kbRepeat      = false;
   let _navRepeatLast = 0;
   const _NAV_REPEAT_MS = 50; // ms between steps while key is held — raise to slow down
 
   function _navToUserMsg(dir) {
-    // Throttle held-key repeat to _NAV_REPEAT_MS.
     if (_kbRepeat) {
       const now = Date.now();
       if (now - _navRepeatLast < _NAV_REPEAT_MS) return;
@@ -1696,14 +1693,12 @@
     }
     const rows = [...feed.querySelectorAll('.row.user')];
     if (!rows.length) return;
-    // Stable row positions in scroll-content coords — immune to mid-animation BCR drift.
     const rowTops = rows.map(r => {
       let top = 0, el = r;
       while (el && el !== messagesEl) { top += el.offsetTop; el = el.offsetParent; }
       return top;
     });
-    // Use pending destination if mid-animation so rapid presses step correctly.
-    const st = _navDest !== null ? _navDest : messagesEl.scrollTop;
+    const st = messagesEl.scrollTop;
     let idx;
     if (dir === 'up') {
       idx = -1;
@@ -1714,9 +1709,6 @@
       if (idx === -1) idx = rows.length - 1;
     }
     const destTop = Math.max(0, rowTops[idx] - 16);
-    _navDest = destTop;
-    clearTimeout(_navDestTimer);
-    _navDestTimer = setTimeout(() => { _navDest = null; }, _kbRepeat ? 50 : 400);
     messagesEl.scrollTo({ top: destTop, behavior: _kbRepeat ? 'instant' : 'smooth' });
     stickToBottom = (messagesEl.scrollHeight - destTop - messagesEl.clientHeight) < 40;
   }
