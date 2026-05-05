@@ -1648,6 +1648,8 @@
   // - Alt+J: toggle sessions panel (left)
   // - Alt+K: toggle memories panel (right)
   // - Alt+L: open attachment picker
+  // - Alt+U: scroll to previous user message
+  // - Alt+I: scroll to next user message
   // - Alt+1..Alt+9 / Alt+0: switch sessions 1..10
   function _isAltOnlyShortcutEvent(e) {
     return !!(e.altKey && !e.ctrlKey && !e.metaKey);
@@ -1661,6 +1663,8 @@
       e.keyCode === 74 ? 'KeyJ' :
       e.keyCode === 75 ? 'KeyK' :
       e.keyCode === 76 ? 'KeyL' :
+      e.keyCode === 85 ? 'KeyU' :
+      e.keyCode === 73 ? 'KeyI' :
       e.keyCode === 48 ? 'Digit0' :
       e.keyCode === 49 ? 'Digit1' :
       e.keyCode === 50 ? 'Digit2' :
@@ -1675,12 +1679,27 @@
     );
   }
 
+  function _navToUserMsg(dir) {
+    const rows = [...feed.querySelectorAll('.row.user')];
+    if (!rows.length) return;
+    const cTop = messagesEl.getBoundingClientRect().top;
+    // Anchor = first user row whose top is at or below the visible container top.
+    let anchor = rows.findIndex(r => r.getBoundingClientRect().top - cTop >= -10);
+    if (anchor === -1) anchor = rows.length - 1;
+    const target = rows[dir === 'up' ? Math.max(0, anchor - 1) : Math.min(rows.length - 1, anchor + 1)];
+    const relTop = target.getBoundingClientRect().top - cTop;
+    messagesEl.scrollTop += relTop - 16;
+    stickToBottom = isNearBottom(messagesEl);
+  }
+
   function _runAltShortcutByKeyId(keyId) {
     if (keyId === 'KeyN') { newSession(); return true; }
     if (keyId === 'KeyM') { deleteSession(sid); return true; }
     if (keyId === 'KeyL') { document.getElementById('file-input').click(); return true; }
     if (keyId === 'KeyJ') { togglePanel('sessions-panel', 'btn-sessions'); return true; }
     if (keyId === 'KeyK') { togglePanel('mem-panel', 'btn-mem'); return true; }
+    if (keyId === 'KeyU') { _navToUserMsg('up');   return true; }
+    if (keyId === 'KeyI') { _navToUserMsg('down'); return true; }
     const digitToIndex = {
       Digit1: 0, Digit2: 1, Digit3: 2, Digit4: 3, Digit5: 4,
       Digit6: 5, Digit7: 6, Digit8: 7, Digit9: 8, Digit0: 9,
