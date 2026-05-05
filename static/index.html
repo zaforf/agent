@@ -1679,17 +1679,31 @@
     );
   }
 
+  let _kbRepeat = false;
+
   function _navToUserMsg(dir) {
     const rows = [...feed.querySelectorAll('.row.user')];
     if (!rows.length) return;
-    const cTop = messagesEl.getBoundingClientRect().top;
-    // Anchor = first user row whose top is at or below the visible container top.
-    let anchor = rows.findIndex(r => r.getBoundingClientRect().top - cTop >= -10);
-    if (anchor === -1) anchor = rows.length - 1;
-    const target = rows[dir === 'up' ? Math.max(0, anchor - 1) : Math.min(rows.length - 1, anchor + 1)];
-    const relTop  = target.getBoundingClientRect().top - cTop;
-    const destTop = messagesEl.scrollTop + relTop - 16;
-    messagesEl.scrollTo({ top: destTop, behavior: 'smooth' });
+    // Stable row positions in scroll-content coords — immune to mid-animation BCR drift.
+    const rowTops = rows.map(r => {
+      let top = 0, el = r;
+      while (el && el !== messagesEl) { top += el.offsetTop; el = el.offsetParent; }
+      return top;
+    });
+    const st = messagesEl.scrollTop;
+    let idx;
+    if (dir === 'up') {
+      // Last row whose top is clearly above the 16 px alignment point.
+      idx = -1;
+      for (let i = 0; i < rowTops.length; i++) { if (rowTops[i] < st + 12) idx = i; }
+      if (idx === -1) idx = 0;
+    } else {
+      // First row whose top is clearly below the 16 px alignment point.
+      idx = rowTops.findIndex(t => t > st + 20);
+      if (idx === -1) idx = rows.length - 1;
+    }
+    const destTop = Math.max(0, rowTops[idx] - 16);
+    messagesEl.scrollTo({ top: destTop, behavior: _kbRepeat ? 'instant' : 'smooth' });
     stickToBottom = (messagesEl.scrollHeight - destTop - messagesEl.clientHeight) < 40;
   }
 
@@ -1716,6 +1730,7 @@
 
   document.addEventListener('keydown', e => {
     if (e.defaultPrevented || !_isAltOnlyShortcutEvent(e)) return;
+    _kbRepeat = e.repeat;
     const keyId = _shortcutKeyId(e);
     const handled = _runAltShortcutByKeyId(keyId);
     if (!handled) return;
