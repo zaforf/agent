@@ -917,8 +917,14 @@
     }, 80);
   }
 
+  let _navDest      = null;  // destination scrollTop during nav animation
+  let _navStopTimer = null;  // cleared 80 ms after scrolling stops
+
   messagesEl.addEventListener('scroll', () => {
     stickToBottom = isNearBottom(messagesEl);
+    // Keep _navDest alive while scrolling; clear shortly after it settles.
+    clearTimeout(_navStopTimer);
+    _navStopTimer = setTimeout(() => { _navDest = null; }, 80);
   });
 
   /** Run after history DOM + KaTeX so heights match rendered math (Bugbot: defer scroll past setTimeout math). */
@@ -1698,7 +1704,7 @@
       while (el && el !== messagesEl) { top += el.offsetTop; el = el.offsetParent; }
       return top;
     });
-    const st = messagesEl.scrollTop;
+    const st = _navDest !== null ? _navDest : messagesEl.scrollTop;
     let idx;
     if (dir === 'up') {
       idx = -1;
@@ -1709,6 +1715,7 @@
       if (idx === -1) idx = rows.length - 1;
     }
     const destTop = Math.max(0, rowTops[idx] - 16);
+    _navDest = destTop;
     messagesEl.scrollTo({ top: destTop, behavior: _kbRepeat ? 'instant' : 'smooth' });
     stickToBottom = (messagesEl.scrollHeight - destTop - messagesEl.clientHeight) < 40;
   }
