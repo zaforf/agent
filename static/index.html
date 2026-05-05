@@ -1712,7 +1712,14 @@
       if (idx === -1) idx = 0;
     } else {
       idx = rowTops.findIndex(t => t > st + 20);
-      if (idx === -1) idx = rows.length - 1;
+      if (idx === -1) {
+        // Nothing below — snap to absolute bottom.
+        const bottom = messagesEl.scrollHeight - messagesEl.clientHeight;
+        _navDest = bottom;
+        messagesEl.scrollTo({ top: bottom, behavior: _kbRepeat ? 'instant' : 'smooth' });
+        stickToBottom = true;
+        return;
+      }
     }
     const destTop = Math.max(0, rowTops[idx] - 16);
     _navDest = destTop;
