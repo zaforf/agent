@@ -917,8 +917,14 @@
     }, 80);
   }
 
+  let _navDest      = null;  // destination scrollTop during nav animation
+  let _navStopTimer = null;  // cleared 80 ms after scrolling stops
+
   messagesEl.addEventListener('scroll', () => {
     stickToBottom = isNearBottom(messagesEl);
+    // Keep _navDest alive while scrolling; clear shortly after it settles.
+    clearTimeout(_navStopTimer);
+    _navStopTimer = setTimeout(() => { _navDest = null; }, 80);
   });
 
   /** Run after history DOM + KaTeX so heights match rendered math (Bugbot: defer scroll past setTimeout math). */
@@ -1395,6 +1401,7 @@
             if (agentMd) {
               agentMd.innerHTML = renderMarkdown(bubbleBuffer);
               renderMath(agentMd);
+              if (stickToBottom) requestAnimationFrame(() => scrollFeed(true));
 
               const primary = 'gemini-gemma4-31b';
               if (providerUsed && providerUsed !== primary) {
@@ -1645,10 +1652,13 @@
   // like Cmd+N / Cmd+1 tab switching on macOS.
   // - Alt+N: new chat
   // - Alt+M: delete chat
-  // - Alt+J: toggle sessions panel (left)
-  // - Alt+K: toggle memories panel (right)
-  // - Alt+L: open attachment picker
+  // - Alt+H: toggle sessions panel (left)
+  // - Alt+L: toggle memories panel (right)
+  // - Alt+O: open attachment picker
+  // - Alt+K: scroll to previous user message (vim-K = up)
+  // - Alt+J: scroll to next user message   (vim-J = down)
   // - Alt+1..Alt+9 / Alt+0: switch sessions 1..10
+  // Tab: focus input
   function _isAltOnlyShortcutEvent(e) {
     return !!(e.altKey && !e.ctrlKey && !e.metaKey);
   }
@@ -1660,6 +1670,8 @@
       e.keyCode === 77 ? 'KeyM' :
       e.keyCode === 74 ? 'KeyJ' :
       e.keyCode === 75 ? 'KeyK' :
+      e.keyCode === 79 ? 'KeyO' :
+      e.keyCode === 72 ? 'KeyH' :
       e.keyCode === 76 ? 'KeyL' :
       e.keyCode === 48 ? 'Digit0' :
       e.keyCode === 49 ? 'Digit1' :
@@ -1675,12 +1687,54 @@
     );
   }
 
+  let _kbRepeat      = false;
+  let _navRepeatLast = 0;
+  const _NAV_REPEAT_MS = 50; // ms between steps while key is held — raise to slow down
+
+  function _navToUserMsg(dir) {
+    if (_kbRepeat) {
+      const now = Date.now();
+      if (now - _navRepeatLast < _NAV_REPEAT_MS) return;
+      _navRepeatLast = now;
+    }
+    const rows = [...feed.querySelectorAll('.row.user')];
+    if (!rows.length) return;
+    const rowTops = rows.map(r => {
+      let top = 0, el = r;
+      while (el && el !== messagesEl) { top += el.offsetTop; el = el.offsetParent; }
+      return top;
+    });
+    const st = _navDest !== null ? _navDest : messagesEl.scrollTop;
+    let idx;
+    if (dir === 'up') {
+      idx = -1;
+      for (let i = 0; i < rowTops.length; i++) { if (rowTops[i] < st + 12) idx = i; }
+      if (idx === -1) idx = 0;
+    } else {
+      idx = rowTops.findIndex(t => t > st + 20);
+      if (idx === -1) {
+        // Nothing below — snap to absolute bottom.
+        const bottom = messagesEl.scrollHeight - messagesEl.clientHeight;
+        _navDest = bottom;
+        messagesEl.scrollTo({ top: bottom, behavior: _kbRepeat ? 'instant' : 'smooth' });
+        stickToBottom = true;
+        return;
+      }
+    }
+    const destTop = Math.max(0, rowTops[idx] - 16);
+    _navDest = destTop;
+    messagesEl.scrollTo({ top: destTop, behavior: _kbRepeat ? 'instant' : 'smooth' });
+    stickToBottom = (messagesEl.scrollHeight - destTop - messagesEl.clientHeight) < 40;
+  }
+
   function _runAltShortcutByKeyId(keyId) {
     if (keyId === 'KeyN') { newSession(); return true; }
     if (keyId === 'KeyM') { deleteSession(sid); return true; }
-    if (keyId === 'KeyL') { document.getElementById('file-input').click(); return true; }
-    if (keyId === 'KeyJ') { togglePanel('sessions-panel', 'btn-sessions'); return true; }
-    if (keyId === 'KeyK') { togglePanel('mem-panel', 'btn-mem'); return true; }
+    if (keyId === 'KeyO') { document.getElementById('file-input').click(); return true; }
+    if (keyId === 'KeyH') { togglePanel('sessions-panel', 'btn-sessions'); return true; }
+    if (keyId === 'KeyL') { togglePanel('mem-panel', 'btn-mem'); return true; }
+    if (keyId === 'KeyK') { _navToUserMsg('up');   return true; }
+    if (keyId === 'KeyJ') { _navToUserMsg('down'); return true; }
     const digitToIndex = {
       Digit1: 0, Digit2: 1, Digit3: 2, Digit4: 3, Digit5: 4,
       Digit6: 5, Digit7: 6, Digit8: 7, Digit9: 8, Digit0: 9,
@@ -1696,6 +1750,7 @@
 
   document.addEventListener('keydown', e => {
     if (e.defaultPrevented || !_isAltOnlyShortcutEvent(e)) return;
+    _kbRepeat = e.repeat;
     const keyId = _shortcutKeyId(e);
     const handled = _runAltShortcutByKeyId(keyId);
     if (!handled) return;
@@ -1703,6 +1758,14 @@
     e.stopPropagation();
     if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
   }, true);
+
+  // Tab focuses the input from anywhere on the page.
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Tab' && !e.altKey && !e.ctrlKey && !e.metaKey && document.activeElement !== input) {
+      e.preventDefault();
+      input.focus();
+    }
+  });
 
   // Strip rich formatting on paste. Collapse large pastes into a compact chip.
   input.addEventListener('paste', e => {
