@@ -1279,7 +1279,7 @@
     let _charQueue   = '';
     let _charDrainId = null;
 
-    function _hasMath(t) { return /\\\[|\\\(/.test(t); }
+    function _hasMath(t) { return /\\\[|\\\(|\$\S/.test(t); }
 
     function _flushQueue() {
       if (_charDrainId !== null) { cancelAnimationFrame(_charDrainId); _charDrainId = null; }
