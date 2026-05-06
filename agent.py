@@ -101,6 +101,7 @@ class _ThinkStripper:
 _BLOCKING_SYNC_TOOLS = frozenset({
     "fetch_url",
     "web_search",
+    "youtube_transcript",
     "remember",
     "recall",
     "list_memories",
