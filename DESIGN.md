@@ -118,7 +118,7 @@ See §11 for the repaired streaming edge case and the summarizer model choice, p
 
 Tools are registered in `tools/__init__.py`. Adding a new tool requires only creating a module with `SCHEMAS` and `FUNCTIONS` dicts and importing it there.
 
-All tools are called synchronously. `fetch_url`, `web_search`, and the Mem0 tools (`remember`, `recall`, `list_memories`, `delete_memory`) are classified as blocking sync tools (`_BLOCKING_SYNC_TOOLS`) and are run in a thread via `asyncio.to_thread()` to avoid blocking the event loop.
+All tools are called synchronously. `fetch_url`, `web_search`, `youtube_transcript`, and the Mem0 tools (`remember`, `recall`, `list_memories`, `delete_memory`) are classified as blocking sync tools (`_BLOCKING_SYNC_TOOLS`) and are run in a thread via `asyncio.to_thread()` to avoid blocking the event loop.
 
 The model is instructed to use native API `tool_calls` only — no XML or fenced-code tool invocations.
 
@@ -227,6 +227,30 @@ Every command is appended with `__rc=$?; echo "<sentinel>:$__rc"` on a separate 
 | `workspace_search_replace(path, old_string, new_string, replace_all?)` | Primary code-edit tool: exact substring replace in a file under `WORKSPACE` |
 
 Paths are under the same rooted directory as `shell_exec` (`AGENT_WORKSPACE`). Read current file contents with `shell_exec` before editing and copy `old_string` verbatim (indentation/newlines must match). The tool rejects ambiguous matches unless `replace_all=true`. Writes are atomic (temp file + `os.replace`). Runs via `asyncio.to_thread` like other blocking sync tools.
+
+### 5.5 YouTube transcript tool (`tools/youtube.py`)
+
+| Tool | Description |
+|---|---|
+| `youtube_transcript(video_id, prompt, offset, raw)` | Fetch the plain-text transcript of a YouTube video via the Supadata API |
+
+Requires `SUPADATA_API_KEY` in `.env`. When unset, returns the stable error string `"Error: youtube_transcript disabled — set SUPADATA_API_KEY in .env"`.
+
+Accepts a bare video ID (e.g. `dQw4w9WgXcQ`) or any YouTube URL form (watch, youtu.be, shorts, embed); the helper `_to_url` extracts the 11-char ID and constructs a canonical watch URL for the Supadata client. Timestamps are not exposed — plain text only.
+
+**Default (summarizer) mode** — when `prompt` is provided and `raw` is not set:
+1. Fetch the full plain-text transcript via `supadata.Supadata.transcript(url, text=True)`
+2. Truncate to 128,000 characters if needed
+3. Pass the transcript + prompt to `summarizer.summarize_gemma` (same Gemma 4 26B helper as `fetch_url`)
+4. Return the summarizer's focused response
+
+If the summarizer fails, falls back to raw mode silently (logs a warning).
+
+**Raw/paginated mode** — when `raw=True` or no prompt given:
+- Returns up to 8,000 characters starting from `offset`
+- Appends a pagination note: `[… N more chars — call youtube_transcript with offset=M to continue]`
+
+Runs via `asyncio.to_thread` (`_BLOCKING_SYNC_TOOLS`) because the Supadata SDK uses `requests` synchronously.
 
 ---
 
@@ -557,6 +581,7 @@ Graceful degradation is tested explicitly — the agent must never crash when an
 | Tool callable raises an exception | Catch and inject `"Error in {tool}: {msg}"` as the tool message; loop continues so the model can react | `test_tool_exception_returned_as_error_string` |
 | Model hallucinates an unknown tool name | Inject `"Unknown tool: {name}"` as the tool message; loop continues | `test_unknown_tool_name_returns_error_string` |
 | `fetch_url` summarizer LLM fails | Fall back to raw paginated text (DESIGN §5.2) | `test_summarizer_failure_falls_back_to_raw` |
+| `youtube_transcript` summarizer LLM fails | Fall back to raw paginated text (DESIGN §5.5) | `test_summarizer_failure_falls_back_to_raw` (youtube) |
 | History summarizer LLM fails | Truncate raw output to 8 000 chars and store that (DESIGN §6.5) | `test_summarize_for_history_truncates_when_llm_raises` |
 | History summarizer returns thinking-only (empty visible) | Same fallback — truncate raw to 8 000 chars | `test_summarize_for_history_truncates_when_summary_is_empty` |
 | Model produces only thinking tags (empty visible) | Repair call with `tools=None` re-asks for a user-facing answer (DESIGN §4.3) | `test_repair_call_on_empty_visible` |
