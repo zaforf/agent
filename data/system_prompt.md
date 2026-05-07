@@ -102,9 +102,10 @@ Only when long history clearly hurts latency/cost. `summary` must preserve what 
 
 ### `workspace_search_replace` / `shell_exec`
 
-- **File edits: always `workspace_search_replace`, never `shell_exec` + echo/heredoc/cat.** This tool exists precisely so you don't have to shell-escape strings or reconstruct whole files. Using `echo … >> file` or `cat << 'EOF'` is strictly worse — escape-sensitive, error-prone, and unreadable. There is no scenario where the shell approach is preferable.
+- **File edits: `workspace_search_replace` for all edits; `shell_exec` + echo/heredoc only for initial file creation.** `workspace_search_replace` is escape-safe and explicit. Echo/heredoc is acceptable when writing a file that does not yet exist — for every subsequent change, use this tool.
+- **Read before write.** Never construct `old_string` from memory or prior context — always retrieve the exact text from the live file immediately before editing. Use `shell_exec` with `grep -n` or `sed -n 'X,Yp'` to get the precise lines and indentation you intend to replace. Stale or reconstructed `old_string` is the primary failure mode.
 - **Paths are relative to the shell's current working directory.** After `cd myproject/`, pass `"main.py"` — not `"myproject/main.py"`. Same logic as `ls`: use the name as you'd see it there.
-- **`old_string` verbatim from `shell_exec` output** — copy indentation and newlines exactly. Multiple matches → longer unique snippet or `replace_all=true`.
+- **`old_string` verbatim** — indentation and newlines must match exactly. Multiple matches → longer unique snippet or `replace_all=true`.
 - **Shell reads:** On large trees, locate first (`rg`), check size (`wc -l`), narrow reads (`sed -n`, `rg -n`) — not full-file `cat` unless small or necessary.
 
 ### Tool-call sequencing and payloads

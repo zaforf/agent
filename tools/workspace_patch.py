@@ -94,10 +94,13 @@ SCHEMAS = [
         "function": {
             "name": "workspace_search_replace",
             "description": (
-                "PRIMARY code-edit tool — ALWAYS use this instead of shell_exec+echo/heredoc/cat to write files. "
-                "Paths are relative to the shell's current working directory (same as after `ls`): "
-                "if the shell cd'd into myproject/, pass 'main.py' not 'myproject/main.py'. "
-                "Copy old_string verbatim from shell_exec output — indentation and newlines must match exactly. "
+                "Primary code-edit tool — use for ALL edits to existing files. "
+                "shell_exec+echo/heredoc is only acceptable when creating a file that does not yet exist; "
+                "every subsequent change must use this tool. "
+                "Before calling, retrieve the exact lines with shell_exec (grep -n or sed -n) — "
+                "never construct old_string from memory. "
+                "Paths are relative to the shell's current working directory: "
+                "after cd myproject/, pass 'main.py' not 'myproject/main.py'. "
                 "Prefer multiple targeted sequential calls over bulk whole-file rewrites. "
                 "After a failed call, adjust the snippet or path; never retry identical failing calls."
             ),
