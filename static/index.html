@@ -249,7 +249,7 @@
     /* Tool call / result */
     .tool-call .bubble,
     .tool-result .bubble {
-      background: #f8f5f2;
+      background: var(--bg);
       border: 1px solid var(--border);
       color: var(--text);
     }
@@ -581,6 +581,36 @@
     ::-webkit-scrollbar { width: 5px; height: 5px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; }
+
+    /* ── Ephemeral explain tooltip ───────────────────────── */
+
+    #explain-tooltip {
+      position: fixed;
+      z-index: 200;
+      width: 340px;
+      max-width: calc(100vw - 16px);
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 13px;
+      font-size: 13px;
+      line-height: 1.6;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.12s ease;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    #explain-tooltip.visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    #explain-tooltip.loading {
+      color: var(--text-3);
+      font-style: italic;
+    }
 
     @media (max-width: 760px) {
       .side-panel {
@@ -1790,6 +1820,143 @@
 
   // Wire file-input change handler.
   document.getElementById('file-input').addEventListener('change', handleFilePicker);
+
+  // ── Contextual Query (Highlight-to-Explain + future /btw) ────────────────
+
+  let _ephemeralCleanup = null;
+
+  function _getExplainTooltip() {
+    let tip = document.getElementById('explain-tooltip');
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.id = 'explain-tooltip';
+      document.body.appendChild(tip);
+    }
+    return tip;
+  }
+
+  function _positionTooltip(tip, anchorRect) {
+    const GAP = 8;
+    const PAD = 8;
+    const TIP_W = Math.min(340, window.innerWidth - 16);
+
+    tip.style.width     = TIP_W + 'px';
+    tip.style.transform = '';
+
+    // Horizontal: center on selection, clamp to viewport.
+    let left = anchorRect.left + anchorRect.width / 2 - TIP_W / 2;
+    left = Math.max(PAD, Math.min(left, window.innerWidth - TIP_W - PAD));
+    tip.style.left = left + 'px';
+
+    // Measure actual height synchronously (element is in DOM, just opacity:0).
+    const tipH = tip.offsetHeight;
+    const above = anchorRect.top - GAP - tipH;
+    const below = anchorRect.bottom + GAP;
+
+    let top;
+    if (above >= PAD) {
+      top = above;
+    } else if (below + tipH <= window.innerHeight - PAD) {
+      top = below;
+    } else {
+      // Neither fits cleanly — pick the roomier side and clamp.
+      const spaceAbove = anchorRect.top;
+      const spaceBelow = window.innerHeight - anchorRect.bottom;
+      top = spaceAbove >= spaceBelow
+        ? Math.max(PAD, above)
+        : Math.min(window.innerHeight - tipH - PAD, below);
+    }
+    tip.style.top = top + 'px';
+  }
+
+  function showEphemeralPanel(text, anchorRect, { loading = false } = {}) {
+    const tip = _getExplainTooltip();
+    tip.textContent = text;
+    tip.classList.toggle('loading', loading);
+    _positionTooltip(tip, anchorRect);
+    tip.classList.add('visible');
+    _registerEphemeralDismiss();
+  }
+
+  function _dismissEphemeralPanel() {
+    const tip = document.getElementById('explain-tooltip');
+    if (tip) tip.classList.remove('visible', 'loading');
+    if (_ephemeralCleanup) { _ephemeralCleanup(); _ephemeralCleanup = null; }
+  }
+
+  function _registerEphemeralDismiss() {
+    if (_ephemeralCleanup) _ephemeralCleanup();
+    const onKey   = e => { if (e.key === 'Escape') _dismissEphemeralPanel(); };
+    const onClick = e => {
+      const tip = document.getElementById('explain-tooltip');
+      if (tip && !tip.contains(e.target)) _dismissEphemeralPanel();
+    };
+    // Defer so the triggering mouseup doesn't instantly close the tooltip.
+    const tid = setTimeout(() => {
+      document.addEventListener('keydown', onKey);
+      document.addEventListener('mousedown', onClick);
+    }, 0);
+    _ephemeralCleanup = () => {
+      clearTimeout(tid);
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onClick);
+    };
+  }
+
+  async function contextualQuery(selection, context, query = '') {
+    const res = await fetch('/contextual_query', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ selection, context, query }),
+    });
+    if (!res.ok) throw new Error(`contextual_query ${res.status}`);
+    return (await res.json()).result;
+  }
+
+  function _collectChatContext() {
+    const MAX_CHARS = 4000;
+    const rows = Array.from(document.querySelectorAll('#msg-inner .row:not(.step)'));
+    const recent = rows.slice(-4);
+    const parts = [];
+    for (const row of recent) {
+      const bubble = row.querySelector('.bubble');
+      if (!bubble) continue;
+      const text = bubble.innerText.trim();
+      if (text) parts.push((row.classList.contains('user') ? '[User] ' : '[Agent] ') + text);
+    }
+    let ctx = parts.join('\n\n');
+    if (ctx.length > MAX_CHARS) ctx = ctx.slice(-MAX_CHARS);
+    return ctx;
+  }
+
+  // Shift+mouseup → Explain
+  document.addEventListener('mouseup', async e => {
+    if (!e.shiftKey) return;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) return;
+    const selText = sel.toString().trim();
+    if (!selText) return;
+
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    showEphemeralPanel('Explaining…', rect, { loading: true });
+
+    try {
+      const result = await contextualQuery(selText, _collectChatContext());
+      const tip = document.getElementById('explain-tooltip');
+      if (tip && tip.classList.contains('visible')) {
+        tip.textContent = result;
+        tip.classList.remove('loading');
+        _positionTooltip(tip, rect);
+      }
+    } catch {
+      const tip = document.getElementById('explain-tooltip');
+      if (tip && tip.classList.contains('visible')) {
+        tip.textContent = 'Could not fetch explanation.';
+        tip.classList.remove('loading');
+        _positionTooltip(tip, rect);
+      }
+    }
+  });
 
   // ── Init ──────────────────────────────────────────────────
 
