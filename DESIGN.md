@@ -118,7 +118,7 @@ See §11 for the repaired streaming edge case and the summarizer model choice, p
 
 Tools are registered in `tools/__init__.py`. Adding a new tool requires only creating a module with `SCHEMAS` and `FUNCTIONS` dicts and importing it there.
 
-All tools are called synchronously. `fetch_url`, `web_search`, and the Mem0 tools (`remember`, `recall`, `list_memories`, `delete_memory`) are classified as blocking sync tools (`_BLOCKING_SYNC_TOOLS`) and are run in a thread via `asyncio.to_thread()` to avoid blocking the event loop.
+All tools are called synchronously. `fetch_url`, `web_search`, `youtube_transcript`, and the Mem0 tools (`remember`, `recall`, `list_memories`, `delete_memory`) are classified as blocking sync tools (`_BLOCKING_SYNC_TOOLS`) and are run in a thread via `asyncio.to_thread()` to avoid blocking the event loop.
 
 The model is instructed to use native API `tool_calls` only — no XML or fenced-code tool invocations.
 
@@ -135,7 +135,7 @@ All memories are stored under the single user ID `"user"`.
 | `list_memories()` | List all memories with IDs and categories. |
 | `delete_memory(memory_id)` | Delete a specific memory by full ID. |
 
-The system prompt instructs the model to use `recall()` before answering anything where past context is relevant, and to use `remember()` to build a map of the user's knowledge state (concepts mastered, depth of understanding, analogies that worked). The model is explicitly told never to store what was asked or what it answered.
+The system prompt instructs the model to use memory to be **maximally helpful generally** — not only teaching: **bias toward `recall`** when any durable context might help (preferences, style, project/environment, continuity, facts worth not re-deriving, teaching depth), **even with some doubt**, while treating **`recall` as cheap** and avoiding **`remember` spam** (durable nuggets only; trivia floods the store). It tells the model to write **`recall` queries** as concrete search-style strings (entities + intent). For **`remember`**, it keeps categories (`user`, `preference`, `fact`, `project`), forbids storing Q&A or transient context, requires **grounded** mastery (no invention), and clarifies **atomicity**: one retrievable unit per call — including **cluster summaries** for related subtopics when that recalls better than fragmenting into many tiny facts — while splitting genuinely separate domains. It frames memory as **tutor notes across sessions** (including after history reset) and encourages **`remember` without being asked** when Zafir clearly shows durable understanding. It encourages **asking a tight familiarity question** when recall is thin but depth matters, then remembering the answer if it should stick.
 
 If Qdrant is unreachable, memory tool calls fail with an exception caught by the tool executor, which returns the error string to the model.
 
@@ -227,6 +227,30 @@ Every command is appended with `__rc=$?; echo "<sentinel>:$__rc"` on a separate 
 | `workspace_search_replace(path, old_string, new_string, replace_all?)` | Primary code-edit tool: exact substring replace in a file under `WORKSPACE` |
 
 Paths are under the same rooted directory as `shell_exec` (`AGENT_WORKSPACE`). Read current file contents with `shell_exec` before editing and copy `old_string` verbatim (indentation/newlines must match). The tool rejects ambiguous matches unless `replace_all=true`. Writes are atomic (temp file + `os.replace`). Runs via `asyncio.to_thread` like other blocking sync tools.
+
+### 5.5 YouTube transcript tool (`tools/youtube.py`)
+
+| Tool | Description |
+|---|---|
+| `youtube_transcript(video_id, prompt, offset, raw)` | Fetch the plain-text transcript of a YouTube video via the Supadata API |
+
+Requires `SUPADATA_API_KEY` in `.env`. When unset, returns the stable error string `"Error: youtube_transcript disabled — set SUPADATA_API_KEY in .env"`.
+
+Accepts a bare video ID (e.g. `dQw4w9WgXcQ`) or any YouTube URL form (watch, youtu.be, shorts, embed); the helper `_to_url` extracts the 11-char ID and constructs a canonical watch URL for the Supadata client. Timestamps are not exposed — plain text only.
+
+**Default (summarizer) mode** — when `prompt` is provided and `raw` is not set:
+1. Fetch the full plain-text transcript via `supadata.Supadata.transcript(url, text=True)`
+2. Truncate to 128,000 characters if needed
+3. Pass the transcript + prompt to `summarizer.summarize_gemma` (same Gemma 4 26B helper as `fetch_url`)
+4. Return the summarizer's focused response
+
+If the summarizer fails, falls back to raw mode silently (logs a warning).
+
+**Raw/paginated mode** — when `raw=True` or no prompt given:
+- Returns up to 8,000 characters starting from `offset`
+- Appends a pagination note: `[… N more chars — call youtube_transcript with offset=M to continue]`
+
+Runs via `asyncio.to_thread` (`_BLOCKING_SYNC_TOOLS`) because the Supadata SDK uses `requests` synchronously.
 
 ---
 
@@ -324,7 +348,7 @@ Table: `messages` — one row per completed turn.
 | `POST` | `/chat/stream` | SSE streaming chat. Yields event objects (see §8.1). |
 | `POST` | `/chat/stream/cancel` | Cancel an active stream for `session_id`. Returns `{cancelled: bool}`. |
 | `POST` | `/upload` | PDF text extraction (see §13). Returns `{filename, type, content}`. |
-| `GET` | `/sessions` | List all sessions with preview text, message count, and last timestamp. |
+| `GET` | `/sessions` | List all sessions with preview text, turn count (stored turns), and last timestamp. |
 | `GET` | `/sessions/{id}/history` | Display-friendly history for the UI (`get_display_history()`). |
 | `DELETE` | `/sessions/{id}` | Delete a session from cache and SQLite. |
 | `GET` | `/memories` | List all Mem0 memories. |
@@ -449,23 +473,23 @@ Guardrails:
 
 The system prompt is stored in `data/system_prompt.md` and read on every LLM call via `_build_system_prompt()` (so edits take effect immediately). The build step assembles three pieces:
 
-1. `Today's date: YYYY-MM-DD` — prepended at request time so the model has a concrete present to reason against its January 2025 training cutoff. This is the structural anchor that makes the Trust & calibration section actually bind: without a known "today", post-cutoff stays abstract and the model's RLHF-trained reflex to disclaim recent info as possible hallucination tends to fire even on tool-grounded data.
+1. `Today's date: {weekday} YYYY-MM-DD` — prepended at request time so the model has a concrete present to reason against its January 2025 training cutoff. This is the structural anchor that makes the Trust & calibration section actually bind: without a known "today", post-cutoff stays abstract and the model's RLHF-trained reflex to disclaim recent info as possible hallucination tends to fire even on tool-grounded data.
 2. The contents of `data/system_prompt.md` — the editable behavioral spec.
-3. The tool documentation section generated from `TOOL_SCHEMAS`.
+3. A compact **Tool usage** block from `agent._tool_docs()` (native `tool_calls`, one tool per message, narrow `workspace_search_replace`, empty-args discipline). Tool **schemas** are still passed separately via `TOOL_SCHEMAS` on the API; the markdown file does not duplicate full schema text.
 
 ### 10.1 Current behavioral directives
 
-The prompt is organized into nine sections; each one is short and independent so the file stays scannable and hackable. Section headings (in order):
+The prompt is organized into compact sections so the file stays scannable. Headings (in order):
 
-- **Identity** — Zafir's personal AI assistant; optimize for correct + useful per minute of attention; direct, honest engagement over performed politeness; no hedging, no over-explaining, no trailing self-narration.
-- **Today** — pointer to the dynamically injected date line; restates the January 2025 cutoff and that anything later comes from tools or this conversation, never from weights.
-- **Trust & calibration** — the section that fixes the disclaim-as-hallucination bug. Names three distinct concepts that the model otherwise conflates (hallucination vs post-cutoff vs source error), explicitly acknowledges the RLHF training pull and tells the model to override it when it has tool data, frames tool results as "primary, not infallible" so source skepticism is preserved, adds the **`fetch_url` geometry rule** (128k summarizer window vs 8k-per-call raw chunks — missing facts in chunk 0 imply depth/pagination, not summarizer fabrication), forbids retroactively blanket-disclaiming past tool-grounded answers, and includes one worked before/after example.
-- **Quality bar** — the general behavioral standard, modeled on what top-lab system prompts emphasize. One line each: calibration over hedging, no filler openers, honesty over compliance, no fabrication, verify before committing, finish what you start, reasoning depth proportional to task, format proportional to content, self-consistency within a turn.
-- **Response style** — rendering specifics only: visible answer outside `<thought>/<thinking>/<redacted_*>` blocks, Markdown + KaTeX (`\(...\)` inline, `\[...\]` display; **no** `$` / `$$`), native `tool_calls` only.
-- **System context** — one paragraph telling the model the runtime it operates in (multi-turn loop, streaming UI, tool-step rows, full history replay, repair call on empty visible output).
-- **Context, turns, and tool results** — unified mental model: what a *turn* is; all tool results stay **raw for every LLM call in that turn**; compaction to `[history summary of <tool_name>]` after the turn ends (or via `main.py` finalizer); prior turns in replay show summaries; re-call the tool for verbatim raw on a new turn; `Takeaways:` body and summary accuracy / sparsity / `fetch_url` pagination hints.
-- **Tool strategy** — concrete per-tool decision rules: `fetch_url` (prompt vs raw with explicit 128k vs 8k semantics, pagination, invalid verification: impeaching prompt output from raw chunk 0 alone), `recall` (silent on miss), `remember` (categories and what to store / not store), `list_memories` / `delete_memory`, `nuke_chat` (history reset with assistant summary when context bloat hurts performance), `shell_exec` with surgical reads (`rg` locate, `wc -l` size check, `sed -n`/`rg -n` slices over full dumps), then `workspace_search_replace` as the primary code-edit path (verbatim `old_string`). Keep edits narrow: choose short, unique snippets around target lines; avoid whole-file old/new replacements unless explicitly requested. Prefer thoughtful sequential calls over risky bulk edits; after a failed call, change arguments/approach instead of repeating the same failing call. **Tool payloads:** required arguments must be filled in the structured tool call—prose intent does not substitute; avoid `{}` and retry loops on missing-argument errors (mirror payload, verify fields, then retry once with a real fix).
-- **Failure handling** — tool errors are data; retry, switch strategy, or report concisely; don't loop on a failing approach.
+- **Identity** — personal assistant for Zafir; correct + useful per minute; direct over performed politeness; concise.
+- **Today** — pointer to the injected date line; January 2025 cutoff; post-cutoff facts from tools or chat, not weights.
+- **Trust & calibration** — hallucination vs post-cutoff vs source error; override disclaim reflex on tool/chat data; tools primary not infallible; **`fetch_url` long-page pitfall** (summarizer window vs 8k raw chunks — chunk 0 gaps imply depth/pagination); don't retroactively disclaim past tool-grounded answers.
+- **Quality bar** — calibration, no filler, honesty, no fabrication, verify, finish, reasoning depth, format, self-consistency (one line each).
+- **Response style** — visible outside thinking blocks; Markdown + KaTeX (**`\(...\)` / `\[...\]` only for math**; **`$` in prose OK**; no `$`/`$$` math); native `tool_calls` only; matrix row breaks `\\`.
+- **System context** — multi-turn loop (30 tool iterations), streaming UI, repair if no visible text.
+- **Context, turns, and tool results** — turn boundary; raw tool I/O for all model calls in the same turn; `[history summary of …]` only after the turn; summaries faithful/sparse; pagination hints.
+- **Tool strategy** — subsections: **`fetch_url`** (128k vs 8k, prompt vs raw), **`web_search`**, **`youtube_transcript`** (same prompt/raw pattern as fetch), **memory** (bias toward `recall`; query craft; `remember` atomicity + teaching cluster summaries + ask-when-thin; cleanup), **`nuke_chat`**, **`workspace_search_replace`** + **`shell_exec`**, then **sequencing** (one tool per message) and **payloads** (intent–action gap, mirror/fill/buffer, failure discipline). Generated `agent._tool_docs()` appends a short **Tool usage** block (native calls, one per message, workspace_search_replace narrow edits, empty-args discipline).
+- **Failure handling** — tool errors as data; don't loop blindly.
 
 ---
 
@@ -557,6 +581,7 @@ Graceful degradation is tested explicitly — the agent must never crash when an
 | Tool callable raises an exception | Catch and inject `"Error in {tool}: {msg}"` as the tool message; loop continues so the model can react | `test_tool_exception_returned_as_error_string` |
 | Model hallucinates an unknown tool name | Inject `"Unknown tool: {name}"` as the tool message; loop continues | `test_unknown_tool_name_returns_error_string` |
 | `fetch_url` summarizer LLM fails | Fall back to raw paginated text (DESIGN §5.2) | `test_summarizer_failure_falls_back_to_raw` |
+| `youtube_transcript` summarizer LLM fails | Fall back to raw paginated text (DESIGN §5.5) | `test_summarizer_failure_falls_back_to_raw` (youtube) |
 | History summarizer LLM fails | Truncate raw output to 8 000 chars and store that (DESIGN §6.5) | `test_summarize_for_history_truncates_when_llm_raises` |
 | History summarizer returns thinking-only (empty visible) | Same fallback — truncate raw to 8 000 chars | `test_summarize_for_history_truncates_when_summary_is_empty` |
 | Model produces only thinking tags (empty visible) | Repair call with `tools=None` re-asks for a user-facing answer (DESIGN §4.3) | `test_repair_call_on_empty_visible` |
