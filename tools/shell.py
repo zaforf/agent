@@ -44,12 +44,19 @@ _SENTINEL: str = f"__DONE_{uuid.uuid4().hex}__"
 _proc: subprocess.Popen | None = None
 _out_queue: queue.Queue = queue.Queue()
 _lock: threading.Lock = threading.Lock()
+_shell_cwd: Path = WORKSPACE
+
+
+def get_shell_cwd() -> Path:
+    """Return the shell's current working directory (updated after each command)."""
+    return _shell_cwd
 
 
 def _start_shell() -> None:
-    global _proc, _out_queue
+    global _proc, _out_queue, _shell_cwd
 
     WORKSPACE.mkdir(parents=True, exist_ok=True)
+    _shell_cwd = WORKSPACE  # reset cwd tracking on (re)start
     _out_queue = queue.Queue()
 
     _proc = subprocess.Popen(
@@ -92,7 +99,7 @@ def _ensure_shell() -> None:
 
 
 def _kill_shell() -> None:
-    global _proc
+    global _proc, _shell_cwd
     if _proc is not None:
         try:
             _proc.kill()
@@ -100,6 +107,7 @@ def _kill_shell() -> None:
         except Exception:
             pass
         _proc = None
+    _shell_cwd = WORKSPACE
 
 
 def shell_exec(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
@@ -128,10 +136,10 @@ def shell_exec(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
             except queue.Empty:
                 break
 
-        # Append sentinel + exit-code capture after the user's command.
+        # Append sentinel + exit-code + pwd capture after the user's command.
         # The sentinel echo always runs because it is a separate statement;
-        # even if the user's command fails, we learn the exit code.
-        payload = command.rstrip("\n") + f'\n__rc=$?; echo "{_SENTINEL}:$__rc"\n'
+        # even if the user's command fails, we learn the exit code and new cwd.
+        payload = command.rstrip("\n") + f'\n__rc=$?; echo "{_SENTINEL}:$__rc:$(pwd)"\n'
         try:
             _proc.stdin.write(payload.encode())
             _proc.stdin.flush()
@@ -167,10 +175,16 @@ def shell_exec(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
             decoded = raw.decode("utf-8", errors="replace")
 
             if _SENTINEL in decoded:
+                # Sentinel line format: __DONE_<hex>__:<rc>:<pwd>
+                after = decoded.strip()[len(_SENTINEL) + 1:]  # "<rc>:<pwd>"
+                rc_str, _, cwd_raw = after.partition(":")
                 try:
-                    exit_code = int(decoded.strip().rsplit(":", 1)[-1])
-                except (ValueError, IndexError):
+                    exit_code = int(rc_str)
+                except ValueError:
                     exit_code = 0
+                if cwd_raw:
+                    global _shell_cwd
+                    _shell_cwd = Path(cwd_raw.strip())
                 output = "".join(lines).rstrip("\n")
                 if exit_code != 0:
                     trailer = f"(exit code {exit_code})"

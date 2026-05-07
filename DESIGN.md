@@ -207,9 +207,11 @@ Default timeout is 30 seconds (overridable via `AGENT_SHELL_TIMEOUT` env var or 
 
 If the shell process dies unexpectedly (e.g., OOM kill), `_ensure_shell()` detects it on the next call (via `Popen.poll()`) and starts a fresh shell. The new shell always starts in `WORKSPACE`.
 
-**Sentinel mechanism:**
+**Sentinel mechanism and CWD tracking:**
 
-Every command is appended with `__rc=$?; echo "<sentinel>:$__rc"` on a separate line. A background reader thread feeds stdout lines into a `queue.Queue`; `shell_exec` reads until it sees the sentinel and parses the exit code from it. A new queue is created each time the shell is restarted so reader threads from prior processes cannot contaminate the new session.
+Every command is appended with `__rc=$?; echo "<sentinel>:$__rc:$(pwd)"` on a separate line. A background reader thread feeds stdout lines into a `queue.Queue`; `shell_exec` reads until it sees the sentinel, parses the exit code, and updates the module-level `_shell_cwd: Path` from the embedded `$(pwd)`. A new queue is created each time the shell is restarted so reader threads from prior processes cannot contaminate the new session.
+
+The current shell CWD is exposed as `get_shell_cwd() -> Path` and consumed by the workspace edit tool (§5.4) so that path arguments resolve consistently with what the shell sees.
 
 **Network:** Allowed (curl, pip, git, etc.). No allowlist — single trusted operator deployment.
 
@@ -224,9 +226,13 @@ Every command is appended with `__rc=$?; echo "<sentinel>:$__rc"` on a separate 
 
 | Tool | Description |
 |---|---|
-| `workspace_search_replace(path, old_string, new_string, replace_all?)` | Primary code-edit tool: exact substring replace in a file under `WORKSPACE` |
+| `workspace_search_replace(path, old_string, new_string, replace_all?)` | Primary code-edit tool: exact substring replace in a workspace file |
 
-Paths are under the same rooted directory as `shell_exec` (`AGENT_WORKSPACE`). Read current file contents with `shell_exec` before editing and copy `old_string` verbatim (indentation/newlines must match). The tool rejects ambiguous matches unless `replace_all=true`. Writes are atomic (temp file + `os.replace`). Runs via `asyncio.to_thread` like other blocking sync tools.
+**Path resolution:** `path` is resolved relative to the shell's current working directory (`get_shell_cwd()`, updated after every `shell_exec` call via the sentinel — see §5.3). If the shell has `cd myproject/`, passing `"main.py"` finds `workspace/myproject/main.py`. Passing `"src/util.py"` from the same cwd finds `workspace/myproject/src/util.py`. All resolved paths are security-checked to remain within `WORKSPACE`; absolute paths and `..`-escapes are rejected.
+
+**Usage contract:** This is the exclusive way to edit workspace files. The system prompt prohibits `shell_exec` + echo/heredoc/cat as a substitute — the patch tool is escape-safe and explicit about what it's changing.
+
+Read current file contents with `shell_exec` before editing and copy `old_string` verbatim (indentation/newlines must match). The tool rejects ambiguous matches unless `replace_all=true`. Writes are atomic (temp file + `os.replace`). Runs via `asyncio.to_thread` like other blocking sync tools.
 
 ### 5.5 YouTube transcript tool (`tools/youtube.py`)
 
