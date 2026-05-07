@@ -111,6 +111,28 @@ def test_cwd_change_persists(shell_env):
     assert "subdir" in result
 
 
+def test_get_shell_cwd_tracks_cd(shell_env):
+    sh = shell_env
+    sh.shell_exec("mkdir -p myproj && cd myproj")
+    cwd = sh.get_shell_cwd()
+    assert cwd.name == "myproj"
+
+
+def test_get_shell_cwd_starts_at_workspace(shell_env):
+    sh = shell_env
+    sh.shell_exec("true")  # trigger shell start; _start_shell resets _shell_cwd to WORKSPACE
+    assert sh.get_shell_cwd() == sh.WORKSPACE
+
+
+def test_get_shell_cwd_resets_after_restart(shell_env):
+    sh = shell_env
+    sh.shell_exec("mkdir -p deep && cd deep")
+    assert sh.get_shell_cwd().name == "deep"
+    sh._kill_shell()
+    sh.shell_exec("echo hi")  # triggers restart
+    assert sh.get_shell_cwd() == sh.WORKSPACE
+
+
 def test_file_write_and_read(shell_env):
     sh = shell_env
     sh.shell_exec("echo file_content > testfile.txt")
