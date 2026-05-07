@@ -348,7 +348,7 @@ Table: `messages` — one row per completed turn.
 | `POST` | `/chat/stream` | SSE streaming chat. Yields event objects (see §8.1). |
 | `POST` | `/chat/stream/cancel` | Cancel an active stream for `session_id`. Returns `{cancelled: bool}`. |
 | `POST` | `/upload` | PDF text extraction (see §13). Returns `{filename, type, content}`. |
-| `GET` | `/sessions` | List all sessions with preview text, message count, and last timestamp. |
+| `GET` | `/sessions` | List all sessions with preview text, turn count (stored turns), and last timestamp. |
 | `GET` | `/sessions/{id}/history` | Display-friendly history for the UI (`get_display_history()`). |
 | `DELETE` | `/sessions/{id}` | Delete a session from cache and SQLite. |
 | `GET` | `/memories` | List all Mem0 memories. |

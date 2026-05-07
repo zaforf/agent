@@ -1121,7 +1121,7 @@
         <div class="sess-row">
           <div style="flex:1;min-width:0">
             <div class="sess-preview">${esc(s.preview || '(empty)')}</div>
-            <div class="sess-meta"><span>${s.count} msgs</span><span>${fmtDate(s.last_ts)}</span></div>
+	            <div class="sess-meta"><span>${s.count} turn${s.count === 1 ? '' : 's'}</span><span>${fmtDate(s.last_ts)}</span></div>
           </div>
           <button class="sess-del" title="Delete" onclick="deleteSession('${s.session_id}',event)">×</button>
         </div>`;
