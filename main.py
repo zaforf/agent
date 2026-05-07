@@ -410,6 +410,22 @@ def delete_memory_api(memory_id: str):
 
 # ── Health ────────────────────────────────────────────────────────────────────
 
+class ContextualQueryRequest(BaseModel):
+    selection: str
+    context:   str
+    query:     str = ""
+
+
+@app.post("/contextual_query")
+async def contextual_query_endpoint(req: ContextualQueryRequest):
+    from contextual_query import contextual_query
+    try:
+        result = await contextual_query(req.selection, req.context, req.query)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"result": result}
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
