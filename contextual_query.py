@@ -11,21 +11,29 @@ from __future__ import annotations
 
 from openai import AsyncOpenAI
 
-from config import GEMINI_API_KEY, GEMINI_BASE_URL
+from config import GROQ_API_KEY
 
-_MODEL = "gemini-3.1-flash-lite-preview"
+_MODEL = "llama-3.3-70b-versatile"
+_BASE_URL = "https://api.groq.com/openai/v1"
 
 _SYSTEM = (
-    "You are a concise inline assistant. The user has highlighted a piece of text "
-    "from a conversation. Explain or answer about the highlighted selection using the "
-    "surrounding context.\n"
+    "You are an inline knowledge assistant. The user highlighted a word or phrase "
+    "from a conversation and wants useful context they don't already have.\n\n"
     "Rules:\n"
-    "- 2-3 sentences maximum.\n"
-    "- Start directly with the substance — no 'Here is...', 'This refers to...', "
-    "'Sure!', or any filler opener.\n"
-    "- If it's a term or concept, define it. If it's code, say what it does. "
-    "If it's an acronym, expand it.\n"
-    "- Plain prose only. No bullet lists, no headers, no markdown."
+    "- Never repeat or paraphrase what is already stated in the surrounding context — "
+    "the user can read it. Add something new.\n"
+    "- Prioritise: origin and history (when/why coined or invented), the broader field "
+    "or movement it belongs to, who created it and why it matters, common "
+    "misconceptions, or how it relates to adjacent concepts.\n"
+    "- For acronyms: expand, then give origin/purpose — not just a definition.\n"
+    "- For jargon or technical terms: explain the intuition and context of use, "
+    "not just the dictionary meaning.\n"
+    "- Be genuinely useful. A response that only restates the selection in different "
+    "words is a failure.\n"
+    "- 2-4 sentences. Dense with insight, not padded prose.\n"
+    "- No filler openers ('This refers to...', 'Sure!', 'Here is...'). Start with "
+    "the substance.\n"
+    "- Plain prose only. No bullets, headers, or markdown."
 )
 
 
@@ -39,7 +47,7 @@ async def contextual_query(
     `query` is optional — omit it (highlight case) for the implicit
     "explain the selection" task. Pass it for /btw-style queries.
     """
-    client = AsyncOpenAI(api_key=GEMINI_API_KEY, base_url=GEMINI_BASE_URL)
+    client = AsyncOpenAI(api_key=GROQ_API_KEY, base_url=_BASE_URL)
     task = query.strip() or "Explain the highlighted text."
     user_prompt = f"Context:\n{context}\n\nHighlighted: {selection!r}\n\nTask: {task}"
     resp = await client.chat.completions.create(

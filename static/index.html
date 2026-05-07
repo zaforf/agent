@@ -249,7 +249,7 @@
     /* Tool call / result */
     .tool-call .bubble,
     .tool-result .bubble {
-      background: #f8f5f2;
+      background: var(--bg);
       border: 1px solid var(--border);
       color: var(--text);
     }
@@ -587,15 +587,16 @@
     #explain-tooltip {
       position: fixed;
       z-index: 200;
-      width: 320px;
+      width: 340px;
       max-width: calc(100vw - 16px);
-      background: var(--text);
-      color: var(--user-text);
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 10px 13px;
       font-size: 13px;
-      line-height: 1.55;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.22);
+      line-height: 1.6;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
       opacity: 0;
       pointer-events: none;
       transition: opacity 0.12s ease;
@@ -607,7 +608,7 @@
       pointer-events: auto;
     }
     #explain-tooltip.loading {
-      color: rgba(255,255,255,0.45);
+      color: var(--text-3);
       font-style: italic;
     }
 
@@ -1836,19 +1837,36 @@
 
   function _positionTooltip(tip, anchorRect) {
     const GAP = 8;
-    const TIP_W = Math.min(320, window.innerWidth - 16);
+    const PAD = 8;
+    const TIP_W = Math.min(340, window.innerWidth - 16);
+
+    tip.style.width     = TIP_W + 'px';
+    tip.style.transform = '';
+
+    // Horizontal: center on selection, clamp to viewport.
     let left = anchorRect.left + anchorRect.width / 2 - TIP_W / 2;
-    left = Math.max(8, Math.min(left, window.innerWidth - TIP_W - 8));
-    tip.style.left  = left + 'px';
-    tip.style.width = TIP_W + 'px';
-    // Prefer above selection; fall back to below if too close to top.
-    if (anchorRect.top > 140) {
-      tip.style.top       = (anchorRect.top - GAP) + 'px';
-      tip.style.transform = 'translateY(-100%)';
+    left = Math.max(PAD, Math.min(left, window.innerWidth - TIP_W - PAD));
+    tip.style.left = left + 'px';
+
+    // Measure actual height synchronously (element is in DOM, just opacity:0).
+    const tipH = tip.offsetHeight;
+    const above = anchorRect.top - GAP - tipH;
+    const below = anchorRect.bottom + GAP;
+
+    let top;
+    if (above >= PAD) {
+      top = above;
+    } else if (below + tipH <= window.innerHeight - PAD) {
+      top = below;
     } else {
-      tip.style.top       = (anchorRect.bottom + GAP) + 'px';
-      tip.style.transform = '';
+      // Neither fits cleanly — pick the roomier side and clamp.
+      const spaceAbove = anchorRect.top;
+      const spaceBelow = window.innerHeight - anchorRect.bottom;
+      top = spaceAbove >= spaceBelow
+        ? Math.max(PAD, above)
+        : Math.min(window.innerHeight - tipH - PAD, below);
     }
+    tip.style.top = top + 'px';
   }
 
   function showEphemeralPanel(text, anchorRect, { loading = false } = {}) {
@@ -1928,12 +1946,14 @@
       if (tip && tip.classList.contains('visible')) {
         tip.textContent = result;
         tip.classList.remove('loading');
+        _positionTooltip(tip, rect);
       }
     } catch {
       const tip = document.getElementById('explain-tooltip');
       if (tip && tip.classList.contains('visible')) {
         tip.textContent = 'Could not fetch explanation.';
         tip.classList.remove('loading');
+        _positionTooltip(tip, rect);
       }
     }
   });
