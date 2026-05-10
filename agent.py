@@ -48,15 +48,15 @@ class _ThinkStripper:
     A closing tag returns to scanning so multiple interleaved
     thinking/output/thinking cycles are all handled correctly.
 
-    Backtick code spans are treated as opaque: a thinking tag that appears
-    inside a `` `...` `` span (e.g. an issue title containing literal
-    ``<thinking>`` text) passes through verbatim and does NOT activate the
-    stripper.  This is tracked via a running single-backtick parity over
-    the raw stream processed so far (``_bt_parity``).  Triple-backtick
-    sequences are excluded from the count (they are fence openers/closers,
-    not inline code).  Lone backticks inside genuine thinking blocks can
-    theoretically desync parity, but that is an uncommon edge-case; the
-    critical path (literal tags in code spans in visible text) is correct.
+    Backtick code spans and ``` fences are treated as opaque: a thinking tag
+    that appears inside either context passes through verbatim and does NOT
+    activate the stripper.  This is tracked via a running backtick parity
+    (``_bt_parity``) over the raw stream.  Every backtick contributes,
+    including those in ``` sequences — a fence opener is 3 backticks (odd),
+    so it flips parity just like a single backtick, protecting its contents
+    for free, and the matching closer flips it back.  Lone unmatched backticks
+    inside genuine thinking blocks can theoretically desync parity, but that
+    is a degenerate edge-case.
     """
     _OPEN_RE  = re.compile(r"<(thought|think|thinking)[\s>]", re.IGNORECASE)
     _CLOSE_RE = re.compile(r"</(thought|think|thinking)>",    re.IGNORECASE)
@@ -78,8 +78,13 @@ class _ThinkStripper:
 
     @staticmethod
     def _bt_delta(text: str) -> int:
-        """Net single-backtick parity change for text (triple backticks ignored)."""
-        return text.replace("```", "").count("`") & 1
+        """Net backtick parity change for text.
+
+        Every backtick (single or triple) contributes to the count.
+        A ``` fence opener/closer is 3 backticks (odd), so it flips parity
+        exactly like a single backtick, protecting its contents for free.
+        """
+        return text.count("`") & 1
 
     def _parity_at(self, pos: int) -> int:
         """Code-span parity at position pos in self._buf."""
