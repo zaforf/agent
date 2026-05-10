@@ -43,9 +43,20 @@ _HISTORY_SUMMARIZE_THRESHOLD = 8000
 
 class _ThinkStripper:
     """Stream-safe removal of <thought/think/thinking> blocks.
+
     State machine: scanning → buffering → scanning (loops).
     A closing tag returns to scanning so multiple interleaved
     thinking/output/thinking cycles are all handled correctly.
+
+    Backtick code spans and ``` fences are treated as opaque: a thinking tag
+    that appears inside either context passes through verbatim and does NOT
+    activate the stripper.  This is tracked via a running backtick parity
+    (``_bt_parity``) over the raw stream.  Every backtick contributes,
+    including those in ``` sequences — a fence opener is 3 backticks (odd),
+    so it flips parity just like a single backtick, protecting its contents
+    for free, and the matching closer flips it back.  Lone unmatched backticks
+    inside genuine thinking blocks can theoretically desync parity, but that
+    is a degenerate edge-case.
     """
     _OPEN_RE  = re.compile(r"<(thought|think|thinking)[\s>]", re.IGNORECASE)
     _CLOSE_RE = re.compile(r"</(thought|think|thinking)>",    re.IGNORECASE)
@@ -57,42 +68,93 @@ class _ThinkStripper:
     )
 
     def __init__(self):
-        self._state = "scanning"
-        self._buf   = ""
+        self._state     = "scanning"
+        self._buf       = ""
+        # Backtick parity of raw stream content already processed (emitted or
+        # suppressed) BEFORE self._buf.  0 = outside a code span; 1 = inside.
+        self._bt_parity = 0
+
+    # ── helpers ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _bt_delta(text: str) -> int:
+        """Net backtick parity change for text.
+
+        Every backtick (single or triple) contributes to the count.
+        A ``` fence opener/closer is 3 backticks (odd), so it flips parity
+        exactly like a single backtick, protecting its contents for free.
+        """
+        return text.count("`") & 1
+
+    def _parity_at(self, pos: int) -> int:
+        """Code-span parity at position pos in self._buf."""
+        return (self._bt_parity + self._bt_delta(self._buf[:pos])) & 1
+
+    def _advance(self, text: str) -> None:
+        """Record that text (emitted or suppressed) has been processed."""
+        self._bt_parity = (self._bt_parity + self._bt_delta(text)) & 1
+
+    # ── public interface ─────────────────────────────────────────────────────
 
     def feed(self, chunk: str) -> str:
         self._buf += chunk
         if self._state == "scanning":
-            m = self._OPEN_RE.search(self._buf)
-            if m:
+            search_from = 0
+            while True:
+                m = self._OPEN_RE.search(self._buf, search_from)
+                if not m:
+                    break
+                if self._parity_at(m.start()) == 1:
+                    # Tag is inside a backtick code span — treat as literal text.
+                    search_from = m.end()
+                    continue
+                # Tag is outside any code span — strip the thinking block.
                 pre         = self._buf[:m.start()]
                 self._buf   = self._buf[m.end():]
+                self._advance(pre)
                 self._state = "buffering"
-                return pre + self._drain()
-            pm       = self._PARTIAL_OPEN_RE.search(self._buf)
-            safe_end = pm.start() if pm else len(self._buf)
+                tail = self._drain()
+                self._advance(tail)
+                return pre + tail
+
+            # No real thinking tag found; hold back any partial tag, but only
+            # when the partial match itself is outside a code span.
+            pm = self._PARTIAL_OPEN_RE.search(self._buf)
+            if pm and self._parity_at(pm.start()) == 0:
+                safe_end = pm.start()
+            else:
+                safe_end = len(self._buf)
             out       = self._buf[:safe_end]
             self._buf = self._buf[safe_end:]
+            self._advance(out)
             return out
-        return self._drain()
+
+        # buffering state
+        tail = self._drain()
+        self._advance(tail)
+        return tail
 
     def _drain(self) -> str:
         m = self._CLOSE_RE.search(self._buf)
         if m:
+            suppressed  = self._buf[:m.end()]          # content + closing tag
             remaining   = self._buf[m.end():].lstrip("\n")
             self._buf   = ""
             self._state = "scanning"
+            self._advance(suppressed)                  # backticks in block affect parity
             return remaining
         return ""
 
     def finalize(self) -> str:
         if self._state == "buffering":
-            # Unclosed thinking block: treat as malformed hidden reasoning and
-            # drop it rather than leaking dangling tags like "<thought".
+            # Unclosed thinking block: drop rather than leaking raw tags.
             out = ""
-        else:                        # scanning
-            pm  = self._PARTIAL_OPEN_RE.search(self._buf)
-            out = self._buf[:pm.start()] if pm else self._buf
+        else:
+            pm = self._PARTIAL_OPEN_RE.search(self._buf)
+            if pm and self._parity_at(pm.start()) == 0:
+                out = self._buf[:pm.start()]
+            else:
+                out = self._buf
         self._buf = ""
         return out
 
