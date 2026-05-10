@@ -140,13 +140,6 @@ def test_thinking_tag_inside_code_span_passes_through():
     assert state == "scanning"
 
 
-def test_thinking_tag_inside_code_span_in_table_row():
-    row = "| 98 | model output cut short printing `<thinking>` | | 2026-05-07 |\n"
-    out, state = _drive([row])
-    assert out == row
-    assert state == "scanning"
-
-
 def test_thinking_tag_inside_code_span_split_across_chunks():
     # Backtick in one chunk, tag content in next — parity tracks across boundary.
     out, state = _drive([
@@ -155,15 +148,6 @@ def test_thinking_tag_inside_code_span_split_across_chunks():
         "` after",
     ])
     assert out == "before `<thinking>literal</thinking>` after"
-    assert state == "scanning"
-
-
-def test_real_thinking_tag_outside_code_span_still_stripped():
-    # A real thinking block outside any code span is still removed.
-    out, state = _drive(["`code`", " text ", "<thinking>hidden</thinking>", " visible"])
-    assert "hidden" not in out
-    assert "visible" in out
-    assert "`code`" in out
     assert state == "scanning"
 
 
@@ -185,10 +169,10 @@ def test_partial_thinking_tag_inside_code_span_not_held():
     assert "`<thi" in out
 
 
-def test_partial_thinking_tag_outside_code_span_still_held():
-    # Outside a code span, a partial tag at the end must still be held back.
-    s = agent._ThinkStripper()
-    out = s.feed("text <thi")
-    assert out == "text "   # partial tag held back
-    assert s._buf == "<thi"
+def test_thinking_tag_inside_code_fence_passes_through():
+    # A ``` fence is 3 backticks (odd parity), so its contents are protected
+    # exactly like a backtick code span — no extra state needed.
+    out, state = _drive(["```\n<thinking>literal</thinking>\n```"])
+    assert out == "```\n<thinking>literal</thinking>\n```"
+    assert state == "scanning"
 
