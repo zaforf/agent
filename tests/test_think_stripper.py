@@ -128,3 +128,67 @@ def test_thinking_chars_emitted_for_second_block():
     assert any("visible text" in t for _, t in text_events)
     assert any("more visible" in t for _, t in text_events)
 
+
+# ── Code-span protection ──────────────────────────────────────────────────────
+
+def test_thinking_tag_inside_code_span_passes_through():
+    # A literal `<thinking>` inside a backtick code span is visible text, not
+    # a reasoning block.  The primary failing case: issue titles like
+    # "model cut short when printing `<thinking>`".
+    out, state = _drive(["`<thinking>`"])
+    assert out == "`<thinking>`"
+    assert state == "scanning"
+
+
+def test_thinking_tag_inside_code_span_in_table_row():
+    row = "| 98 | model output cut short printing `<thinking>` | | 2026-05-07 |\n"
+    out, state = _drive([row])
+    assert out == row
+    assert state == "scanning"
+
+
+def test_thinking_tag_inside_code_span_split_across_chunks():
+    # Backtick in one chunk, tag content in next — parity tracks across boundary.
+    out, state = _drive([
+        "before `",
+        "<thinking>literal</thinking>",
+        "` after",
+    ])
+    assert out == "before `<thinking>literal</thinking>` after"
+    assert state == "scanning"
+
+
+def test_real_thinking_tag_outside_code_span_still_stripped():
+    # A real thinking block outside any code span is still removed.
+    out, state = _drive(["`code`", " text ", "<thinking>hidden</thinking>", " visible"])
+    assert "hidden" not in out
+    assert "visible" in out
+    assert "`code`" in out
+    assert state == "scanning"
+
+
+def test_code_span_then_real_thinking_block():
+    # Tag inside span is literal; tag outside span is stripped.
+    out, _ = _drive(["`<thinking>` prose <thinking>real</thinking> end"])
+    assert "`<thinking>`" in out
+    assert "real" not in out
+    assert "prose" in out
+    assert "end" in out
+
+
+def test_partial_thinking_tag_inside_code_span_not_held():
+    # A partial tag at the end of a buffer is normally held back to wait for
+    # the next chunk — but if it's inside a code span it should be released.
+    s = agent._ThinkStripper()
+    out = s.feed("`<thi")
+    # Inside code span → should NOT hold back the partial tag
+    assert "`<thi" in out
+
+
+def test_partial_thinking_tag_outside_code_span_still_held():
+    # Outside a code span, a partial tag at the end must still be held back.
+    s = agent._ThinkStripper()
+    out = s.feed("text <thi")
+    assert out == "text "   # partial tag held back
+    assert s._buf == "<thi"
+
