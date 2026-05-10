@@ -45,6 +45,34 @@ def _atomic_write_text(path: Path, text: str) -> None:
                 pass
 
 
+def workspace_read(
+    path: str,
+    start_line: int = 1,
+    end_line: int | None = None,
+) -> str:
+    """Read a workspace file with line numbers (1-indexed, inclusive).
+
+    Omit start_line/end_line to read the whole file.  Use a tight range to
+    get the exact text you need before a workspace_search_replace call.
+    """
+    rel = path.strip().replace("\\", "/")
+    target = _workspace_target(rel)
+    if not target.is_file():
+        cwd = get_shell_cwd()
+        raise FileNotFoundError(
+            f"not a file: {rel!r} (resolved to {target} from cwd={cwd})"
+        )
+    raw = target.read_text(encoding="utf-8", errors="replace")
+    lines = raw.splitlines(keepends=True)
+    total = len(lines)
+    s = max(1, start_line) - 1          # 0-indexed start
+    e = min(total, end_line) if end_line is not None else total
+    selected = lines[s:e]
+    if not selected:
+        return f"(no lines in range {start_line}-{end_line or total} of {total}-line file)"
+    return "".join(f"{s + i + 1}\t{line}" for i, line in enumerate(selected))
+
+
 def workspace_search_replace(
     path: str,
     old_string: str,
@@ -92,17 +120,39 @@ SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "workspace_read",
+            "description": (
+                "Read a workspace file with line numbers. "
+                "Call this immediately before workspace_search_replace to get the exact text — "
+                "never construct old_string from memory. "
+                "Use start_line/end_line to narrow to the region you intend to edit; "
+                "omit both to read the whole file. "
+                "Paths are relative to the shell's current working directory."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path relative to shell's current working directory"},
+                    "start_line": {"type": "integer", "description": "First line to return (1-indexed, default 1)"},
+                    "end_line": {"type": "integer", "description": "Last line to return inclusive (default: end of file)"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "workspace_search_replace",
             "description": (
-                "Primary code-edit tool — use for ALL edits to existing files. "
-                "shell_exec+echo/heredoc is only acceptable when creating a file that does not yet exist; "
-                "every subsequent change must use this tool. "
-                "Before calling, retrieve the exact lines with shell_exec (grep -n or sed -n) — "
-                "never construct old_string from memory. "
-                "Paths are relative to the shell's current working directory: "
-                "after cd myproject/, pass 'main.py' not 'myproject/main.py'. "
-                "Prefer multiple targeted sequential calls over bulk whole-file rewrites. "
-                "After a failed call, adjust the snippet or path; never retry identical failing calls."
+                "Edit an existing workspace file by exact string replacement. "
+                "ALWAYS call workspace_read immediately before this tool to get the verbatim text — "
+                "never construct old_string from memory or prior context. "
+                "On failure: call workspace_read again, find the exact mismatch, and retry. "
+                "Never fall back to shell_exec+heredoc for existing files, even after repeated failures. "
+                "shell_exec+heredoc is only for creating a file that does not yet exist. "
+                "Paths are relative to the shell's current working directory. "
+                "Prefer multiple targeted calls over bulk whole-file rewrites."
             ),
             "parameters": {
                 "type": "object",
@@ -121,4 +171,7 @@ SCHEMAS = [
     }
 ]
 
-FUNCTIONS = {"workspace_search_replace": workspace_search_replace}
+FUNCTIONS = {
+    "workspace_read": workspace_read,
+    "workspace_search_replace": workspace_search_replace,
+}

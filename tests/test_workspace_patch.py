@@ -1,4 +1,4 @@
-"""Tests for workspace edit tool (`workspace_search_replace`)."""
+"""Tests for workspace tools (`workspace_read`, `workspace_search_replace`)."""
 from __future__ import annotations
 
 import pytest
@@ -118,3 +118,36 @@ def test_atomic_write_preserves_on_error(ws):
     with pytest.raises(ValueError):
         wp.workspace_search_replace("safe.txt", "nothere", "x")
     assert (ws / "safe.txt").read_text() == original
+
+
+# ── workspace_read ────────────────────────────────────────────────────────────
+
+def test_read_whole_file(ws):
+    (ws / "r.txt").write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+    out = wp.workspace_read("r.txt")
+    assert "1\talpha\n" in out
+    assert "2\tbeta\n" in out
+    assert "3\tgamma\n" in out
+
+
+def test_read_line_range(ws):
+    (ws / "r.txt").write_text("a\nb\nc\nd\n", encoding="utf-8")
+    out = wp.workspace_read("r.txt", start_line=2, end_line=3)
+    assert "2\tb\n" in out
+    assert "3\tc\n" in out
+    assert "1\ta" not in out
+    assert "4\td" not in out
+
+
+def test_read_missing_file_raises(ws):
+    with pytest.raises(FileNotFoundError):
+        wp.workspace_read("nope.txt")
+
+
+def test_read_cwd_relative(ws, monkeypatch):
+    sub = ws / "sub"
+    sub.mkdir()
+    (sub / "f.py").write_text("x = 1\n", encoding="utf-8")
+    monkeypatch.setattr(sh, "_shell_cwd", sub)
+    out = wp.workspace_read("f.py")
+    assert "x = 1" in out
