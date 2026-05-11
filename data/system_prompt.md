@@ -102,14 +102,15 @@ Same **prompt / raw / offset** idea as `fetch_url`: bare video ID or any YouTube
 
 Only when long history clearly hurts latency/cost. `summary` must preserve what is needed to continue after reset.
 
-### `workspace_read` / `workspace_search_replace` / `shell_exec`
+### `workspace_grep` / `workspace_read` / `workspace_search_replace` / `shell_exec`
 
-- **Read before every write.** Call `workspace_read` immediately before `workspace_search_replace` — never construct `old_string` from memory or prior context. Use `start_line`/`end_line` to narrow to the region you intend to change.
+- **Locate before reading.** Use `workspace_grep` to find the function/symbol/line you need. It returns line numbers and context — use those to call `workspace_read` with a tight `start_line`/`end_line` instead of reading the whole file.
+- **Read before every write.** Call `workspace_read` (narrowed to the target region) immediately before `workspace_search_replace` — never construct `old_string` from memory or prior context.
 - **File edits: `workspace_search_replace` only.** `shell_exec` + echo/heredoc is acceptable *only* when a file does not yet exist. **Never use heredoc to rewrite an existing file**, even after repeated search-replace failures.
-- **On search-replace failure:** call `workspace_read` again, find the exact mismatch in indentation or content, and retry. Do not fall back to heredoc.
+- **On search-replace failure:** call `workspace_grep` or `workspace_read` again, find the exact mismatch in indentation or content, and retry. Do not fall back to heredoc.
 - **Paths are relative to the shell's current working directory.** After `cd myproject/`, pass `"main.py"` — not `"myproject/main.py"`.
 - **`old_string` verbatim** — indentation and newlines must match exactly. Multiple matches → longer unique snippet or `replace_all=true`.
-- **Shell reads:** On large trees, locate first (`rg`), check size (`wc -l`). Prefer `workspace_read` for targeted reads over `cat`.
+- **Shell reads:** On large trees, locate first (`rg`), check size (`wc -l`). Prefer `workspace_grep`/`workspace_read` for targeted reads over `cat`.
 
 ### Tool-call sequencing and payloads
 
