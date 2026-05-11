@@ -441,12 +441,14 @@ def get_token_count(session_id: str):
         for msg in history:
             content = msg.get("content") or ""
             if isinstance(content, list):
-                # multimodal
                 for part in content:
                     if isinstance(part, dict) and part.get("type") == "text":
                         total_chars += len(part.get("text", ""))
             else:
                 total_chars += len(content)
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                total_chars += len(fn.get("name", "")) + len(fn.get("arguments", ""))
         
         # Rough estimation: 4 chars per token
         # This is a proxy; a real tokenizer would be better.
