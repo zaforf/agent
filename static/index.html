@@ -583,6 +583,17 @@
     ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; }
 
     /* ── Ephemeral explain tooltip ───────────────────────── */
+    .token-counter {
+      position: absolute;
+      right: 16px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 11px;
+      color: var(--text-3);
+      font-family: var(--mono);
+      white-space: nowrap;
+      pointer-events: none;
+    }
 
     #explain-tooltip {
       position: fixed;
@@ -663,6 +674,7 @@
       <button class="btn btn-send" id="send-btn" onclick="sendOrStop()">Send</button>
       <button class="btn btn-icon" id="btn-mem" onclick="togglePanel('mem-panel','btn-mem')" title="Memories">◉</button>
     </div>
+    <span class="token-counter" id="token-text">—</span>
   </div>
 </div>
 
@@ -832,9 +844,10 @@
   }
 
   function renderMarkdown(text) {
-    return _restoreMathNewlinesFromMarkedHtml(
+    const html = _restoreMathNewlinesFromMarkedHtml(
       marked.parse(escapeBracketMathDelimitersForMarked(text))
     );
+    return html.replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" ');
   }
 
   /**
@@ -873,11 +886,11 @@
   }
 
   // ── State ─────────────────────────────────────────────────
-
   const feed    = document.getElementById('msg-inner');
   const messagesEl = document.getElementById('messages');
   const input   = document.getElementById('input');
   const sendBtn = document.getElementById('send-btn');
+  const tokenText = document.getElementById('token-text');
   let stickToBottom = true;
   let mathRenderTimer = null;
 
@@ -1101,6 +1114,18 @@
 
   // ── History ───────────────────────────────────────────────
 
+  async function updateTokenCount() {
+    try {
+      const res = await fetch(`/tokens/${sid}`);
+      const data = await res.json();
+      const tokens = data.tokens || 0;
+      const pct = Math.min(100, (tokens / 256000) * 100);
+      tokenText.textContent = tokens.toLocaleString() + ' (' + pct.toFixed(1) + '%)';
+    } catch (e) {
+      console.error('Token update failed:', e);
+    }
+  }
+
   async function loadHistory() {
     messagesEl.style.visibility = 'hidden';
     try {
@@ -1128,6 +1153,7 @@
       highlightSession();
     } finally {
       messagesEl.style.visibility = '';
+      await updateTokenCount();
     }
   }
 
@@ -1478,6 +1504,7 @@
       sendBtn.classList.remove('stop-state');
       _hideThinking();
       input.focus();
+      updateTokenCount();
     }
   }
 

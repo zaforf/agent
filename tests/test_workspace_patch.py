@@ -1,4 +1,4 @@
-"""Tests for workspace tools (`workspace_read`, `workspace_search_replace`)."""
+"""Tests for workspace tools (`workspace_grep`, `workspace_read`, `workspace_search_replace`)."""
 from __future__ import annotations
 
 import pytest
@@ -158,3 +158,54 @@ def test_read_cwd_relative(ws, monkeypatch):
     monkeypatch.setattr(sh, "_shell_cwd", sub)
     out = wp.workspace_read("f.py")
     assert "x = 1" in out
+
+
+# ── workspace_grep ────────────────────────────────────────────────────────────
+
+def test_grep_finds_match(ws):
+    (ws / "g.py").write_text("def foo():\n    return 1\n\ndef bar():\n    return 2\n", encoding="utf-8")
+    out = wp.workspace_grep("g.py", "def foo")
+    assert "def foo" in out
+    assert "1\t" in out  # line 1
+
+
+def test_grep_returns_line_numbers(ws):
+    (ws / "g.py").write_text("a\nb\nc\nd\ne\n", encoding="utf-8")
+    out = wp.workspace_grep("g.py", "c", context_lines=1)
+    assert "2\tb" in out   # context before
+    assert "3\tc" in out   # match
+    assert "4\td" in out   # context after
+
+
+def test_grep_no_match(ws):
+    (ws / "g.py").write_text("hello world\n", encoding="utf-8")
+    out = wp.workspace_grep("g.py", "zzz_no_match")
+    assert "no matches" in out
+
+
+def test_grep_regex_pattern(ws):
+    (ws / "g.py").write_text("x = 1\ny = 2\nz = 3\n", encoding="utf-8")
+    out = wp.workspace_grep("g.py", r"[xyz] = [23]", context_lines=0)
+    assert "y = 2" in out
+    assert "z = 3" in out
+    assert "x = 1" not in out
+
+
+def test_grep_merges_overlapping_context(ws):
+    # Two matches close enough that their context windows overlap — should produce
+    # one contiguous block, not two blocks with a -- separator.
+    lines = "\n".join(f"line{i}" for i in range(1, 11))
+    (ws / "g.py").write_text(lines + "\n", encoding="utf-8")
+    out = wp.workspace_grep("g.py", r"line[23]", context_lines=2)
+    assert "--" not in out   # merged into one block
+
+
+def test_grep_invalid_regex_treated_as_literal(ws):
+    (ws / "g.py").write_text("price: $5.00\n", encoding="utf-8")
+    out = wp.workspace_grep("g.py", "$5.00")  # would be invalid regex if not escaped
+    assert "$5.00" in out
+
+
+def test_grep_missing_file_raises(ws):
+    with pytest.raises(FileNotFoundError):
+        wp.workspace_grep("nope.py", "anything")
