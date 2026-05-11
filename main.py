@@ -426,6 +426,76 @@ async def contextual_query_endpoint(req: ContextualQueryRequest):
     return {"result": result}
 
 
+def _history_to_gemini_contents(history: list[dict]) -> list[dict]:
+    """Convert OpenAI-format history to Gemini contents for countTokens."""
+    contents = []
+    for msg in history:
+        role = msg.get("role")
+        if role == "system":
+            continue
+        gemini_role = "model" if role == "assistant" else "user"
+        parts: list[dict] = []
+        if role == "tool":
+            parts = [{"functionResponse": {
+                "name": msg.get("name", ""),
+                "response": {"output": msg.get("content", "")},
+            }}]
+        else:
+            content = msg.get("content") or ""
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        if t := part.get("text", ""):
+                            parts.append({"text": t})
+            elif content:
+                parts.append({"text": str(content)})
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                parts.append({"functionCall": {"name": fn.get("name", ""), "args": args}})
+        if parts:
+            contents.append({"role": gemini_role, "parts": parts})
+    return contents
+
+
+@app.get("/tokens/{session_id}")
+async def get_token_count(session_id: str):
+    import httpx
+    system_prompt = agent._build_system_prompt()
+    history = _get_history(session_id)
+    model = config.PROVIDERS[0]["model"]
+    api_key = config.GEMINI_API_KEY
+    if api_key:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:countTokens"
+            body = {
+                "contents": _history_to_gemini_contents(history),
+                "system_instruction": {"parts": [{"text": system_prompt}]},
+            }
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(url, params={"key": api_key}, json=body)
+                resp.raise_for_status()
+                return {"tokens": resp.json()["totalTokens"]}
+        except Exception as e:
+            log.warning("countTokens failed, using heuristic: %s", e)
+    # Fallback: char heuristic
+    total_chars = len(system_prompt)
+    for msg in history:
+        content = msg.get("content") or ""
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    total_chars += len(part.get("text", ""))
+        else:
+            total_chars += len(content)
+        for tc in msg.get("tool_calls") or []:
+            fn = tc.get("function") or {}
+            total_chars += len(fn.get("name", "")) + len(fn.get("arguments", ""))
+    return {"tokens": total_chars // 4}
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
