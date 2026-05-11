@@ -409,13 +409,17 @@ async def _prefetch_memories(user_text: str, history: list[dict]) -> list[str]:
         return []
 
 
-def _memories_system_block(memories: list[str]) -> dict:
-    """Format prefetched memories as a second system message."""
+def _memories_user_block(memories: list[str]) -> dict:
+    """Format prefetched memories as a user-role message immediately before the real user message.
+
+    Injected at the end of context (highest attention position) rather than
+    after the system prompt (lowest marginal attention when history is long).
+    """
     body = "\n".join(f"• {m}" for m in memories)
     return {
-        "role": "system",
+        "role": "user",
         "content": (
-            "[Ambient memory — retrieved this turn, use or ignore as relevant]\n" + body
+            "[Relevant memories for this turn — apply where appropriate]\n" + body
         ),
     }
 
@@ -581,14 +585,15 @@ async def run(
     _user_text = _user_content_as_text(user_content)
     system_prompt = _build_system_prompt(output_channel=output_channel)
     prefetched = await _prefetch_memories(_user_text, history)
-    extra_system = [_memories_system_block(prefetched)] if prefetched else []
+    mem_block = [_memories_user_block(prefetched)] if prefetched else []
     messages = [
         {"role": "system", "content": system_prompt},
-        *extra_system,
         *history,
+        *mem_block,
         {"role": "user", "content": user_content},
     ]
-    turn_start = 1 + len(extra_system) + len(history)
+    # turn_start excludes the memory block — it's ephemeral context, not persisted history.
+    turn_start = 1 + len(history) + len(mem_block)
 
     provider_used = _clients[0]["name"] if _clients else "none"
     # Pending background summarization tasks: (message_dict, asyncio.Task)
@@ -687,16 +692,17 @@ async def run_stream(
     _user_text = _user_content_as_text(user_content)
     system_prompt = _build_system_prompt(output_channel=output_channel)
     prefetched = await _prefetch_memories(_user_text, history)
-    extra_system = [_memories_system_block(prefetched)] if prefetched else []
+    mem_block = [_memories_user_block(prefetched)] if prefetched else []
     if prefetched:
         yield {"type": "memory_prefetch", "count": len(prefetched), "memories": prefetched}
     messages = [
         {"role": "system", "content": system_prompt},
-        *extra_system,
         *history,
+        *mem_block,
         {"role": "user", "content": user_content},
     ]
-    turn_start = 1 + len(extra_system) + len(history)
+    # turn_start excludes the memory block — it's ephemeral context, not persisted history.
+    turn_start = 1 + len(history) + len(mem_block)
 
     provider_used = _clients[0]["name"] if _clients else "none"
     # Pending background summarization tasks: (message_dict, asyncio.Task)

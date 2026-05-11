@@ -10,15 +10,15 @@ import agent
 # ── _memories_system_block ────────────────────────────────────────────────────
 
 def test_memories_block_format():
-    block = agent._memories_system_block(["Zafir prefers concise answers", "Uses LaTeX for math"])
-    assert block["role"] == "system"
+    block = agent._memories_user_block(["Zafir prefers concise answers", "Uses LaTeX for math"])
+    assert block["role"] == "user"
     assert "• Zafir prefers concise answers" in block["content"]
     assert "• Uses LaTeX for math" in block["content"]
-    assert "Ambient memory" in block["content"]
+    assert "memories" in block["content"].lower()
 
 
 def test_memories_block_single():
-    block = agent._memories_system_block(["one fact"])
+    block = agent._memories_user_block(["one fact"])
     assert block["content"].count("•") == 1
 
 
