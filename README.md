@@ -4,7 +4,7 @@ Personal AI assistant system featuring a multi-turn agentic loop, long-term vect
 
 ## Architecture
 
-- **Agent Loop**: Multi-turn execution (up to 30 iterations) with native tool use.
+- **Agent Loop**: Multi-turn agent loop (up to 30 tool iterations per turn) with native tool use.
 - **Provider Cascade**: Tiered fallback chain (Gemma 4 $\rightarrow$ Cerebras $\rightarrow$ Groq) with exponential backoff.
 - **Context Management**: 
     - **In-turn**: Tool results are kept raw for all calls within a single turn.
