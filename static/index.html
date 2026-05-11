@@ -583,6 +583,34 @@
     ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; }
 
     /* ── Ephemeral explain tooltip ───────────────────────── */
+    .token-counter {
+      position: absolute;
+      right: 16px;
+      bottom: 10px;
+      font-size: 11px;
+      color: var(--text-3);
+      font-family: var(--mono);
+      pointer-events: none;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .token-bar-bg {
+      width: 40px;
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+      position: relative;
+    }
+    .token-bar-fill {
+      height: 100%;
+      background: var(--accent);
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+    .token-bar-fill.warn { background: orange; }
+    .token-bar-fill.danger { background: var(--danger); }
 
     #explain-tooltip {
       position: fixed;
@@ -662,6 +690,10 @@
       <div id="input" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Message…"></div>
       <button class="btn btn-send" id="send-btn" onclick="sendOrStop()">Send</button>
       <button class="btn btn-icon" id="btn-mem" onclick="togglePanel('mem-panel','btn-mem')" title="Memories">◉</button>
+      <div class="token-counter" id="token-counter">
+        <div class="token-bar-bg"><div class="token-bar-fill" id="token-fill"></div></div>
+        <span id="token-text">0</span>
+      </div>
     </div>
   </div>
 </div>
@@ -873,11 +905,12 @@
   }
 
   // ── State ─────────────────────────────────────────────────
-
   const feed    = document.getElementById('msg-inner');
   const messagesEl = document.getElementById('messages');
   const input   = document.getElementById('input');
   const sendBtn = document.getElementById('send-btn');
+  const tokenText = document.getElementById('token-text');
+  const tokenFill = document.getElementById('token-fill');
   let stickToBottom = true;
   let mathRenderTimer = null;
 
@@ -1101,6 +1134,24 @@
 
   // ── History ───────────────────────────────────────────────
 
+  async function updateTokenCount() {
+    try {
+      const res = await fetch(`/tokens/${sid}`);
+      const data = await res.json();
+      const tokens = data.tokens || 0;
+      const limit = 256000;
+      const pct = Math.min(100, (tokens / limit) * 100);
+      
+      tokenText.textContent = tokens.toLocaleString();
+      tokenFill.style.width = pct + '%';
+      tokenFill.className = 'token-bar-fill';
+      if (pct > 80) tokenFill.classList.add('warn');
+      if (pct > 95) tokenFill.classList.add('danger');
+    } catch (e) {
+      console.error('Token update failed:', e);
+    }
+  }
+
   async function loadHistory() {
     messagesEl.style.visibility = 'hidden';
     try {
@@ -1128,6 +1179,7 @@
       highlightSession();
     } finally {
       messagesEl.style.visibility = '';
+      await updateTokenCount();
     }
   }
 

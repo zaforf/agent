@@ -426,6 +426,35 @@ async def contextual_query_endpoint(req: ContextualQueryRequest):
     return {"result": result}
 
 
+@app.get("/tokens/{session_id}")
+def get_token_count(session_id: str):
+    """Estimate total tokens for the current session context.
+    Calculation: (System Prompt + History + Attachments) / ~4 chars per token.
+    """
+    try:
+        # 1. System prompt
+        system_prompt = agent._build_system_prompt()
+        total_chars = len(system_prompt)
+
+        # 2. History
+        history = _get_history(session_id)
+        for msg in history:
+            content = msg.get("content") or ""
+            if isinstance(content, list):
+                # multimodal
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        total_chars += len(part.get("text", ""))
+            else:
+                total_chars += len(content)
+        
+        # Rough estimation: 4 chars per token
+        # This is a proxy; a real tokenizer would be better.
+        estimated_tokens = total_chars // 4
+        return {"tokens": estimated_tokens}
+    except Exception as e:
+        return {"tokens": 0, "error": str(e)}
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
