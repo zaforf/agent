@@ -1116,7 +1116,7 @@
       const data = await res.json();
       const tokens = data.tokens || 0;
       const pct = Math.min(100, (tokens / 256000) * 100);
-      tokenText.textContent = pct.toFixed(1) + '%';
+      tokenText.textContent = tokens.toLocaleString() + ' (' + pct.toFixed(1) + '%)';
     } catch (e) {
       console.error('Token update failed:', e);
     }
