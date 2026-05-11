@@ -24,8 +24,8 @@ log = logging.getLogger(__name__)
 _SKIP_TAGS = {"script", "style", "nav", "header", "footer", "aside", "noscript"}
 _BLOCK_TAGS = {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "br", "tr", "article"}
 
-_SUMMARIZER_CHAR_LIMIT = 128_000   # chars fed to summarizer (well within model limit)
-_RAW_CHAR_LIMIT        = 8_000     # chars returned in raw/paginated mode
+_SUMMARIZER_CHAR_LIMIT = 256_000   # chars fed to summarizer (well within model limit)
+_RAW_CHAR_LIMIT        = 16_000     # chars returned in raw/paginated mode
 _FETCH_RETRIES         = 4
 _FETCH_TIMEOUT_S       = 15
 
@@ -33,7 +33,7 @@ _FETCH_TIMEOUT_S       = 15
 
 _BRAVE_URL              = "https://api.search.brave.com/res/v1/web/search"
 _BRAVE_TIMEOUT_S        = 10
-_SEARCH_DEFAULT_RESULTS = 5
+_SEARCH_DEFAULT_RESULTS = 10
 _SEARCH_MAX_RESULTS     = 10
 _SEARCH_SNIPPET_CHARS   = 240
 _SEARCH_TOTAL_CHARS     = 4000

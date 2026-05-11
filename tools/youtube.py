@@ -19,8 +19,8 @@ from summarizer import summarize_gemma
 
 log = logging.getLogger(__name__)
 
-_RAW_CHAR_LIMIT        = 8_000
-_SUMMARIZER_CHAR_LIMIT = 128_000
+_RAW_CHAR_LIMIT        = 16_000
+_SUMMARIZER_CHAR_LIMIT = 256_000
 
 # Matches the 11-char video ID in any common YouTube URL form.
 _YT_URL_RE = re.compile(
