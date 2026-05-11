@@ -8,6 +8,7 @@ remain within WORKSPACE (`tools.shell.WORKSPACE`).
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -69,6 +70,57 @@ def workspace_read(
     if not selected:
         return f"(no lines in range {start_line}-{end_line or total} of {total}-line file)"
     return "".join(f"{s + i + 1}\t{line}" for i, line in enumerate(selected))
+
+
+def workspace_grep(
+    path: str,
+    pattern: str,
+    context_lines: int = 3,
+) -> str:
+    """Search for a pattern in a workspace file; return matching lines with context.
+
+    Returns each match as a block of line-numbered lines (context_lines before
+    and after), separated by --. Use the returned line numbers to call
+    workspace_read with a tight start_line/end_line before editing.
+    """
+    rel = path.strip().replace("\\", "/")
+    target = _workspace_target(rel)
+    if not target.is_file():
+        cwd = get_shell_cwd()
+        raise FileNotFoundError(
+            f"not a file: {rel!r} (resolved to {target} from cwd={cwd})"
+        )
+    raw = target.read_text(encoding="utf-8", errors="replace")
+    lines = raw.splitlines()
+    total = len(lines)
+
+    try:
+        rx = re.compile(pattern)
+    except re.error:
+        rx = re.compile(re.escape(pattern))
+
+    matched_indices: list[int] = [i for i, ln in enumerate(lines) if rx.search(ln)]
+    if not matched_indices:
+        return f"no matches for {pattern!r} in {rel!r}"
+
+    # Merge overlapping context windows into contiguous blocks.
+    blocks: list[tuple[int, int]] = []
+    start = max(0, matched_indices[0] - context_lines)
+    end = min(total - 1, matched_indices[0] + context_lines)
+    for idx in matched_indices[1:]:
+        s2 = max(0, idx - context_lines)
+        e2 = min(total - 1, idx + context_lines)
+        if s2 <= end + 1:
+            end = max(end, e2)
+        else:
+            blocks.append((start, end))
+            start, end = s2, e2
+    blocks.append((start, end))
+
+    parts = []
+    for s, e in blocks:
+        parts.append("".join(f"{s + i + 1}\t{lines[s + i]}\n" for i in range(e - s + 1)))
+    return ("--\n").join(parts) + f"\n({len(matched_indices)} match(es) in {total}-line file)"
 
 
 def workspace_search_replace(
@@ -141,6 +193,28 @@ SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "workspace_grep",
+            "description": (
+                "Search a workspace file for a pattern and return matching lines with context. "
+                "Use this to locate the exact line numbers and surrounding text before calling "
+                "workspace_read (with start_line/end_line) or workspace_search_replace. "
+                "pattern is a Python regex; literal strings are also accepted. "
+                "Returns line-numbered context blocks — use the line numbers to narrow workspace_read."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path relative to shell's current working directory"},
+                    "pattern": {"type": "string", "description": "Python regex (or plain string) to search for"},
+                    "context_lines": {"type": "integer", "description": "Lines of context before/after each match (default 3)"},
+                },
+                "required": ["path", "pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "workspace_search_replace",
             "description": (
                 "Edit an existing workspace file by exact string replacement. "
@@ -172,5 +246,6 @@ SCHEMAS = [
 
 FUNCTIONS = {
     "workspace_read": workspace_read,
+    "workspace_grep": workspace_grep,
     "workspace_search_replace": workspace_search_replace,
 }
