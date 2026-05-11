@@ -17,12 +17,10 @@ from tools.shell import WORKSPACE, get_shell_cwd
 def _workspace_target(rel: str) -> Path:
     if not rel:
         raise ValueError("invalid path")
-    if rel.startswith("/"):
-        raise ValueError("absolute paths are not allowed")
-    # Resolve relative to the shell's current working directory so the agent
-    # can pass bare filenames (e.g. "main.py") after cd-ing into a subdir.
+    # Absolute paths are fine as long as they resolve inside the workspace.
+    # The relative_to() check below is the real security boundary.
     cwd = get_shell_cwd()
-    target = (cwd / rel).resolve()
+    target = (Path(rel) if rel.startswith("/") else (cwd / rel)).resolve()
     try:
         target.relative_to(WORKSPACE.resolve())
     except ValueError as e:
@@ -151,7 +149,8 @@ SCHEMAS = [
                 "On failure: call workspace_read again, find the exact mismatch, and retry. "
                 "Never fall back to shell_exec+heredoc for existing files, even after repeated failures. "
                 "shell_exec+heredoc is only for creating a file that does not yet exist. "
-                "Paths are relative to the shell's current working directory. "
+                "Paths are relative to the shell's current working directory; "
+                "absolute paths within the workspace are also accepted. "
                 "Prefer multiple targeted calls over bulk whole-file rewrites."
             ),
             "parameters": {

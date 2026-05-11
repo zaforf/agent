@@ -100,9 +100,16 @@ def test_error_message_includes_resolved_path(ws, monkeypatch):
 
 # ── Safety ────────────────────────────────────────────────────────────────────
 
-def test_absolute_path_rejected(ws):
-    with pytest.raises(ValueError, match="absolute paths are not allowed"):
+def test_absolute_path_outside_workspace_rejected(ws):
+    # /etc/passwd escapes the workspace — caught by relative_to() check.
+    with pytest.raises((ValueError, FileNotFoundError)):
         wp.workspace_search_replace("/etc/passwd", "root", "evil")
+
+
+def test_absolute_path_inside_workspace_allowed(ws):
+    (ws / "a.txt").write_text("old\n", encoding="utf-8")
+    wp.workspace_search_replace(str(ws / "a.txt"), "old\n", "new\n")
+    assert (ws / "a.txt").read_text() == "new\n"
 
 
 def test_empty_old_string_rejected(ws):
