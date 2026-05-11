@@ -415,11 +415,12 @@ def _memories_user_block(memories: list[str]) -> dict:
     Injected at the end of context (highest attention position) rather than
     after the system prompt (lowest marginal attention when history is long).
     """
-    body = "\n".join(f"• {m}" for m in memories)
+    body = "\n".join(f"- {m}" for m in memories)
     return {
         "role": "user",
         "content": (
-            "[Relevant memories for this turn — apply where appropriate]\n" + body
+            "[Memory — these may help; call recall for more; call remember for new facts]\n"
+            + body
         ),
     }
 

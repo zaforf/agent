@@ -1390,7 +1390,8 @@
 
           } else if (event.type === 'memory_prefetch') {
             console.debug('[agent] memory_prefetch:', event.count, event.memories);
-            addStep('tool-result', '⟳ memory', `${event.count} ambient memor${event.count === 1 ? 'y' : 'ies'} loaded`);
+            const memLines = (event.memories || []).map(m => `• ${m}`).join('\n');
+            addStep('tool-result', 'memory', memLines || `${event.count} memories`);
 
           } else if (event.type === 'tool_call') {
             console.debug('[agent] tool_call:', event.name, event.args);

@@ -12,14 +12,15 @@ import agent
 def test_memories_block_format():
     block = agent._memories_user_block(["Zafir prefers concise answers", "Uses LaTeX for math"])
     assert block["role"] == "user"
-    assert "• Zafir prefers concise answers" in block["content"]
-    assert "• Uses LaTeX for math" in block["content"]
-    assert "memories" in block["content"].lower()
+    assert "Zafir prefers concise answers" in block["content"]
+    assert "Uses LaTeX for math" in block["content"]
+    assert "recall" in block["content"].lower()
+    assert "remember" in block["content"].lower()
 
 
 def test_memories_block_single():
     block = agent._memories_user_block(["one fact"])
-    assert block["content"].count("•") == 1
+    assert "one fact" in block["content"]
 
 
 # ── _prefetch_memories ────────────────────────────────────────────────────────
