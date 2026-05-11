@@ -97,3 +97,8 @@ GEMINI_EMBEDDING_DIMS = int(os.environ.get("GEMINI_EMBEDDING_DIMS", "768"))
 # Mem0 LLM (fact extraction on remember, etc.) — native Gemini API via mem0, not Groq.
 # Default: Gemma 4 26B MoE (lighter than 31B; avoids Groq free-tier TPM limits on large prompts).
 MEM0_LLM_MODEL = os.environ.get("MEM0_LLM_MODEL", "gemma-4-26b-a4b-it")
+
+# Ambient memory prefetch: run a recall automatically before the first LLM call each turn.
+# Threshold is cosine similarity (0–1); results below it are suppressed as noise.
+MEMORY_PREFETCH_TOP_K    = int(os.environ.get("MEMORY_PREFETCH_TOP_K", "5"))
+MEMORY_PREFETCH_THRESHOLD = float(os.environ.get("MEMORY_PREFETCH_THRESHOLD", "0.3"))

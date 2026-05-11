@@ -1388,6 +1388,11 @@
           } else if (event.type === 'thinking_done') {
             _thinkLastUpdate = 0;  // reset throttle for next block; label stays until text_chunk
 
+          } else if (event.type === 'memory_prefetch') {
+            console.debug('[agent] memory_prefetch:', event.count, event.memories);
+            const memLines = (event.memories || []).map(m => `• ${m}`).join('\n');
+            addStep('tool-result', 'memory', memLines || `${event.count} memories`);
+
           } else if (event.type === 'tool_call') {
             console.debug('[agent] tool_call:', event.name, event.args);
             _flushQueue();
