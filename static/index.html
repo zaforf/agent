@@ -864,9 +864,10 @@
   }
 
   function renderMarkdown(text) {
-    return _restoreMathNewlinesFromMarkedHtml(
+    const html = _restoreMathNewlinesFromMarkedHtml(
       marked.parse(escapeBracketMathDelimitersForMarked(text))
     );
+    return html.replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" ');
   }
 
   /**

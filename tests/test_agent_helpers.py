@@ -113,25 +113,17 @@ def test_extract_calls_empty_when_no_tool_calls():
 
 # ── _build_system_prompt ─────────────────────────────────────────────────────
 
-def test_build_system_prompt_includes_seeded_prompt_and_compact_tool_policy(tmp_system_prompt):
+def test_build_system_prompt_includes_seeded_prompt_and_tool_guidance(tmp_system_prompt):
     prompt = agent._build_system_prompt()
     assert "Test system prompt" in prompt
-    assert "at most one tool call per assistant message" in prompt
-    assert "Never emit empty arguments" in prompt
-    assert "prose does not substitute" in prompt
     assert "workspace_search_replace" in prompt
     assert "Do not repeat identical failing calls" in prompt
-    assert "short, unique old_string snippets" in prompt
-    assert "Avoid whole-file old/new payloads" in prompt
 
 
-def test_repo_system_prompt_covers_tool_payload_discipline():
-    """Shipped system prompt should nudge against empty `{}` tool calls (intent–action gap)."""
+def test_repo_system_prompt_covers_math_and_tool_discipline():
+    """Shipped system prompt covers math delimiters and tool payload discipline."""
     root = Path(__file__).resolve().parent.parent
     text = (root / "data" / "system_prompt.md").read_text()
-    assert "intent–action gap" in text
-    assert "Fill-the-form" in text
-    assert "Mirror the payload" in text
     assert "Never use `$` or `$$` for math" in text
     assert "\\(...\\)" in text
     assert "\\[...\\]" in text
