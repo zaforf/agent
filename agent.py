@@ -375,6 +375,51 @@ _TELEGRAM_FORMAT_APPEND = (
 )
 
 
+async def _prefetch_memories(user_text: str, history: list[dict]) -> list[str]:
+    """Query the memory store before the first LLM call and return relevant strings.
+
+    Query = user message + last assistant snippet (for cross-domain coverage,
+    e.g. "algorithms homework" paired with a prior math/LaTeX turn pulls up
+    formatting preferences).  Returns [] on any failure so the turn is never
+    blocked.
+    """
+    from tools.memory import recall_prefetch
+
+    query_parts = [user_text.strip()]
+    for msg in reversed(history):
+        if msg.get("role") == "assistant":
+            txt = msg.get("content") or ""
+            if isinstance(txt, list):
+                txt = " ".join(b.get("text", "") for b in txt if isinstance(b, dict))
+            snippet = txt.strip()[:200]
+            if snippet:
+                query_parts.append(snippet)
+            break
+    query = "\n".join(query_parts)
+
+    try:
+        return await asyncio.to_thread(
+            recall_prefetch,
+            query,
+            top_k=config.MEMORY_PREFETCH_TOP_K,
+            threshold=config.MEMORY_PREFETCH_THRESHOLD,
+        )
+    except Exception as exc:
+        log.warning("memory prefetch failed (skipping): %s", exc)
+        return []
+
+
+def _memories_system_block(memories: list[str]) -> dict:
+    """Format prefetched memories as a second system message."""
+    body = "\n".join(f"• {m}" for m in memories)
+    return {
+        "role": "system",
+        "content": (
+            "[Ambient memory — retrieved this turn, use or ignore as relevant]\n" + body
+        ),
+    }
+
+
 def _build_system_prompt(*, output_channel: str = "default") -> str:
     # Inject today's date so the model has a concrete present to reason
     # against its January 2025 training cutoff. Without this anchor,
@@ -535,12 +580,15 @@ async def run(
     history = _sanitize_history(history)
     _user_text = _user_content_as_text(user_content)
     system_prompt = _build_system_prompt(output_channel=output_channel)
+    prefetched = await _prefetch_memories(_user_text, history)
+    extra_system = [_memories_system_block(prefetched)] if prefetched else []
     messages = [
         {"role": "system", "content": system_prompt},
+        *extra_system,
         *history,
         {"role": "user", "content": user_content},
     ]
-    turn_start = 1 + len(history)   # index of the user message; everything from here is new
+    turn_start = 1 + len(extra_system) + len(history)
 
     provider_used = _clients[0]["name"] if _clients else "none"
     # Pending background summarization tasks: (message_dict, asyncio.Task)
@@ -638,12 +686,17 @@ async def run_stream(
     history = _sanitize_history(history)
     _user_text = _user_content_as_text(user_content)
     system_prompt = _build_system_prompt(output_channel=output_channel)
+    prefetched = await _prefetch_memories(_user_text, history)
+    extra_system = [_memories_system_block(prefetched)] if prefetched else []
+    if prefetched:
+        yield {"type": "memory_prefetch", "count": len(prefetched), "memories": prefetched}
     messages = [
         {"role": "system", "content": system_prompt},
+        *extra_system,
         *history,
         {"role": "user", "content": user_content},
     ]
-    turn_start = 1 + len(history)   # index of the user message; everything from here is new
+    turn_start = 1 + len(extra_system) + len(history)
 
     provider_used = _clients[0]["name"] if _clients else "none"
     # Pending background summarization tasks: (message_dict, asyncio.Task)

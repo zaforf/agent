@@ -85,6 +85,18 @@ def delete_memory(memory_id: str) -> str:
     return f"Deleted memory {memory_id}"
 
 
+def recall_prefetch(query: str, *, top_k: int, threshold: float) -> list[str]:
+    """Return memory strings scoring above `threshold` for `query`.
+
+    Not a tool — called by the agent loop before the first LLM call each turn
+    to inject ambient context. Returns an empty list when nothing qualifies or
+    when the memory store is unavailable.
+    """
+    results = _get_memory().search(query, filters={"user_id": USER_ID}, top_k=top_k)
+    entries = results.get("results", [])
+    return [r["memory"] for r in entries if r.get("score", 0) >= threshold]
+
+
 # Exposed for API endpoints (not a tool)
 def get_all() -> list[dict]:
     results = _get_memory().get_all(filters={"user_id": USER_ID})
