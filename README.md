@@ -7,6 +7,7 @@ Personal AI assistant system featuring a multi-turn agentic loop, long-term vect
 - **Agent Loop**: Multi-turn agent loop (up to 30 tool iterations per turn) with native tool use.
 - **Provider Cascade**: Tiered fallback chain (Gemma 4 $\rightarrow$ Cerebras $\rightarrow$ Groq) with exponential backoff.
 - **Context Management**: 
+    - **Ambient Prefetch**: Automatic retrieval of relevant long-term memories before the first LLM call of every turn.
     - **In-turn**: Tool results are kept raw for all calls within a single turn.
     - **Post-turn**: Large tool outputs (>8k chars) are asynchronously summarized via Gemma 26B to optimize history context without blocking the response.
 - **Transport**: 
@@ -20,7 +21,13 @@ Personal AI assistant system featuring a multi-turn agentic loop, long-term vect
 * `fetch_url`: Targeted extraction using a long-context summarizer.
 * `youtube_transcript`: Transcript analysis via Supadata.
 * `shell_exec`: Persistent bash session with CWD tracking.
-* `workspace_*`: Surgical search-and-replace file editing.
+* **Workspace Workflow**: `workspace_grep` (locate) $\rightarrow$ `workspace_read` (read) $\rightarrow$ `workspace_search_replace` (edit).
+
+## UI Features
+
+- **Highlight-to-Explain**: Shift+select text in the chat to trigger a targeted explanation turn.
+- **Token Counter**: Live monitoring of context window usage.
+- **Math Rendering**: KaTeX support for inline and display equations.
 
 ## Setup
 
