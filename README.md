@@ -25,9 +25,9 @@ Personal AI assistant system featuring a multi-turn agentic loop, long-term vect
 
 ## UI Features
 
-- **Highlight-to-Explain**: Shift+select text in the chat to trigger a targeted explanation turn.
+- **Highlight-to-Explain**: Shift+select text to trigger a targeted explanation tooltip.
 - **Token Counter**: Live monitoring of context window usage.
-- **Math Rendering**: KaTeX support for inline and display equations.
+- **Rendering**: Full Markdown and KaTeX support for inline and display equations.
 
 ## Setup
 
