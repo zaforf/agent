@@ -685,12 +685,6 @@
   marked.setOptions({ breaks: true, gfm: true });
   marked.use({
     renderer: {
-      link(token) {
-        const href = token.href || '';
-        const title = token.title ? ` title="${token.title}"` : '';
-        const text = this.parser.parseInline(token.tokens);
-        return `<a href="${href}" target="_blank" rel="noopener noreferrer"${title}>${text}</a>`;
-      },
       code(token) {
         // token is an object in marked v12; guard against any calling conventions
         const text = String((token && token.text != null) ? token.text : (token || ''));
@@ -838,9 +832,10 @@
   }
 
   function renderMarkdown(text) {
-    return _restoreMathNewlinesFromMarkedHtml(
+    const html = _restoreMathNewlinesFromMarkedHtml(
       marked.parse(escapeBracketMathDelimitersForMarked(text))
     );
+    return html.replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" ');
   }
 
   /**
