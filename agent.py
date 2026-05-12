@@ -41,6 +41,8 @@ class DebugLogger:
         if self._log_file is None and config.DEBUG_LOGGING:
             log_dir = Path("logs")
             log_dir.mkdir(exist_ok=True)
+            # Format: logs/debug_YYYYMMDD_HHMMSS.log
+            # We use a timestamp that identifies the start of the session.
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             self._log_file = open(log_dir / f"debug_{ts}.log", "a", encoding="utf-8")
 
