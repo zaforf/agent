@@ -472,8 +472,11 @@ async def get_token_count(session_id: str):
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:countTokens"
             body = {
-                "contents": _history_to_gemini_contents(history),
-                "system_instruction": {"parts": [{"text": system_prompt}]},
+                "generateContentRequest": {
+                    "model": f"models/{model}",
+                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    "contents": _history_to_gemini_contents(history),
+                }
             }
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(url, params={"key": api_key}, json=body)

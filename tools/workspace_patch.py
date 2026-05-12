@@ -69,7 +69,7 @@ def workspace_read(
     selected = lines[s:e]
     if not selected:
         return f"(no lines in range {start_line}-{end_line or total} of {total}-line file)"
-    return "".join(f"{s + i + 1}\t{line}" for i, line in enumerate(selected))
+    return "".join(f"{s + i + 1:>4} | {line}" for i, line in enumerate(selected))
 
 
 def workspace_grep(
@@ -119,7 +119,7 @@ def workspace_grep(
 
     parts = []
     for s, e in blocks:
-        parts.append("".join(f"{s + i + 1}\t{lines[s + i]}\n" for i in range(e - s + 1)))
+        parts.append("".join(f"{s + i + 1:>4} | {lines[s + i]}\n" for i in range(e - s + 1)))
     return ("--\n").join(parts) + f"\n({len(matched_indices)} match(es) in {total}-line file)"
 
 

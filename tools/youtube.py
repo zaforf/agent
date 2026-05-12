@@ -1,8 +1,8 @@
-"""YouTube transcript tool — fetch plain-text transcript via Supadata API.
+"""YouTube transcript tool — fetch metadata and plain-text transcript via Supadata API.
 
-Default (with prompt): passes the full transcript to the Gemma summarizer so
-the model receives exactly what it asked for rather than raw text.
-Raw mode: returns up to _RAW_CHAR_LIMIT chars from offset, with the same
+Default (with prompt): passes the metadata and full transcript to the Gemma summarizer so
+the model receives grounded context and exactly what it asked for rather than raw text.
+Raw mode: returns metadata and up to _RAW_CHAR_LIMIT chars from offset, with the same
 pagination note pattern as fetch_url.
 
 Accepts a bare video ID (e.g. dQw4w9WgXcQ) or any YouTube URL; strips
@@ -51,12 +51,12 @@ def _to_url(video_id_or_url: str) -> str:
 def youtube_transcript(
     video_id: str, prompt: str = "", offset: int = 0, raw: bool = False
 ) -> str:
-    """Fetch the plain-text transcript of a YouTube video.
+    """Fetch the metadata and plain-text transcript of a YouTube video.
 
-    With a prompt (default): passes the full transcript to a summarizer that
+    With a prompt (default): passes metadata and the full transcript to a summarizer that
     extracts exactly what was asked. Preferred for focused extraction.
 
-    With raw=True or no prompt: returns up to _RAW_CHAR_LIMIT chars from
+    With raw=True or no prompt: returns metadata and up to _RAW_CHAR_LIMIT chars from
     offset. Use offset pagination when you need the raw text in chunks.
     """
     if not config.SUPADATA_API_KEY:
@@ -65,15 +65,36 @@ def youtube_transcript(
     url = _to_url(video_id)
     try:
         client = Supadata(api_key=config.SUPADATA_API_KEY)
+        
+        # Fetch metadata for grounding
+        meta_res = client.metadata(url=url)
+        meta = meta_res.content if isinstance(meta_res.content, dict) else {}
+        
+        # Fetch transcript
         result = client.transcript(url=url, text=True)
         text = result.content if isinstance(result.content, str) else ""
+        
+        # Construct metadata header
+        meta_header = ""
+        if meta:
+            # Extract author name from metadata author object if it exists
+            author = meta.get('author', {})
+            author_name = author.get('display_name') or author.get('username') or 'Unknown' if isinstance(author, dict) else 'Unknown'
+            
+            meta_header = (
+                f"TITLE: {meta.get('title', 'Unknown')}\n"
+                f"CHANNEL: {author_name}\n"
+                f"DESCRIPTION: {meta.get('description', 'No description available')}\n"
+                f"---"
+            )
     except SupadataError as e:
         return f"Error: {e.message}"
     except Exception as e:
-        return f"Error fetching transcript for {url}: {e}"
+        return f"Error fetching video data for {url}: {e}"
 
     if not text:
-        return "(no transcript available)"
+        # Still return metadata even if transcript is missing
+        return f"{meta_header}\n(no transcript available)" if meta_header else "(no transcript available)"
 
     if prompt and not raw:
         if len(text) > _SUMMARIZER_CHAR_LIMIT:
@@ -83,7 +104,8 @@ def youtube_transcript(
             )
         try:
             log.info("youtube-transcript-summarize  %.80s", prompt)
-            return summarize_gemma(_SUMMARIZER_SYSTEM, f"{prompt}\n\n---\n\n{text}")
+            # Include metadata in the summarization prompt for better grounding
+            return summarize_gemma(_SUMMARIZER_SYSTEM, f"{meta_header}\n\n{prompt}\n\n---\n\n{text}")
         except Exception as e:
             log.warning("youtube_transcript: summarizer failed (%s), falling back to raw", e)
 
@@ -96,7 +118,9 @@ def youtube_transcript(
             chunk[:_RAW_CHAR_LIMIT]
             + f"\n\n[… {remaining:,} more chars — call youtube_transcript with offset={next_offset} to continue]"
         )
-    return chunk
+    
+    # Prepend metadata to raw results
+    return f"{meta_header}\n\n{chunk}"
 
 
 SCHEMAS = [
@@ -105,7 +129,7 @@ SCHEMAS = [
         "function": {
             "name": "youtube_transcript",
             "description": (
-                "Fetch the plain-text transcript of a YouTube video. "
+                "Fetch metadata (title, channel, description) and the plain-text transcript of a YouTube video. "
                 "Always provide a prompt describing what to extract or summarize. "
                 "Accepts a bare video ID (e.g. dQw4w9WgXcQ) or any YouTube URL. "
                 "Use raw=true only when you need unprocessed transcript text "

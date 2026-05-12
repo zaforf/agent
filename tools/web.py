@@ -34,7 +34,7 @@ _FETCH_TIMEOUT_S       = 15
 _BRAVE_URL              = "https://api.search.brave.com/res/v1/web/search"
 _BRAVE_TIMEOUT_S        = 10
 _SEARCH_DEFAULT_RESULTS = 10
-_SEARCH_MAX_RESULTS     = 10
+_SEARCH_MAX_RESULTS     = 20
 _SEARCH_SNIPPET_CHARS   = 240
 _SEARCH_TOTAL_CHARS     = 4000
 
