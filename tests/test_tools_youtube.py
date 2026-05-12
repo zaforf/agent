@@ -140,6 +140,8 @@ def test_supadata_error_returns_string(monkeypatch):
 
     def _raise(api_key):
         class _Bad:
+            def metadata(self, **kw):
+                raise SupadataError(error="not-found", message="Video not found", details="")
             def transcript(self, **kw):
                 raise SupadataError(error="not-found", message="Video not found", details="")
         return _Bad()
