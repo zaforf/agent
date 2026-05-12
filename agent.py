@@ -2,7 +2,6 @@ import asyncio
 import datetime
 import json
 import logging
-import os
 import re
 from pathlib import Path
 from openai import AsyncOpenAI, RateLimitError, APIError, APIConnectionError
@@ -51,10 +50,6 @@ class DebugLogger:
             safe_content = str(content).replace("\x00", "")
             self._log_file.write(f"[{ts}] [{tag}] {safe_content}\n")
             self._log_file.flush()
-
-# Global logger instance
-debug_log = None
-
 
 # Closed reasoning blocks stripped from user-visible output (opening tag → matching close).
 _THINK_RE = re.compile(
@@ -625,16 +620,8 @@ async def run(
         {"role": "user", "content": user_content},
     ]
     
-    # Session-based debug logging
     session_log = DebugLogger()
     session_log.log("USER", _user_text)
-    
-    # We can still maintain a global reference if other parts of the code 
-    # (like helper functions) need it, but the actual logging happens 
-    # via the session instance.
-    global debug_log
-    debug_log = session_log
-    
     # turn_start excludes the memory block — it's ephemeral context, not persisted history.
     turn_start = 1 + len(history) + len(mem_block)
 
@@ -748,12 +735,8 @@ async def run_stream(
         *mem_block,
         {"role": "user", "content": user_content},
     ]
-    # Session-based debug logging
     session_log = DebugLogger()
     session_log.log("USER", _user_text)
-    
-    global debug_log
-    debug_log = session_log
     # turn_start excludes the memory block — it's ephemeral context, not persisted history.
     turn_start = 1 + len(history) + len(mem_block)
 
@@ -821,7 +804,7 @@ async def run_stream(
             raw_parts.append(tail)
 
         full_content    = "".join(raw_parts)
-        debug_log.log("THOUGHT", full_content)
+        session_log.log("THOUGHT", full_content)
         visible_content = "".join(visible_parts)
 
         if tool_calls_acc:
@@ -856,11 +839,11 @@ async def run_stream(
                 ))
 
                 log.info("tool-call  %s  %s", name, str(args)[:120])
-                debug_log.log("TOOL_CALL", f"{name}({json.dumps(args)})")
+                session_log.log("TOOL_CALL", f"{name}({json.dumps(args)})")
                 yield {"type": "tool_call", "name": name, "args": args}
                 result = await _run_tool_async(name, args)
                 log.debug("stream: tool_result %s → %.120s", name, result)
-                debug_log.log("TOOL_RESULT", f"{name} -> {result}")
+                session_log.log("TOOL_RESULT", f"{name} -> {result}")
                 yield {"type": "tool_result", "name": name, "result": result}
 
                 nuke_summary = _extract_nuke_summary(result)
@@ -911,11 +894,11 @@ async def run_stream(
                     yield {"type": "error", "detail": "Empty response after repair."}
                     return
                 messages.append({"role": "assistant", "content": rtxt})
-                debug_log.log("OUTPUT", rtxt)
+                session_log.log("OUTPUT", rtxt)
                 yield {"type": "text_chunk", "text": rtxt}
             else:
                 messages.append({"role": "assistant", "content": visible_content})
-                debug_log.log("OUTPUT", visible_content)
+                session_log.log("OUTPUT", visible_content)
             await _apply_finished_summaries(pending_summaries)
             yield {
                 "type": "done",
