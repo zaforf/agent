@@ -31,8 +31,8 @@ MAX_TOOL_ITERATIONS = 30
 class DebugLogger:
     """Saves the agent's internal monologue and tool exchanges to a local text file.
     
-    Files are named based on the time of the first message in a session:
-    `logs/debug_YYYYMMDD_HHMMSS.log`
+    Each instance corresponds to a single conversation run.
+    Files are named: `logs/debug_YYYYMMDD_HHMMSS.log`
     """
     def __init__(self):
         self._log_file = None
@@ -41,8 +41,6 @@ class DebugLogger:
         if self._log_file is None and config.DEBUG_LOGGING:
             log_dir = Path("logs")
             log_dir.mkdir(exist_ok=True)
-            # Format: logs/debug_YYYYMMDD_HHMMSS.log
-            # We use a timestamp that identifies the start of the session.
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             self._log_file = open(log_dir / f"debug_{ts}.log", "a", encoding="utf-8")
 
@@ -50,18 +48,13 @@ class DebugLogger:
         self._ensure_file()
         if self._log_file:
             ts = datetime.datetime.now().strftime("%H:%M:%S")
-            # Clean content to avoid huge binary blobs or weird encoding in the text log
             safe_content = str(content).replace("\x00", "")
             self._log_file.write(f"[{ts}] [{tag}] {safe_content}\n")
             self._log_file.flush()
 
-    def close(self):
-        if self._log_file:
-            self._log_file.close()
-            self._log_file = None
-
 # Global logger instance
-debug_log = DebugLogger()
+debug_log = None
+
 
 # Closed reasoning blocks stripped from user-visible output (opening tag → matching close).
 _THINK_RE = re.compile(
@@ -631,7 +624,17 @@ async def run(
         *mem_block,
         {"role": "user", "content": user_content},
     ]
-    debug_log.log("USER", _user_text)
+    
+    # Session-based debug logging
+    session_log = DebugLogger()
+    session_log.log("USER", _user_text)
+    
+    # We can still maintain a global reference if other parts of the code 
+    # (like helper functions) need it, but the actual logging happens 
+    # via the session instance.
+    global debug_log
+    debug_log = session_log
+    
     # turn_start excludes the memory block — it's ephemeral context, not persisted history.
     turn_start = 1 + len(history) + len(mem_block)
 
@@ -641,7 +644,7 @@ async def run(
 
     for iteration in range(MAX_TOOL_ITERATIONS):
         response, provider = await _call(messages)
-        debug_log.log("THOUGHT", response.choices[0].message.content or "")
+        session_log.log("THOUGHT", response.choices[0].message.content or "")
 
         provider_used = provider
         msg     = response.choices[0].message
@@ -669,7 +672,7 @@ async def run(
                 final = _visible_after_think(content2)
             if not final:
                 final = "(No visible response from the model.)"
-            debug_log.log("OUTPUT", final)
+            session_log.log("OUTPUT", final)
             # Store stripped visible content in history, consistent with
             # the streaming path and DESIGN §6.3 (thinking blocks stripped).
             assistant_entry["content"] = final
@@ -683,10 +686,10 @@ async def run(
             name = call.get("name", "")
             args = call.get("args", {})
             log.info("tool-call  %s  %s", name, str(args)[:120])
-            debug_log.log("TOOL_CALL", f"{name}({json.dumps(args)})")
+            session_log.log("TOOL_CALL", f"{name}({json.dumps(args)})")
             result = await _run_tool_async(name, args)
             log.debug("run: tool_result %s → %.120s", name, result)
-            debug_log.log("TOOL_RESULT", f"{name} -> {result}")
+            session_log.log("TOOL_RESULT", f"{name} -> {result}")
 
             nuke_summary = _extract_nuke_summary(result)
             if nuke_summary is not None:
@@ -745,7 +748,12 @@ async def run_stream(
         *mem_block,
         {"role": "user", "content": user_content},
     ]
-    debug_log.log("USER", _user_text)
+    # Session-based debug logging
+    session_log = DebugLogger()
+    session_log.log("USER", _user_text)
+    
+    global debug_log
+    debug_log = session_log
     # turn_start excludes the memory block — it's ephemeral context, not persisted history.
     turn_start = 1 + len(history) + len(mem_block)
 
