@@ -68,7 +68,7 @@ class _FakeSupadataClient:
     def metadata(self, url):
         return _FakeMetadata()
 
-    def transcript(self, url, text=False):
+    def transcript(self, url, text=False, mode="auto"):
         return _FakeTranscript(self._content)
 
 

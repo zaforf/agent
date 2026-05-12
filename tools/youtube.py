@@ -13,7 +13,6 @@ import re
 
 from supadata import Supadata
 from supadata.errors import SupadataError
-from supadata.types import BatchJob
 
 import config
 from summarizer import summarize_gemma
@@ -78,10 +77,9 @@ def youtube_transcript(
             f"---"
         )
 
-        # Fetch transcript
-        result = client.transcript(url=url, text=True)
-        if isinstance(result, BatchJob):
-            return f"{meta_header}\n(transcript is being generated — try again in a few moments)"
+        # Fetch transcript — mode="native" returns immediately or raises SupadataError;
+        # avoids the async BatchJob path which has no polling endpoint.
+        result = client.transcript(url=url, text=True, mode="native")
         text = result.content if isinstance(result.content, str) else ""
     except SupadataError as e:
         return f"Error: {e.message}"
