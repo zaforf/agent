@@ -17,29 +17,24 @@ def test_to_url_bare_id():
 
 
 def test_to_url_watch_url():
-    assert yt._to_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ") == \
-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert yt._to_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ") ==         "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
 
 def test_to_url_watch_url_extra_params():
     # Extra query params before v=
-    assert yt._to_url("https://www.youtube.com/watch?list=PL&v=dQw4w9WgXcQ") == \
-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert yt._to_url("https://www.youtube.com/watch?list=PL&v=dQw4w9WgXcQ") ==         "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
 
 def test_to_url_short_url():
-    assert yt._to_url("https://youtu.be/dQw4w9WgXcQ") == \
-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert yt._to_url("https://youtu.be/dQw4w9WgXcQ") ==         "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
 
 def test_to_url_shorts_url():
-    assert yt._to_url("https://www.youtube.com/shorts/dQw4w9WgXcQ") == \
-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert yt._to_url("https://www.youtube.com/shorts/dQw4w9WgXcQ") ==         "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
 
 def test_to_url_embed_url():
-    assert yt._to_url("https://www.youtube.com/embed/dQw4w9WgXcQ") == \
-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert yt._to_url("https://www.youtube.com/embed/dQw4w9WgXcQ") ==         "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
 
 def test_to_url_unknown_passes_through():
@@ -55,9 +50,21 @@ class _FakeTranscript:
         self.content = content
 
 
+class _FakeMetadata:
+    def __init__(self):
+        self.content = {
+            "title": "Test Title",
+            "author": {"display_name": "Test Channel"},
+            "description": "Test Description",
+        }
+
+
 class _FakeSupadataClient:
     def __init__(self, content="hello world transcript"):
         self._content = content
+
+    def metadata(self, url):
+        return _FakeMetadata()
 
     def transcript(self, url, text=False):
         return _FakeTranscript(self._content)
@@ -77,20 +84,20 @@ def test_no_api_key_returns_stable_error(monkeypatch):
 def test_empty_transcript_returns_marker(monkeypatch):
     _patch(monkeypatch, content="")
     out = yt.youtube_transcript("dQw4w9WgXcQ", raw=True)
-    assert out == "(no transcript available)"
+    assert "(no transcript available)" in out
 
 
 def test_raw_mode_returns_text_directly(monkeypatch):
     _patch(monkeypatch, content="some transcript text")
     out = yt.youtube_transcript("dQw4w9WgXcQ", raw=True)
-    assert out == "some transcript text"
+    assert "some transcript text" in out
 
 
 def test_raw_mode_pagination_note(monkeypatch):
     big = "A" * (yt._RAW_CHAR_LIMIT * 3)
     _patch(monkeypatch, content=big)
     out = yt.youtube_transcript("dQw4w9WgXcQ", raw=True)
-    assert out.startswith("A" * 100)
+    assert "A" * 100 in out
     assert f"offset={yt._RAW_CHAR_LIMIT}" in out
     assert "call youtube_transcript with offset=" in out
 
