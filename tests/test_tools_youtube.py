@@ -50,13 +50,15 @@ class _FakeTranscript:
         self.content = content
 
 
+class _FakeAuthor:
+    display_name = "Test Channel"
+    username = "testchannel"
+
+
 class _FakeMetadata:
-    def __init__(self):
-        self.content = {
-            "title": "Test Title",
-            "author": {"display_name": "Test Channel"},
-            "description": "Test Description",
-        }
+    title = "Test Title"
+    description = "Test Description"
+    author = _FakeAuthor()
 
 
 class _FakeSupadataClient:

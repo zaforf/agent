@@ -68,25 +68,18 @@ def youtube_transcript(
         
         # Fetch metadata for grounding
         meta_res = client.metadata(url=url)
-        meta = meta_res.content if isinstance(meta_res.content, dict) else {}
-        
+        author = meta_res.author
+        author_name = (author.display_name or author.username or "Unknown") if author else "Unknown"
+        meta_header = (
+            f"TITLE: {meta_res.title or 'Unknown'}\n"
+            f"CHANNEL: {author_name}\n"
+            f"DESCRIPTION: {meta_res.description or 'No description available'}\n"
+            f"---"
+        )
+
         # Fetch transcript
         result = client.transcript(url=url, text=True)
         text = result.content if isinstance(result.content, str) else ""
-        
-        # Construct metadata header
-        meta_header = ""
-        if meta:
-            # Extract author name from metadata author object if it exists
-            author = meta.get('author', {})
-            author_name = author.get('display_name') or author.get('username') or 'Unknown' if isinstance(author, dict) else 'Unknown'
-            
-            meta_header = (
-                f"TITLE: {meta.get('title', 'Unknown')}\n"
-                f"CHANNEL: {author_name}\n"
-                f"DESCRIPTION: {meta.get('description', 'No description available')}\n"
-                f"---"
-            )
     except SupadataError as e:
         return f"Error: {e.message}"
     except Exception as e:
