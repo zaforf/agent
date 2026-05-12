@@ -52,6 +52,8 @@ else:
 # All Gemini calls go through the OpenAI-compat endpoint via AsyncOpenAI.
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
+DEBUG_LOGGING = os.environ.get("DEBUG_LOGGING", "false").lower() == "true"
+
 PROVIDERS: list[dict] = [
     {
         "name":     "gemini-gemma4-31b",
