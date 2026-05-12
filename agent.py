@@ -3,6 +3,7 @@ import datetime
 import json
 import logging
 import re
+from pathlib import Path
 from openai import AsyncOpenAI, RateLimitError, APIError, APIConnectionError
 import config
 from config import PROVIDERS
@@ -24,6 +25,31 @@ _clients: list[dict] = [
 ]
 
 MAX_TOOL_ITERATIONS = 30
+
+
+class DebugLogger:
+    """Saves the agent's internal monologue and tool exchanges to a local text file.
+    
+    Each instance corresponds to a single conversation run.
+    Files are named: `logs/debug_YYYYMMDD_HHMMSS.log`
+    """
+    def __init__(self):
+        self._log_file = None
+
+    def _ensure_file(self):
+        if self._log_file is None and config.DEBUG_LOGGING:
+            log_dir = Path("logs")
+            log_dir.mkdir(exist_ok=True)
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            self._log_file = open(log_dir / f"debug_{ts}.log", "a", encoding="utf-8")
+
+    def log(self, tag: str, content: str):
+        self._ensure_file()
+        if self._log_file:
+            ts = datetime.datetime.now().strftime("%H:%M:%S")
+            safe_content = str(content).replace("\x00", "")
+            self._log_file.write(f"[{ts}] [{tag}] {safe_content}\n")
+            self._log_file.flush()
 
 # Closed reasoning blocks stripped from user-visible output (opening tag → matching close).
 _THINK_RE = re.compile(
@@ -593,6 +619,9 @@ async def run(
         *mem_block,
         {"role": "user", "content": user_content},
     ]
+    
+    session_log = DebugLogger()
+    session_log.log("USER", _user_text)
     # turn_start excludes the memory block — it's ephemeral context, not persisted history.
     turn_start = 1 + len(history) + len(mem_block)
 
@@ -602,6 +631,7 @@ async def run(
 
     for iteration in range(MAX_TOOL_ITERATIONS):
         response, provider = await _call(messages)
+        session_log.log("THOUGHT", response.choices[0].message.content or "")
 
         provider_used = provider
         msg     = response.choices[0].message
@@ -629,6 +659,7 @@ async def run(
                 final = _visible_after_think(content2)
             if not final:
                 final = "(No visible response from the model.)"
+            session_log.log("OUTPUT", final)
             # Store stripped visible content in history, consistent with
             # the streaming path and DESIGN §6.3 (thinking blocks stripped).
             assistant_entry["content"] = final
@@ -642,8 +673,10 @@ async def run(
             name = call.get("name", "")
             args = call.get("args", {})
             log.info("tool-call  %s  %s", name, str(args)[:120])
+            session_log.log("TOOL_CALL", f"{name}({json.dumps(args)})")
             result = await _run_tool_async(name, args)
             log.debug("run: tool_result %s → %.120s", name, result)
+            session_log.log("TOOL_RESULT", f"{name} -> {result}")
 
             nuke_summary = _extract_nuke_summary(result)
             if nuke_summary is not None:
@@ -702,6 +735,8 @@ async def run_stream(
         *mem_block,
         {"role": "user", "content": user_content},
     ]
+    session_log = DebugLogger()
+    session_log.log("USER", _user_text)
     # turn_start excludes the memory block — it's ephemeral context, not persisted history.
     turn_start = 1 + len(history) + len(mem_block)
 
@@ -713,7 +748,8 @@ async def run_stream(
         stream, provider = await _call_stream(messages)
         provider_used    = provider
         log.info("turn[%d]  provider=%s", iteration, provider)
-
+        
+        # The raw stream contains the thoughts; we capture them for the debug log.
         raw_parts       = []   # raw stream content including thinking tags
         visible_parts   = []   # stripped visible content for history storage
         tool_calls_acc  = {}
@@ -768,6 +804,7 @@ async def run_stream(
             raw_parts.append(tail)
 
         full_content    = "".join(raw_parts)
+        session_log.log("THOUGHT", full_content)
         visible_content = "".join(visible_parts)
 
         if tool_calls_acc:
@@ -802,9 +839,11 @@ async def run_stream(
                 ))
 
                 log.info("tool-call  %s  %s", name, str(args)[:120])
+                session_log.log("TOOL_CALL", f"{name}({json.dumps(args)})")
                 yield {"type": "tool_call", "name": name, "args": args}
                 result = await _run_tool_async(name, args)
                 log.debug("stream: tool_result %s → %.120s", name, result)
+                session_log.log("TOOL_RESULT", f"{name} -> {result}")
                 yield {"type": "tool_result", "name": name, "result": result}
 
                 nuke_summary = _extract_nuke_summary(result)
@@ -855,9 +894,11 @@ async def run_stream(
                     yield {"type": "error", "detail": "Empty response after repair."}
                     return
                 messages.append({"role": "assistant", "content": rtxt})
+                session_log.log("OUTPUT", rtxt)
                 yield {"type": "text_chunk", "text": rtxt}
             else:
                 messages.append({"role": "assistant", "content": visible_content})
+                session_log.log("OUTPUT", visible_content)
             await _apply_finished_summaries(pending_summaries)
             yield {
                 "type": "done",
