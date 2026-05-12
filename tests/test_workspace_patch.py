@@ -132,18 +132,18 @@ def test_atomic_write_preserves_on_error(ws):
 def test_read_whole_file(ws):
     (ws / "r.txt").write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
     out = wp.workspace_read("r.txt")
-    assert "1\talpha\n" in out
-    assert "2\tbeta\n" in out
-    assert "3\tgamma\n" in out
+    assert "1 | alpha\n" in out
+    assert "2 | beta\n" in out
+    assert "3 | gamma\n" in out
 
 
 def test_read_line_range(ws):
     (ws / "r.txt").write_text("a\nb\nc\nd\n", encoding="utf-8")
     out = wp.workspace_read("r.txt", start_line=2, end_line=3)
-    assert "2\tb\n" in out
-    assert "3\tc\n" in out
-    assert "1\ta" not in out
-    assert "4\td" not in out
+    assert "2 | b\n" in out
+    assert "3 | c\n" in out
+    assert "1 | a" not in out
+    assert "4 | d" not in out
 
 
 def test_read_missing_file_raises(ws):
@@ -166,15 +166,15 @@ def test_grep_finds_match(ws):
     (ws / "g.py").write_text("def foo():\n    return 1\n\ndef bar():\n    return 2\n", encoding="utf-8")
     out = wp.workspace_grep("g.py", "def foo")
     assert "def foo" in out
-    assert "1\t" in out  # line 1
+    assert "1 | " in out  # line 1
 
 
 def test_grep_returns_line_numbers(ws):
     (ws / "g.py").write_text("a\nb\nc\nd\ne\n", encoding="utf-8")
     out = wp.workspace_grep("g.py", "c", context_lines=1)
-    assert "2\tb" in out   # context before
-    assert "3\tc" in out   # match
-    assert "4\td" in out   # context after
+    assert "2 | b" in out   # context before
+    assert "3 | c" in out   # match
+    assert "4 | d" in out   # context after
 
 
 def test_grep_no_match(ws):
