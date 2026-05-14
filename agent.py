@@ -209,6 +209,64 @@ _BLOCKING_SYNC_TOOLS = frozenset({
     "workspace_search_replace",
 })
 
+# Tools that never mutate workspace files, shell session, or destructive memory
+# state — safe to execute concurrently within one assistant tool-call batch when
+# the provider emits multiple tool_calls at once.
+_PARALLEL_SAFE_TOOLS: frozenset[str] = frozenset({
+    "workspace_read",
+    "workspace_grep",
+    "web_search",
+    "fetch_url",
+    "youtube_transcript",
+    "recall",
+    "list_memories",
+})
+
+
+def _tool_batch_parallel_eligible(names: list[str]) -> bool:
+    """True when every tool in the batch may run concurrently on the server."""
+    if len(names) < 2:
+        return False
+    return all(n in _PARALLEL_SAFE_TOOLS for n in names)
+
+
+def _tool_specs_from_message(msg) -> list[tuple[str, str, dict]]:
+    """``(tool_call_id, name, args)`` in assistant ``tool_calls`` order."""
+    specs: list[tuple[str, str, dict]] = []
+    for tc in getattr(msg, "tool_calls", None) or []:
+        try:
+            args = json.loads(tc.function.arguments or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        specs.append((tc.id, tc.function.name, args))
+    return specs
+
+
+async def _run_tool_specs_to_results(
+    specs: list[tuple[str, str, dict]],
+) -> list[tuple[str, str, dict, str]]:
+    """Run tools in model order; parallelize read-only batches when enabled.
+
+    Each spec is ``(tool_call_id, tool_name, args_dict)``. Returns rows
+    ``(tool_call_id, tool_name, args_dict, result_str)`` in the same order.
+    """
+    if not specs:
+        return []
+    names = [s[1] for s in specs]
+    if config.AGENT_PARALLEL_TOOL_CALLS and _tool_batch_parallel_eligible(names):
+        results = await asyncio.gather(
+            *[_run_tool_async(name, args) for _, name, args in specs]
+        )
+        return [
+            (specs[i][0], specs[i][1], specs[i][2], results[i])
+            for i in range(len(specs))
+        ]
+    out: list[tuple[str, str, dict, str]] = []
+    for tc_id, name, args in specs:
+        res = await _run_tool_async(name, args)
+        out.append((tc_id, name, args, res))
+    return out
+
 
 def _merge_stream_fragment(current: str, fragment: str) -> str:
     """Merge streamed name/arguments fragments without accidental duplication.
@@ -330,8 +388,10 @@ async def _call(messages: list[dict], use_tools: bool = True) -> tuple:
     for entry in _clients:
         kwargs = dict(model=entry["model"], messages=messages, max_tokens=8192)
         if use_tools:
-            kwargs["tools"]       = TOOL_SCHEMAS
+            kwargs["tools"] = TOOL_SCHEMAS
             kwargs["tool_choice"] = "auto"
+            if config.AGENT_PARALLEL_TOOL_CALLS:
+                kwargs["parallel_tool_calls"] = True
 
         for attempt in range(3):
             try:
@@ -369,6 +429,9 @@ async def _call_stream(messages: list[dict]) -> tuple:
             tools       = TOOL_SCHEMAS,
             tool_choice = "auto",
         )
+        if config.AGENT_PARALLEL_TOOL_CALLS:
+            kwargs["parallel_tool_calls"] = True
+
         for attempt in range(3):
             try:
                 stream = await entry["client"].chat.completions.create(**kwargs)
@@ -396,7 +459,10 @@ def _tool_docs() -> str:
     return (
         "## Tool usage\n"
         "Use native API function/tool_calls only (no XML or fenced tool syntax).\n"
-        "Emit at most one tool call per assistant message; wait for result before the next tool call.\n"
+        "You may emit multiple tool_calls in one assistant message only when every call is "
+        "read-only discovery (e.g. several workspace_read / workspace_grep / web_search / fetch_url / "
+        "youtube_transcript / recall / list_memories together). For writes, shell session, or "
+        "memory mutations, emit one tool call per message and wait for its result before the next.\n"
         "Never emit empty arguments: every required field must be present in the tool JSON; prose does not substitute for arguments. After missing-argument errors, fix fields—do not retry `{}` or the same empty pattern.\n"
         "For code edits, use workspace_search_replace as primary. Keep replacements narrow and surgical: use short, unique old_string snippets around only the target lines. Avoid whole-file old/new payloads unless the user explicitly asks for a full rewrite. It is okay to use multiple sequential calls when each call is thoughtful and based on fresh file state. Do not repeat identical failing calls; after a failure, change snippet or strategy.\n"
     )
@@ -658,8 +724,7 @@ async def run(
             ]
         messages.append(assistant_entry)
 
-        calls = _extract_calls(msg)
-        if not calls:
+        if not getattr(msg, "tool_calls", None):
             final = _visible_after_think(content)
             if not final and content.strip():
                 repair_messages = messages + [{"role": "user", "content": _REPAIR_USER}]
@@ -679,14 +744,12 @@ async def run(
             await _apply_finished_summaries(pending_summaries)
             return final, provider_used, messages[turn_start:], pending_summaries
 
-        result_blocks = []
-        n_tc = len(msg.tool_calls)
-        for i, call in enumerate(calls):
-            name = call.get("name", "")
-            args = call.get("args", {})
+        specs = _tool_specs_from_message(msg)
+        rows = await _run_tool_specs_to_results(specs)
+        result_blocks: list[dict] = []
+        for tc_id, name, args, result in rows:
             log.info("tool-call  %s  %s", name, str(args)[:120])
             session_log.log("TOOL_CALL", f"{name}({json.dumps(args)})")
-            result = await _run_tool_async(name, args)
             log.debug("run: tool_result %s → %.120s", name, result)
             session_log.log("TOOL_RESULT", f"{name} -> {result}")
 
@@ -695,13 +758,11 @@ async def run(
                 await _apply_finished_summaries(pending_summaries)
                 return nuke_summary, provider_used, [{"role": "assistant", "content": nuke_summary, "_nuke": True}], pending_summaries
 
-            if i < n_tc:
-                tc_id = msg.tool_calls[i].id
-                msg_dict = {"role": "tool", "name": name, "tool_call_id": tc_id, "content": result}
-                result_blocks.append(msg_dict)
-                if len(result) > _HISTORY_SUMMARIZE_THRESHOLD:
-                    task = asyncio.create_task(_summarize_for_history(name, args, _user_text, result))
-                    pending_summaries.append((msg_dict, task))
+            msg_dict = {"role": "tool", "name": name, "tool_call_id": tc_id, "content": result}
+            result_blocks.append(msg_dict)
+            if len(result) > _HISTORY_SUMMARIZE_THRESHOLD:
+                task = asyncio.create_task(_summarize_for_history(name, args, _user_text, result))
+                pending_summaries.append((msg_dict, task))
 
         messages.extend(result_blocks)
 
@@ -842,19 +903,23 @@ async def run_stream(
                 "tool_calls": native_tc_list,
             })
 
-            result_messages = []
+            specs: list[tuple[str, str, dict]] = []
             for idx in sorted(tool_calls_acc.keys()):
-                tc   = tool_calls_acc[idx]
-                name = tc["name"]
-                args = json.loads(next(
+                tc = tool_calls_acc[idx]
+                args_obj = json.loads(next(
                     ntc["function"]["arguments"]
                     for ntc in native_tc_list if ntc["id"] == tc["id"]
                 ))
+                specs.append((tc["id"], tc["name"], args_obj))
 
+            for tc_id, name, args in specs:
                 log.info("tool-call  %s  %s", name, str(args)[:120])
                 session_log.log("TOOL_CALL", f"{name}({json.dumps(args)})")
                 yield {"type": "tool_call", "name": name, "args": args}
-                result = await _run_tool_async(name, args)
+
+            rows = await _run_tool_specs_to_results(specs)
+            result_messages = []
+            for tc_id, name, args, result in rows:
                 log.debug("stream: tool_result %s → %.120s", name, result)
                 session_log.log("TOOL_RESULT", f"{name} -> {result}")
                 yield {"type": "tool_result", "name": name, "result": result}
@@ -874,7 +939,7 @@ async def run_stream(
                 msg_dict = {
                     "role":         "tool",
                     "name":         name,
-                    "tool_call_id": tc["id"],
+                    "tool_call_id": tc_id,
                     "content":      result,
                 }
                 result_messages.append(msg_dict)
