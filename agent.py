@@ -28,20 +28,20 @@ MAX_TOOL_ITERATIONS = 30
 
 
 class DebugLogger:
-    """Saves the agent's internal monologue and tool exchanges to a local text file.
-    
-    Each instance corresponds to a single conversation run.
-    Files are named: `logs/debug_YYYYMMDD_HHMMSS.log`
+    """Appends the agent's internal monologue and tool exchanges to a per-session log file.
+
+    Files are named: `logs/debug_{session_id}.log`
+    One file per session; all turns in a conversation append to the same file.
     """
-    def __init__(self):
+    def __init__(self, session_id: str):
+        self._session_id = session_id
         self._log_file = None
 
     def _ensure_file(self):
         if self._log_file is None and config.DEBUG_LOGGING:
             log_dir = Path("logs")
             log_dir.mkdir(exist_ok=True)
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            self._log_file = open(log_dir / f"debug_{ts}.log", "a", encoding="utf-8")
+            self._log_file = open(log_dir / f"debug_{self._session_id}.log", "a", encoding="utf-8")
 
     def log(self, tag: str, content: str):
         self._ensure_file()
@@ -50,6 +50,17 @@ class DebugLogger:
             safe_content = str(content).replace("\x00", "")
             self._log_file.write(f"[{ts}] [{tag}] {safe_content}\n")
             self._log_file.flush()
+
+
+# One logger per session; avoids opening a new file on every run() call.
+_session_loggers: dict[str, DebugLogger] = {}
+
+
+def _get_session_logger(session_id: str) -> DebugLogger:
+    if session_id not in _session_loggers:
+        _session_loggers[session_id] = DebugLogger(session_id)
+    return _session_loggers[session_id]
+
 
 # Closed reasoning blocks stripped from user-visible output (opening tag → matching close).
 _THINK_RE = re.compile(
@@ -589,6 +600,7 @@ async def run(
     user_content: "str | list",
     history: list[dict],
     *,
+    session_id: str = "default",
     output_channel: str = "default",
 ) -> tuple[str, str, list[dict], list[tuple[dict, asyncio.Task]]]:
     """Returns (final_response, provider, turn_messages, pending_summaries).
@@ -620,7 +632,7 @@ async def run(
         {"role": "user", "content": user_content},
     ]
     
-    session_log = DebugLogger()
+    session_log = _get_session_logger(session_id)
     session_log.log("USER", _user_text)
     # turn_start excludes the memory block — it's ephemeral context, not persisted history.
     turn_start = 1 + len(history) + len(mem_block)
@@ -703,6 +715,7 @@ async def run_stream(
     user_content: "str | list",
     history: list[dict],
     *,
+    session_id: str = "default",
     output_channel: str = "default",
 ):
     """
@@ -735,7 +748,7 @@ async def run_stream(
         *mem_block,
         {"role": "user", "content": user_content},
     ]
-    session_log = DebugLogger()
+    session_log = _get_session_logger(session_id)
     session_log.log("USER", _user_text)
     # turn_start excludes the memory block — it's ephemeral context, not persisted history.
     turn_start = 1 + len(history) + len(mem_block)
