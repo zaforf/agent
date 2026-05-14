@@ -1,5 +1,4 @@
 import asyncio
-import random
 import datetime
 import json
 import logging
@@ -13,8 +12,7 @@ from tools import TOOL_SCHEMAS, TOOL_FUNCTIONS
 from tools.post_edit_verify import append_workspace_edit_verification
 from tools.nuke import _NUKE_PREFIX
 
-def crash_test():
-    pass
+log = logging.getLogger(__name__)
 
 # ── Async clients — one per provider with a key ──────────────────────────────
 
