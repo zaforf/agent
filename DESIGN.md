@@ -87,6 +87,8 @@ Both `/chat` (non-streaming) and `/chat/stream` (SSE streaming) share the same l
 4. If max tool iterations exceeded: resolve finished summaries, then return error
 ```
 
+**Streaming tool-call accumulation (`run_stream`):** Some OpenAI-compatible providers (notably Gemini) may reuse the same per-chunk `index` while streaming several different tools in parallel. The server **splits** consecutive distinct **registered** tool names into separate slots and routes `function.arguments` deltas to the matching `tool_call_id` when present, otherwise to the same-index slot whose accumulated arguments are not yet valid JSON — avoiding concatenated names like `workspace_readworkspace_grep` and merged argument blobs across tools.
+
 **Critical invariant (precise):** For each tool-result message, **every** LLM call in the **same user turn** that runs **after** that message was appended sees the **full, unsummarized** text. In-place summary swaps run **only** when the turn is finishing (no more tool rounds in step 3, or step 4) — **not** between tool iterations. Therefore:
 
 - **Same assistant `tool_calls` batch:** Unchanged — all results from that batch are full on the next `_call`.

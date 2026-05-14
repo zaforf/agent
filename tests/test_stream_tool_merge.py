@@ -65,3 +65,31 @@ def test_merge_json_snapshots_disjoint_prefers_later_chunk():
     cur = '{"path":"DESIGN.md","version":2}'
     frag = '{"path":"x"}'
     assert agent._merge_stream_fragment(cur, frag) == frag
+
+
+def test_merge_tool_name_splits_distinct_registered_tools():
+    merged, split = agent._merge_stream_tool_name("workspace_read", "workspace_grep")
+    assert split is True
+    assert merged == "workspace_grep"
+
+
+def test_merge_tool_name_builds_prefix():
+    merged, split = agent._merge_stream_tool_name("work", "workspace_read")
+    assert split is False
+    assert merged == "workspace_read"
+
+
+def test_stream_slot_routes_args_to_incomplete_json_slot():
+    slots = [
+        {"id": "a", "stream_index": 0, "name": "workspace_read", "arguments": '{"path":"x"}'},
+        {"id": "", "stream_index": 0, "name": "recall", "arguments": ""},
+    ]
+    assert agent._stream_slot_for_arguments(slots, "", 0) is slots[1]
+
+
+def test_stream_slot_respects_tool_call_id():
+    slots = [
+        {"id": "x", "stream_index": 0, "name": "workspace_read", "arguments": ""},
+        {"id": "y", "stream_index": 0, "name": "recall", "arguments": ""},
+    ]
+    assert agent._stream_slot_for_arguments(slots, "y", 0) is slots[1]

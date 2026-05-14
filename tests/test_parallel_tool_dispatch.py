@@ -101,3 +101,29 @@ def test_streaming_emits_two_tool_pairs(monkeypatch, tmp_system_prompt, provider
     assert len(tool_msgs) == 2
     assert tool_msgs[0]["tool_call_id"] == "tc_a"
     assert tool_msgs[1]["tool_call_id"] == "tc_b"
+
+
+def test_streaming_same_index_parallel_tools_split(monkeypatch, tmp_system_prompt, providers):
+    """Gemini-style: every delta uses index=0 but names are distinct tools."""
+    monkeypatch.setattr(config, "AGENT_PARALLEL_TOOL_CALLS", True)
+
+    async def echo(name, args):
+        return f"ok-{name}"
+
+    monkeypatch.setattr(agent, "_run_tool_async", echo)
+
+    iter1 = [
+        tool_chunk(0, "", "workspace_read", '{"path":"DESIGN.md"}'),
+        tool_chunk(0, "", "workspace_grep", '{"path":".","pattern":"def"}'),
+        tool_chunk(0, "", "recall", '{"query":"prefs"}'),
+    ]
+    iter2 = [text_chunk("done")]
+    providers([[iter1, iter2]])
+
+    events = asyncio.run(_collect_stream("go"))
+    calls = [e for e in events if e["type"] == "tool_call"]
+    assert len(calls) == 3
+    assert {c["name"] for c in calls} == {"workspace_read", "workspace_grep", "recall"}
+    done = events[-1]
+    tool_msgs = [m for m in done["turn_messages"] if m["role"] == "tool"]
+    assert len(tool_msgs) == 3

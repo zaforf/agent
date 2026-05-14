@@ -268,6 +268,85 @@ async def _run_tool_specs_to_results(
     return out
 
 
+_REGISTERED_TOOL_NAMES: frozenset[str] = frozenset(TOOL_FUNCTIONS)
+
+
+def _merge_stream_tool_name(current: str, fragment: str) -> tuple[str, bool]:
+    """Merge streamed ``function.name`` fragments.
+
+    Returns ``(merged_name, split_new_slot)``. When ``split_new_slot`` is True,
+    the caller must **not** update the current slot's name — ``merged_name`` is
+    the new tool's name and belongs in a **new** slot. This handles providers
+    (notably Gemini) that reuse the same ``index`` for parallel tool calls while
+    streaming distinct registered tool names, which would otherwise concatenate
+    into nonsense like ``workspace_readworkspace_grep``.
+    """
+    if not fragment:
+        return current, False
+    if not current:
+        return fragment, False
+    if fragment.startswith(current):
+        return fragment, False
+    if current.startswith(fragment):
+        return current, False
+    cur = current.strip()
+    frag = fragment.strip()
+    if cur in _REGISTERED_TOOL_NAMES and frag in _REGISTERED_TOOL_NAMES and cur != frag:
+        return fragment, True
+    return current + fragment, False
+
+
+def _arguments_stream_json_complete(raw: str) -> bool:
+    """True when ``raw`` parses as JSON (object or array); used to route arg deltas."""
+    if raw is None or not str(raw).strip():
+        return False
+    try:
+        json.loads(raw)
+    except json.JSONDecodeError:
+        return False
+    return True
+
+
+def _stream_resolve_slot_for_name(slots: list[dict], tid: str, idx: int) -> dict:
+    """Pick or create the slot that should receive ``function.name`` deltas."""
+    if tid:
+        for s in slots:
+            if s["id"] == tid:
+                return s
+        for s in reversed(slots):
+            if s["stream_index"] == idx and not s["id"]:
+                s["id"] = tid
+                return s
+        s = {"id": tid, "stream_index": idx, "name": "", "arguments": ""}
+        slots.append(s)
+        return s
+    for s in reversed(slots):
+        if s["stream_index"] == idx:
+            return s
+    s = {"id": "", "stream_index": idx, "name": "", "arguments": ""}
+    slots.append(s)
+    return s
+
+
+def _stream_slot_for_arguments(slots: list[dict], tid: str, idx: int) -> dict:
+    """Pick the slot that should receive ``function.arguments`` deltas."""
+    if tid:
+        for s in slots:
+            if s["id"] == tid:
+                return s
+    for s in reversed(slots):
+        if s["stream_index"] != idx:
+            continue
+        if not _arguments_stream_json_complete(s["arguments"]):
+            return s
+    for s in reversed(slots):
+        if s["stream_index"] == idx:
+            return s
+    s = {"id": tid or "", "stream_index": idx, "name": "", "arguments": ""}
+    slots.append(s)
+    return s
+
+
 def _merge_stream_fragment(current: str, fragment: str) -> str:
     """Merge streamed name/arguments fragments without accidental duplication.
 
@@ -837,7 +916,7 @@ async def run_stream(
         # The raw stream contains the thoughts; we capture them for the debug log.
         raw_parts       = []   # raw stream content including thinking tags
         visible_parts   = []   # stripped visible content for history storage
-        tool_calls_acc  = {}
+        tool_calls_slots: list[dict] = []
         stripper        = _ThinkStripper()
         tool_mode       = False   # once True, suppress text forwarding
 
@@ -849,26 +928,39 @@ async def run_stream(
             if delta.tool_calls:
                 tool_mode = True
                 for tc in delta.tool_calls:
-                    idx = tc.index
-                    if idx not in tool_calls_acc:
-                        tool_calls_acc[idx] = {
-                            "id": tc.id or f"tc_{idx}",
-                            "name": "",
-                            "arguments": "",
-                        }
-                    if tc.id:
-                        tool_calls_acc[idx]["id"] = tc.id
-                    if tc.function:
-                        if tc.function.name:
-                            tool_calls_acc[idx]["name"] = _merge_stream_fragment(
-                                tool_calls_acc[idx]["name"], tc.function.name
-                            )
-                        # Merge arguments even when the fragment is "" (some streams
-                        # send explicit empty strings); skip only when the field is absent.
-                        if tc.function.arguments is not None:
-                            tool_calls_acc[idx]["arguments"] = _merge_stream_fragment(
-                                tool_calls_acc[idx]["arguments"], tc.function.arguments
-                            )
+                    if not tc.function:
+                        continue
+                    idx = tc.index if tc.index is not None else 0
+                    tid = (tc.id or "").strip()
+                    fn = tc.function
+                    name_frag = (fn.name or "").strip()
+                    has_args = fn.arguments is not None
+
+                    slot: dict | None = None
+                    if name_frag:
+                        slot = _stream_resolve_slot_for_name(tool_calls_slots, tid, idx)
+                        merged, split = _merge_stream_tool_name(slot["name"], name_frag)
+                        if split:
+                            new_slot = {
+                                "id": tid or "",
+                                "stream_index": idx,
+                                "name": name_frag,
+                                "arguments": "",
+                            }
+                            tool_calls_slots.append(new_slot)
+                            slot = new_slot
+                        else:
+                            slot["name"] = merged
+                        if tid and not slot["id"]:
+                            slot["id"] = tid
+                    if has_args:
+                        if slot is None:
+                            slot = _stream_slot_for_arguments(tool_calls_slots, tid, idx)
+                        if tid and not slot["id"]:
+                            slot["id"] = tid
+                        slot["arguments"] = _merge_stream_fragment(
+                            slot["arguments"], fn.arguments
+                        )
 
             if delta.content and not tool_mode:
                 raw_parts.append(delta.content)
@@ -896,10 +988,10 @@ async def run_stream(
         session_log.log("THOUGHT", full_content)
         visible_content = "".join(visible_parts)
 
-        if tool_calls_acc:
+        if tool_calls_slots:
             native_tc_list = []
-            for idx in sorted(tool_calls_acc.keys()):
-                tc = tool_calls_acc[idx]
+            for i, tc in enumerate(tool_calls_slots):
+                tc_id = tc["id"] or f"tc_{i}"
                 # Streamed argument chunks can be malformed/incomplete JSON.
                 # Normalize once here so history replay stays provider-safe.
                 try:
@@ -907,7 +999,7 @@ async def run_stream(
                 except json.JSONDecodeError:
                     args_obj = {}
                 native_tc_list.append({
-                    "id":   tc["id"],
+                    "id":   tc_id,
                     "type": "function",
                     "function": {"name": tc["name"], "arguments": json.dumps(args_obj)},
                 })
