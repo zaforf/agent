@@ -151,9 +151,9 @@ def test_chat_non_blocking_summary_patches_db_row(tmp_db, monkeypatch):
         req = main_module.ChatRequest(message="hi", session_id="bg1")
         resp = await main_module.chat(req)
         assert resp.response == "done"
-        assert len(main_module._background_tasks) == 1, (
-            "finalizer task should be registered and still running"
-        )
+        assert any(
+            "_finalize_summaries" in str(t.get_coro()) for t in main_module._background_tasks
+        ), "finalizer task should be registered and still running"
 
         # 2. DB row holds the raw content at this point.
         hist_before = db.get_history("bg1")
@@ -222,7 +222,7 @@ def test_chat_propagates_agent_error(client, monkeypatch):
 # ── /chat/stream (SSE) ───────────────────────────────────────────────────────
 
 def test_chat_stream_events_and_persist(client, monkeypatch):
-    async def fake_stream(user_message, history):
+    async def fake_stream(user_message, history, **kwargs):
         yield {"type": "text_chunk", "text": "hel"}
         yield {"type": "text_chunk", "text": "lo"}
         yield {"type": "done", "provider": "fake",
@@ -250,7 +250,7 @@ def test_chat_stream_events_and_persist(client, monkeypatch):
 
 
 def test_chat_stream_handles_error_event(client, monkeypatch):
-    async def fake_stream(user_message, history):
+    async def fake_stream(user_message, history, **kwargs):
         yield {"type": "text_chunk", "text": "partial"}
         raise RuntimeError("boom midway")
 
@@ -268,7 +268,7 @@ def test_chat_stream_handles_error_event(client, monkeypatch):
 def test_chat_stream_cancel_endpoint_cancels_active_stream(client, monkeypatch):
     started = threading.Event()
 
-    async def fake_stream(user_message, history):
+    async def fake_stream(user_message, history, **kwargs):
         started.set()
         yield {"type": "text_chunk", "text": "partial"}
         while True:
@@ -310,7 +310,7 @@ def test_chat_stream_cancel_endpoint_noop_when_not_active(client):
 
 def test_chat_stream_cancel_event_does_not_persist_history(client, monkeypatch):
     """If run_stream emits a cancelled event itself, no turn should persist."""
-    async def fake_stream(user_message, history):
+    async def fake_stream(user_message, history, **kwargs):
         yield {"type": "text_chunk", "text": "partial"}
         yield {"type": "cancelled"}
 
@@ -332,7 +332,7 @@ def test_stream_turn_background_persists_without_sse_consumer(tmp_db, monkeypatc
     """Server-owned producer persists turn even without an active SSE consumer."""
     monkeypatch.setattr(main, "_cache", {})
 
-    async def fake_stream(user_message, history):
+    async def fake_stream(user_message, history, **kwargs):
         yield {"type": "text_chunk", "text": "partial"}
         yield {
             "type": "done",

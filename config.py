@@ -54,6 +54,14 @@ GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 DEBUG_LOGGING = os.environ.get("DEBUG_LOGGING", "false").lower() == "true"
 
+# Hint to the chat API that the model may emit multiple tool_calls in one assistant
+# message; the server runs read-only batches concurrently (see agent.py).
+AGENT_PARALLEL_TOOL_CALLS = os.environ.get("AGENT_PARALLEL_TOOL_CALLS", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
 PROVIDERS: list[dict] = [
     {
         "name":     "gemini-gemma4-31b",

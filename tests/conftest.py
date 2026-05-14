@@ -150,12 +150,15 @@ class _FakeCompletions:
 
     async def create(self, *, model, messages, max_tokens=8192, tools=None,
                      tool_choice=None, stream=False, **kwargs):
-        self.calls.append({
+        rec = {
             "model": model,
             "messages": [dict(m) for m in messages],
             "tools": tools,
             "stream": stream,
-        })
+        }
+        if "parallel_tool_calls" in kwargs:
+            rec["parallel_tool_calls"] = kwargs["parallel_tool_calls"]
+        self.calls.append(rec)
         if not self._responses:
             raise RuntimeError(f"FakeProvider {self.name!r} script exhausted")
         nxt = self._responses.pop(0)
@@ -206,3 +209,13 @@ def providers(monkeypatch):
     def _install(chains, names=None):
         return install_providers(monkeypatch, chains, names=names)
     return _install
+
+
+@pytest.fixture(autouse=True)
+def _stub_title_summarizer(monkeypatch):
+    """Prevent session-title generation from making real Gemini API calls in unit tests."""
+    try:
+        import main as _main
+        monkeypatch.setattr(_main, "summarize_gemma", lambda *a, **kw: "Stub Title")
+    except Exception:
+        pass

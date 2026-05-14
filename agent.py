@@ -28,20 +28,20 @@ MAX_TOOL_ITERATIONS = 30
 
 
 class DebugLogger:
-    """Saves the agent's internal monologue and tool exchanges to a local text file.
-    
-    Each instance corresponds to a single conversation run.
-    Files are named: `logs/debug_YYYYMMDD_HHMMSS.log`
+    """Appends the agent's internal monologue and tool exchanges to a per-session log file.
+
+    Files are named: `logs/debug_{session_id}.log`
+    One file per session; all turns in a conversation append to the same file.
     """
-    def __init__(self):
+    def __init__(self, session_id: str):
+        self._session_id = session_id
         self._log_file = None
 
     def _ensure_file(self):
         if self._log_file is None and config.DEBUG_LOGGING:
             log_dir = Path("logs")
             log_dir.mkdir(exist_ok=True)
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            self._log_file = open(log_dir / f"debug_{ts}.log", "a", encoding="utf-8")
+            self._log_file = open(log_dir / f"debug_{self._session_id}.log", "a", encoding="utf-8")
 
     def log(self, tag: str, content: str):
         self._ensure_file()
@@ -50,6 +50,17 @@ class DebugLogger:
             safe_content = str(content).replace("\x00", "")
             self._log_file.write(f"[{ts}] [{tag}] {safe_content}\n")
             self._log_file.flush()
+
+
+# One logger per session; avoids opening a new file on every run() call.
+_session_loggers: dict[str, DebugLogger] = {}
+
+
+def _get_session_logger(session_id: str) -> DebugLogger:
+    if session_id not in _session_loggers:
+        _session_loggers[session_id] = DebugLogger(session_id)
+    return _session_loggers[session_id]
+
 
 # Closed reasoning blocks stripped from user-visible output (opening tag → matching close).
 _THINK_RE = re.compile(
@@ -198,6 +209,143 @@ _BLOCKING_SYNC_TOOLS = frozenset({
     "workspace_search_replace",
 })
 
+# Tools that never mutate workspace files, shell session, or destructive memory
+# state — safe to execute concurrently within one assistant tool-call batch when
+# the provider emits multiple tool_calls at once.
+_PARALLEL_SAFE_TOOLS: frozenset[str] = frozenset({
+    "workspace_read",
+    "workspace_grep",
+    "web_search",
+    "fetch_url",
+    "youtube_transcript",
+    "recall",
+    "list_memories",
+})
+
+
+def _tool_batch_parallel_eligible(names: list[str]) -> bool:
+    """True when every tool in the batch may run concurrently on the server."""
+    if len(names) < 2:
+        return False
+    return all(n in _PARALLEL_SAFE_TOOLS for n in names)
+
+
+def _tool_specs_from_message(msg) -> list[tuple[str, str, dict]]:
+    """``(tool_call_id, name, args)`` in assistant ``tool_calls`` order."""
+    specs: list[tuple[str, str, dict]] = []
+    for tc in getattr(msg, "tool_calls", None) or []:
+        try:
+            args = json.loads(tc.function.arguments or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        specs.append((tc.id, tc.function.name, args))
+    return specs
+
+
+async def _run_tool_specs_to_results(
+    specs: list[tuple[str, str, dict]],
+) -> list[tuple[str, str, dict, str]]:
+    """Run tools in model order; parallelize read-only batches when enabled.
+
+    Each spec is ``(tool_call_id, tool_name, args_dict)``. Returns rows
+    ``(tool_call_id, tool_name, args_dict, result_str)`` in the same order.
+    """
+    if not specs:
+        return []
+    names = [s[1] for s in specs]
+    if config.AGENT_PARALLEL_TOOL_CALLS and _tool_batch_parallel_eligible(names):
+        results = await asyncio.gather(
+            *[_run_tool_async(name, args) for _, name, args in specs]
+        )
+        return [
+            (specs[i][0], specs[i][1], specs[i][2], results[i])
+            for i in range(len(specs))
+        ]
+    out: list[tuple[str, str, dict, str]] = []
+    for tc_id, name, args in specs:
+        res = await _run_tool_async(name, args)
+        out.append((tc_id, name, args, res))
+    return out
+
+
+_REGISTERED_TOOL_NAMES: frozenset[str] = frozenset(TOOL_FUNCTIONS)
+
+
+def _merge_stream_tool_name(current: str, fragment: str) -> tuple[str, bool]:
+    """Merge streamed ``function.name`` fragments.
+
+    Returns ``(merged_name, split_new_slot)``. When ``split_new_slot`` is True,
+    the caller must **not** update the current slot's name — ``merged_name`` is
+    the new tool's name and belongs in a **new** slot. This handles providers
+    (notably Gemini) that reuse the same ``index`` for parallel tool calls while
+    streaming distinct registered tool names, which would otherwise concatenate
+    into nonsense like ``workspace_readworkspace_grep``.
+    """
+    if not fragment:
+        return current, False
+    if not current:
+        return fragment, False
+    if fragment.startswith(current):
+        return fragment, False
+    if current.startswith(fragment):
+        return current, False
+    cur = current.strip()
+    frag = fragment.strip()
+    if cur in _REGISTERED_TOOL_NAMES and frag in _REGISTERED_TOOL_NAMES and cur != frag:
+        return fragment, True
+    return current + fragment, False
+
+
+def _arguments_stream_json_complete(raw: str) -> bool:
+    """True when ``raw`` parses as JSON (object or array); used to route arg deltas."""
+    if raw is None or not str(raw).strip():
+        return False
+    try:
+        json.loads(raw)
+    except json.JSONDecodeError:
+        return False
+    return True
+
+
+def _stream_resolve_slot_for_name(slots: list[dict], tid: str, idx: int) -> dict:
+    """Pick or create the slot that should receive ``function.name`` deltas."""
+    if tid:
+        for s in slots:
+            if s["id"] == tid:
+                return s
+        for s in reversed(slots):
+            if s["stream_index"] == idx and not s["id"]:
+                s["id"] = tid
+                return s
+        s = {"id": tid, "stream_index": idx, "name": "", "arguments": ""}
+        slots.append(s)
+        return s
+    for s in reversed(slots):
+        if s["stream_index"] == idx:
+            return s
+    s = {"id": "", "stream_index": idx, "name": "", "arguments": ""}
+    slots.append(s)
+    return s
+
+
+def _stream_slot_for_arguments(slots: list[dict], tid: str, idx: int) -> dict:
+    """Pick the slot that should receive ``function.arguments`` deltas."""
+    if tid:
+        for s in slots:
+            if s["id"] == tid:
+                return s
+    for s in reversed(slots):
+        if s["stream_index"] != idx:
+            continue
+        if not _arguments_stream_json_complete(s["arguments"]):
+            return s
+    for s in reversed(slots):
+        if s["stream_index"] == idx:
+            return s
+    s = {"id": tid or "", "stream_index": idx, "name": "", "arguments": ""}
+    slots.append(s)
+    return s
+
 
 def _merge_stream_fragment(current: str, fragment: str) -> str:
     """Merge streamed name/arguments fragments without accidental duplication.
@@ -217,6 +365,17 @@ def _merge_stream_fragment(current: str, fragment: str) -> str:
         return fragment
     if current.startswith(fragment):
         return current
+    # Two JSON-looking fragments that are not prefix-related: some OpenAI-compat
+    # streams (notably Gemini) re-send a full arguments object instead of a
+    # strict suffix delta; concatenating would produce invalid JSON and later
+    # json.loads → {}. Prefer the newer stream chunk.
+    c_strip = current.lstrip()
+    f_strip = fragment.lstrip()
+    if c_strip.startswith("{") and f_strip.startswith("{"):
+        if not (fragment.startswith(current) or current.startswith(fragment)):
+            # Later chunk wins: disjoint JSON objects are almost always a full
+            # re-send from the provider, not something to concatenate.
+            return fragment
     return current + fragment
 
 
@@ -319,8 +478,10 @@ async def _call(messages: list[dict], use_tools: bool = True) -> tuple:
     for entry in _clients:
         kwargs = dict(model=entry["model"], messages=messages, max_tokens=8192)
         if use_tools:
-            kwargs["tools"]       = TOOL_SCHEMAS
+            kwargs["tools"] = TOOL_SCHEMAS
             kwargs["tool_choice"] = "auto"
+            if config.AGENT_PARALLEL_TOOL_CALLS:
+                kwargs["parallel_tool_calls"] = True
 
         for attempt in range(3):
             try:
@@ -358,6 +519,9 @@ async def _call_stream(messages: list[dict]) -> tuple:
             tools       = TOOL_SCHEMAS,
             tool_choice = "auto",
         )
+        if config.AGENT_PARALLEL_TOOL_CALLS:
+            kwargs["parallel_tool_calls"] = True
+
         for attempt in range(3):
             try:
                 stream = await entry["client"].chat.completions.create(**kwargs)
@@ -385,7 +549,12 @@ def _tool_docs() -> str:
     return (
         "## Tool usage\n"
         "Use native API function/tool_calls only (no XML or fenced tool syntax).\n"
-        "Emit at most one tool call per assistant message; wait for result before the next tool call.\n"
+        "You may emit multiple tool_calls in one assistant message only when every call is "
+        "read-only discovery (e.g. several workspace_read / workspace_grep / web_search / fetch_url / "
+        "youtube_transcript / recall / list_memories together). Prefer that batch when the calls are "
+        "independent (none needs another tool's return to choose its arguments); if you must read A "
+        "before you can decide B's args, call A first, then batch the rest. For writes, shell session, or "
+        "memory mutations, emit one tool call per message and wait for its result before the next.\n"
         "Never emit empty arguments: every required field must be present in the tool JSON; prose does not substitute for arguments. After missing-argument errors, fix fields—do not retry `{}` or the same empty pattern.\n"
         "For code edits, use workspace_search_replace as primary. Keep replacements narrow and surgical: use short, unique old_string snippets around only the target lines. Avoid whole-file old/new payloads unless the user explicitly asks for a full rewrite. It is okay to use multiple sequential calls when each call is thoughtful and based on fresh file state. Do not repeat identical failing calls; after a failure, change snippet or strategy.\n"
     )
@@ -589,6 +758,7 @@ async def run(
     user_content: "str | list",
     history: list[dict],
     *,
+    session_id: str = "default",
     output_channel: str = "default",
 ) -> tuple[str, str, list[dict], list[tuple[dict, asyncio.Task]]]:
     """Returns (final_response, provider, turn_messages, pending_summaries).
@@ -620,7 +790,7 @@ async def run(
         {"role": "user", "content": user_content},
     ]
     
-    session_log = DebugLogger()
+    session_log = _get_session_logger(session_id)
     session_log.log("USER", _user_text)
     # turn_start excludes the memory block — it's ephemeral context, not persisted history.
     turn_start = 1 + len(history) + len(mem_block)
@@ -646,8 +816,7 @@ async def run(
             ]
         messages.append(assistant_entry)
 
-        calls = _extract_calls(msg)
-        if not calls:
+        if not getattr(msg, "tool_calls", None):
             final = _visible_after_think(content)
             if not final and content.strip():
                 repair_messages = messages + [{"role": "user", "content": _REPAIR_USER}]
@@ -667,14 +836,12 @@ async def run(
             await _apply_finished_summaries(pending_summaries)
             return final, provider_used, messages[turn_start:], pending_summaries
 
-        result_blocks = []
-        n_tc = len(msg.tool_calls)
-        for i, call in enumerate(calls):
-            name = call.get("name", "")
-            args = call.get("args", {})
+        specs = _tool_specs_from_message(msg)
+        rows = await _run_tool_specs_to_results(specs)
+        result_blocks: list[dict] = []
+        for tc_id, name, args, result in rows:
             log.info("tool-call  %s  %s", name, str(args)[:120])
             session_log.log("TOOL_CALL", f"{name}({json.dumps(args)})")
-            result = await _run_tool_async(name, args)
             log.debug("run: tool_result %s → %.120s", name, result)
             session_log.log("TOOL_RESULT", f"{name} -> {result}")
 
@@ -683,13 +850,11 @@ async def run(
                 await _apply_finished_summaries(pending_summaries)
                 return nuke_summary, provider_used, [{"role": "assistant", "content": nuke_summary, "_nuke": True}], pending_summaries
 
-            if i < n_tc:
-                tc_id = msg.tool_calls[i].id
-                msg_dict = {"role": "tool", "name": name, "tool_call_id": tc_id, "content": result}
-                result_blocks.append(msg_dict)
-                if len(result) > _HISTORY_SUMMARIZE_THRESHOLD:
-                    task = asyncio.create_task(_summarize_for_history(name, args, _user_text, result))
-                    pending_summaries.append((msg_dict, task))
+            msg_dict = {"role": "tool", "name": name, "tool_call_id": tc_id, "content": result}
+            result_blocks.append(msg_dict)
+            if len(result) > _HISTORY_SUMMARIZE_THRESHOLD:
+                task = asyncio.create_task(_summarize_for_history(name, args, _user_text, result))
+                pending_summaries.append((msg_dict, task))
 
         messages.extend(result_blocks)
 
@@ -703,6 +868,7 @@ async def run_stream(
     user_content: "str | list",
     history: list[dict],
     *,
+    session_id: str = "default",
     output_channel: str = "default",
 ):
     """
@@ -735,7 +901,7 @@ async def run_stream(
         *mem_block,
         {"role": "user", "content": user_content},
     ]
-    session_log = DebugLogger()
+    session_log = _get_session_logger(session_id)
     session_log.log("USER", _user_text)
     # turn_start excludes the memory block — it's ephemeral context, not persisted history.
     turn_start = 1 + len(history) + len(mem_block)
@@ -752,7 +918,7 @@ async def run_stream(
         # The raw stream contains the thoughts; we capture them for the debug log.
         raw_parts       = []   # raw stream content including thinking tags
         visible_parts   = []   # stripped visible content for history storage
-        tool_calls_acc  = {}
+        tool_calls_slots: list[dict] = []
         stripper        = _ThinkStripper()
         tool_mode       = False   # once True, suppress text forwarding
 
@@ -764,22 +930,39 @@ async def run_stream(
             if delta.tool_calls:
                 tool_mode = True
                 for tc in delta.tool_calls:
-                    idx = tc.index
-                    if idx not in tool_calls_acc:
-                        tool_calls_acc[idx] = {
-                            "id": tc.id or f"tc_{idx}",
-                            "name": "",
-                            "arguments": "",
-                        }
-                    if tc.function:
-                        if tc.function.name:
-                            tool_calls_acc[idx]["name"] = _merge_stream_fragment(
-                                tool_calls_acc[idx]["name"], tc.function.name
-                            )
-                        if tc.function.arguments:
-                            tool_calls_acc[idx]["arguments"] = _merge_stream_fragment(
-                                tool_calls_acc[idx]["arguments"], tc.function.arguments
-                            )
+                    if not tc.function:
+                        continue
+                    idx = tc.index if tc.index is not None else 0
+                    tid = (tc.id or "").strip()
+                    fn = tc.function
+                    name_frag = (fn.name or "").strip()
+                    has_args = fn.arguments is not None
+
+                    slot: dict | None = None
+                    if name_frag:
+                        slot = _stream_resolve_slot_for_name(tool_calls_slots, tid, idx)
+                        merged, split = _merge_stream_tool_name(slot["name"], name_frag)
+                        if split:
+                            new_slot = {
+                                "id": tid or "",
+                                "stream_index": idx,
+                                "name": name_frag,
+                                "arguments": "",
+                            }
+                            tool_calls_slots.append(new_slot)
+                            slot = new_slot
+                        else:
+                            slot["name"] = merged
+                        if tid and not slot["id"]:
+                            slot["id"] = tid
+                    if has_args:
+                        if slot is None:
+                            slot = _stream_slot_for_arguments(tool_calls_slots, tid, idx)
+                        if tid and not slot["id"]:
+                            slot["id"] = tid
+                        slot["arguments"] = _merge_stream_fragment(
+                            slot["arguments"], fn.arguments
+                        )
 
             if delta.content and not tool_mode:
                 raw_parts.append(delta.content)
@@ -807,10 +990,10 @@ async def run_stream(
         session_log.log("THOUGHT", full_content)
         visible_content = "".join(visible_parts)
 
-        if tool_calls_acc:
+        if tool_calls_slots:
             native_tc_list = []
-            for idx in sorted(tool_calls_acc.keys()):
-                tc = tool_calls_acc[idx]
+            for i, tc in enumerate(tool_calls_slots):
+                tc_id = tc["id"] or f"tc_{i}"
                 # Streamed argument chunks can be malformed/incomplete JSON.
                 # Normalize once here so history replay stays provider-safe.
                 try:
@@ -818,7 +1001,7 @@ async def run_stream(
                 except json.JSONDecodeError:
                     args_obj = {}
                 native_tc_list.append({
-                    "id":   tc["id"],
+                    "id":   tc_id,
                     "type": "function",
                     "function": {"name": tc["name"], "arguments": json.dumps(args_obj)},
                 })
@@ -829,19 +1012,22 @@ async def run_stream(
                 "tool_calls": native_tc_list,
             })
 
-            result_messages = []
-            for idx in sorted(tool_calls_acc.keys()):
-                tc   = tool_calls_acc[idx]
-                name = tc["name"]
-                args = json.loads(next(
-                    ntc["function"]["arguments"]
-                    for ntc in native_tc_list if ntc["id"] == tc["id"]
-                ))
+            specs: list[tuple[str, str, dict]] = []
+            for ntc in native_tc_list:
+                try:
+                    args_obj = json.loads(ntc["function"]["arguments"] or "{}")
+                except json.JSONDecodeError:
+                    args_obj = {}
+                specs.append((ntc["id"], ntc["function"]["name"], args_obj))
 
+            for tc_id, name, args in specs:
                 log.info("tool-call  %s  %s", name, str(args)[:120])
                 session_log.log("TOOL_CALL", f"{name}({json.dumps(args)})")
                 yield {"type": "tool_call", "name": name, "args": args}
-                result = await _run_tool_async(name, args)
+
+            rows = await _run_tool_specs_to_results(specs)
+            result_messages = []
+            for tc_id, name, args, result in rows:
                 log.debug("stream: tool_result %s → %.120s", name, result)
                 session_log.log("TOOL_RESULT", f"{name} -> {result}")
                 yield {"type": "tool_result", "name": name, "result": result}
@@ -861,7 +1047,7 @@ async def run_stream(
                 msg_dict = {
                     "role":         "tool",
                     "name":         name,
-                    "tool_call_id": tc["id"],
+                    "tool_call_id": tc_id,
                     "content":      result,
                 }
                 result_messages.append(msg_dict)
