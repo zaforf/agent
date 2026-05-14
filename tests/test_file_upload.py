@@ -132,7 +132,7 @@ def test_build_files_before_message():
 def test_chat_stream_text_attachment_reaches_agent(client, monkeypatch):
     received = {}
 
-    async def fake_stream(user_content, history):
+    async def fake_stream(user_content, history, **kwargs):
         received["content"] = user_content
         yield {"type": "text_chunk", "text": "ok"}
         yield {"type": "done", "provider": "fake", "turn_messages": [
@@ -161,7 +161,7 @@ def test_chat_stream_text_attachment_reaches_agent(client, monkeypatch):
 def test_chat_stream_image_attachment_passes_image_url(client, monkeypatch):
     received = {}
 
-    async def fake_stream(user_content, history):
+    async def fake_stream(user_content, history, **kwargs):
         received["content"] = user_content
         yield {"type": "text_chunk", "text": "ok"}
         yield {"type": "done", "provider": "fake", "turn_messages": [
@@ -186,7 +186,7 @@ def test_chat_stream_image_attachment_passes_image_url(client, monkeypatch):
 def test_chat_stream_patches_display_files_into_history(client, monkeypatch):
     """_display_files is patched onto the user message so display history can
     render file chips after a page refresh (DESIGN §13.4)."""
-    async def fake_stream(user_content, history):
+    async def fake_stream(user_content, history, **kwargs):
         yield {"type": "text_chunk", "text": "ok"}
         yield {"type": "done", "provider": "fake", "turn_messages": [
             {"role": "user", "content": user_content},
@@ -212,7 +212,7 @@ def test_chat_stream_patches_display_files_into_history(client, monkeypatch):
 def test_chat_stream_no_attachments_backward_compat(client, monkeypatch):
     received = {}
 
-    async def fake_stream(user_content, history):
+    async def fake_stream(user_content, history, **kwargs):
         received["content"] = user_content
         yield {"type": "text_chunk", "text": "hi"}
         yield {"type": "done", "provider": "fake", "turn_messages": [
