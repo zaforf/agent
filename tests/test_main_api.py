@@ -47,7 +47,7 @@ def test_sessions_empty(client):
 def test_history_empty_for_unknown_session(client):
     r = client.get("/sessions/unknown-id/history")
     assert r.status_code == 200
-    assert r.json() == {"messages": []}
+    assert r.json() == {"messages": [], "active": False}
 
 
 # ── /chat (non-streaming) ────────────────────────────────────────────────────
@@ -261,7 +261,7 @@ def test_chat_stream_handles_error_event(client, monkeypatch):
         data = b"".join(r.iter_bytes()).decode()
 
     assert "boom midway" in data
-    # Nothing should have been persisted on error
+    # No history should be persisted on error (including the pending user message)
     assert db.get_history("err-stream") == []
 
 
@@ -299,6 +299,7 @@ def test_chat_stream_cancel_endpoint_cancels_active_stream(client, monkeypatch):
     assert not t.is_alive(), "stream thread should finish after cancellation"
     assert stream_data.get("status") == 200
     assert '"type": "cancelled"' in stream_data.get("body", "")
+    # No history should be persisted on cancel
     assert db.get_history("cancel-sess") == []
 
 
@@ -325,6 +326,7 @@ def test_chat_stream_cancel_event_does_not_persist_history(client, monkeypatch):
         body = b"".join(r.iter_bytes()).decode()
 
     assert '"type": "cancelled"' in body
+    # No history should be persisted on cancel
     assert db.get_history("cancel-no-persist") == []
 
 
@@ -346,7 +348,9 @@ def test_stream_turn_background_persists_without_sse_consumer(tmp_db, monkeypatc
     monkeypatch.setattr(agent, "run_stream", fake_stream)
 
     async def _scenario():
-        state = main._StreamTurnState("dc1", "persist me", [])
+        # Mock the immediate persistence that happens in the API endpoint
+        row_id = db.create_pending_turn("dc1", "persist me")
+        state = main._StreamTurnState("dc1", "persist me", [], row_id)
         history = main._get_history("dc1")
         await main._run_stream_turn(state, "persist me", history)
 
