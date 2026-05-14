@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import types
 from pathlib import Path
 
@@ -43,7 +44,21 @@ def test_append_ruff_section_when_ruff_runs(monkeypatch: pytest.MonkeyPatch, tmp
     monkeypatch.setattr(pe, "_workspace_target", lambda rel: p)
     monkeypatch.setattr(pe, "_REPO_ROOT", tmp_path)
 
-    def fake_run(*_a, **_k):
+    def fake_run(argv, *_a, **_k):
+        if "--output-format=json" in argv:
+            diag = {
+                "cell": None,
+                "code": "E999",
+                "message": "boom",
+                "filename": str(p),
+                "location": {"row": 1, "column": 1},
+                "end_location": {"row": 1, "column": 2},
+                "fix": None,
+                "noqa_row": None,
+                "severity": "error",
+                "url": "",
+            }
+            return types.SimpleNamespace(returncode=1, stdout=json.dumps([diag]), stderr="")
         return types.SimpleNamespace(returncode=1, stdout="", stderr="mod.py:1:1: E999\n")
 
     monkeypatch.setattr(pe.subprocess, "run", fake_run)
@@ -53,6 +68,75 @@ def test_append_ruff_section_when_ruff_runs(monkeypatch: pytest.MonkeyPatch, tmp
     assert "post-edit" in out
     assert "ruff check" in out
     assert "E999" in out
+
+
+def test_slice_ruff_edit_span_multiline_remove_import() -> None:
+    src = "import sys\nimport os\nx = 1\n"
+    old = pe._slice_ruff_edit_span(
+        src,
+        {"row": 1, "column": 1},
+        {"row": 2, "column": 1},
+    )
+    assert old == "import sys\n"
+
+
+def test_slice_ruff_edit_span_same_line() -> None:
+    src = "x==None\n"
+    old = pe._slice_ruff_edit_span(
+        src,
+        {"row": 1, "column": 1},
+        {"row": 1, "column": 8},
+    )
+    assert old == "x==None"
+
+
+def test_format_ruff_summary_over_threshold(tmp_path: Path) -> None:
+    diags = []
+    for i in range(11):
+        diags.append(
+            {
+                "code": "F821",
+                "message": "Undefined name `log`",
+                "filename": str(tmp_path / "a.py"),
+                "location": {"row": i + 1, "column": 1},
+                "end_location": {"row": i + 1, "column": 2},
+                "fix": None,
+            }
+        )
+    text = pe._format_ruff_json_output(diags, repo_root=tmp_path)
+    assert "Found 11 issues" in text
+    assert "F821: 11" in text
+    assert "Details (11 issue(s))" in text
+
+
+def test_format_ruff_includes_suggested_replace_for_fix(tmp_path: Path) -> None:
+    p = tmp_path / "m.py"
+    p.write_text("import sys\nx = 1\n", encoding="utf-8")
+    diags = [
+        {
+            "code": "F401",
+            "message": "`sys` imported but unused",
+            "filename": str(p),
+            "location": {"row": 1, "column": 8},
+            "end_location": {"row": 1, "column": 11},
+            "fix": {
+                "applicability": "safe",
+                "message": "Remove unused import: `sys`",
+                "edits": [
+                    {
+                        "content": "",
+                        "location": {"row": 1, "column": 1},
+                        "end_location": {"row": 2, "column": 1},
+                    }
+                ],
+            },
+        }
+    ]
+    text = pe._format_ruff_json_output(diags, repo_root=tmp_path)
+    assert "[*]" in text
+    assert "old_string=" in text
+    assert "import sys" in text
+    assert "new_string=" in text
 
 
 def test_append_pytest_skip_message_when_no_candidates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
