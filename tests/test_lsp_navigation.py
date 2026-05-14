@@ -14,10 +14,14 @@ def test_grep_style_to_lsp_position():
     assert lnav._grep_style_to_lsp_position(10, 5) == {"line": 9, "character": 4}
 
 
-def test_symbol_kind_name_maps_lsp_enum():
-    assert lnav._symbol_kind_name(12) == "Function"
-    assert lnav._symbol_kind_name(5) == "Class"
-    assert lnav._symbol_kind_name(99) == "Kind(99)"
+def test_cap_references_respects_env(monkeypatch):
+    monkeypatch.setenv("LSP_MAX_REFERENCES", "10")
+    assert lnav._cap_references() == 10
+
+
+def test_cap_references_env_clamped_high(monkeypatch):
+    monkeypatch.setenv("LSP_MAX_REFERENCES", "99999")
+    assert lnav._cap_references() == 500
 
 
 def test_safe_rel_path_under_workspace(monkeypatch, tmp_path):
