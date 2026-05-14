@@ -742,8 +742,29 @@ def lsp_find_references(
     lines = [f"**References** (showing up to {_MAX_REFERENCES}, workspace-only)"]
     if snap_note:
         lines.append(snap_note)
+    _fcache: dict[str, list[str]] = {}
     for uri, loc in ws_locs[:_MAX_REFERENCES]:
-        lines.append(_format_location_block(uri, loc))
+        entry = _format_location_block(uri, loc)
+        rel2 = _safe_rel_path(uri)
+        if rel2:
+            if rel2 not in _fcache:
+                try:
+                    _fcache[rel2] = _workspace_target(rel2).read_text(
+                        encoding="utf-8", errors="replace"
+                    ).splitlines()
+                except (OSError, ValueError):
+                    _fcache[rel2] = []
+            fl = _fcache[rel2]
+            rng = loc.get("range") or {}
+            st = rng.get("start") or {}
+            line0 = int(st.get("line", -1))
+            if 0 <= line0 < len(fl):
+                src = fl[line0].strip()
+                if src:
+                    if len(src) > 120:
+                        src = src[:117] + "..."
+                    entry += f" — `{src}`"
+        lines.append(entry)
     if len(ws_locs) > _MAX_REFERENCES:
         lines.append(f"(… {len(ws_locs) - _MAX_REFERENCES} more omitted)")
     return "\n".join(lines)
@@ -908,6 +929,66 @@ def lsp_hover(path: str, line: int, column: int = 1, symbol: str | None = None) 
     return "\n".join(out)
 
 
+_HIGH_SIGNAL_KINDS: frozenset[str] = frozenset({"Class", "Function", "Method", "Constructor"})
+
+
+def lsp_definition_for_symbol(name: str) -> str:
+    """Find a named Python symbol and return its definition snippet in one call.
+
+    Equivalent to ``lsp_workspace_symbols`` → ``lsp_go_to_definition`` but
+    without the extra round-trip. Prefer exact names (``_sanitize_history``,
+    ``_StreamTurnState``). Falls back to grep when the LSP index is still warming.
+    """
+    n = (name or "").strip()
+    if len(n) < 2:
+        return "Error: name must be at least 2 characters."
+    try:
+        s = _get_session()
+        result = s.workspace_symbol(n)
+    except Exception as e:
+        return f"Error in lsp_definition_for_symbol: {e}"
+
+    candidates: list[tuple[str, str, str, dict[str, Any]]] = []
+    for item in result or []:
+        if not isinstance(item, dict) or item.get("name") != n:
+            continue
+        loc_inner = item.get("location") or {}
+        uri = str(loc_inner.get("uri") or "")
+        rel2 = _safe_rel_path(uri)
+        if not rel2:
+            continue
+        klabel = _symbol_kind_name(item.get("kind", ""))
+        candidates.append((klabel, rel2, uri, loc_inner))
+
+    if not candidates:
+        hits = _grep_defs_fallback(n)
+        if not hits:
+            return f"No symbol {n!r} found in workspace."
+        kind, rel2, line_1 = hits[0]
+        try:
+            fl = _workspace_target(rel2).read_text(encoding="utf-8", errors="replace").splitlines()
+            chunk = fl[line_1 - 1 : line_1 - 1 + _MAX_DEFINITION_SNIPPET_LINES]
+            sn = "\n".join(f"{line_1 + i:>4} | {ln}" for i, ln in enumerate(chunk))
+        except (OSError, ValueError):
+            sn = ""
+        hdr = f"**{kind}** `{n}` at `{rel2}`:{line_1} (grep fallback)"
+        return hdr + ("\n```text\n" + sn + "\n```" if sn else "")
+
+    candidates.sort(key=lambda c: (0 if c[0] in _HIGH_SIGNAL_KINDS else 1, c[1]))
+    out = [f"**Definition** `{n}`"]
+    for klabel, rel2, uri, loc_inner in candidates[:4]:
+        rng = loc_inner.get("range") or {}
+        st = rng.get("start") or {}
+        line_1 = int(st.get("line", 0)) + 1
+        out.append(f"[{klabel}] `{rel2}`:{line_1}")
+        sn = _snippet_for_location(uri, loc_inner, _MAX_DEFINITION_SNIPPET_LINES)
+        if sn:
+            out.append("```text\n" + sn + "\n```")
+    if len(candidates) > 4:
+        out.append(f"(… {len(candidates) - 4} more matches omitted)")
+    return "\n".join(out)
+
+
 SCHEMAS: list[dict] = [
     {
         "type": "function",
@@ -1031,6 +1112,25 @@ SCHEMAS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "lsp_definition_for_symbol",
+            "description": (
+                "Python: find a named symbol and return its definition snippet in one call — "
+                "replaces the two-step lsp_workspace_symbols → lsp_go_to_definition pattern. "
+                "Pass the exact symbol name (e.g. `_sanitize_history`, `_StreamTurnState`). "
+                "Returns the definition source lines directly."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Exact symbol name to look up"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
 ]
 
 FUNCTIONS: dict[str, callable] = {
@@ -1039,4 +1139,5 @@ FUNCTIONS: dict[str, callable] = {
     "lsp_outline": lsp_outline,
     "lsp_workspace_symbols": lsp_workspace_symbols,
     "lsp_hover": lsp_hover,
+    "lsp_definition_for_symbol": lsp_definition_for_symbol,
 }
