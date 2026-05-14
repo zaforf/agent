@@ -1,0 +1,43 @@
+services:
+  app:
+    build: .
+    restart: always
+    user: "1000:1003"
+    env_file:
+      - .env
+    environment:
+      - HOME=/tmp
+      - RUFF_CACHE_DIR=/tmp/.ruff_cache
+    depends_on:
+      - qdrant
+    volumes:
+      - ./data:/app/data
+      - ./workspace:/app/workspace
+      - ./logs:/app/logs
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: always
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  caddy:
+    image: caddy:latest
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./ca.crt:/etc/caddy/ca.crt
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  qdrant_data:
+  caddy_data:
+  caddy_config:

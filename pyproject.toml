@@ -5,3 +5,4 @@ markers = [
     "net: requires external HTTP (non-LLM, e.g. a live URL)",
 ]
 addopts = "-m 'not live and not net' -q"
+cache_dir = "/tmp/.pytest_cache"

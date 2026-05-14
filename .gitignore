@@ -10,7 +10,4 @@ __pycache__/
 *.db
 *.sqlite3
 
-# docker-compose is environment-specific (dev: localhost, prod: qdrant host).
-# Keep a local copy outside git.
-docker-compose.yml
 logs/
