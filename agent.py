@@ -9,6 +9,7 @@ import config
 from config import PROVIDERS
 from summarizer import summarize_gemma
 from tools import TOOL_SCHEMAS, TOOL_FUNCTIONS
+from tools.post_edit_verify import append_workspace_edit_verification
 from tools.nuke import _NUKE_PREFIX
 
 log = logging.getLogger(__name__)
@@ -657,9 +658,12 @@ async def _run_tool_async(name: str, args: dict) -> str:
 
     def _invoke_sync() -> str:
         try:
-            return str(fn(**args))
+            result = str(fn(**args))
         except Exception as e:
             return f"Error in {name}: {e}"
+        if name == "workspace_search_replace":
+            result = append_workspace_edit_verification(args.get("path", "") or "", result)
+        return result
 
     if name in _BLOCKING_SYNC_TOOLS:
         return await asyncio.to_thread(_invoke_sync)
