@@ -14,6 +14,12 @@ def test_grep_style_to_lsp_position():
     assert lnav._grep_style_to_lsp_position(10, 5) == {"line": 9, "character": 4}
 
 
+def test_symbol_kind_name_maps_lsp_enum():
+    assert lnav._symbol_kind_name(12) == "Function"
+    assert lnav._symbol_kind_name(5) == "Class"
+    assert lnav._symbol_kind_name(99) == "Kind(99)"
+
+
 def test_safe_rel_path_under_workspace(monkeypatch, tmp_path):
     monkeypatch.setattr(lnav, "WORKSPACE", tmp_path)
     f = tmp_path / "a" / "b.py"
@@ -44,6 +50,7 @@ def test_lsp_outline_mocked_session(monkeypatch):
     assert "Outline" in out
     assert "foo" in out
     assert "`pkg/x.py`:3" in out
+    assert "Function" in out
 
 
 def test_lsp_workspace_symbols_mocked(monkeypatch):
@@ -74,6 +81,7 @@ def test_lsp_workspace_symbols_mocked(monkeypatch):
     out = lnav.lsp_workspace_symbols("run")
     assert "run_stream" in out
     assert "agent.py" in out
+    assert "Function" in out
 
 
 def test_lsp_go_to_definition_mocked(monkeypatch):

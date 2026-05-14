@@ -281,6 +281,8 @@ There is **no** standalone `pyright-langserver` package on npm; `npx -y pyright-
 
 **Python-first:** Pyright is strongest for `.py` / `.pyi`. Other extensions are opened as `plaintext` for `didOpen`; results may be empty.
 
+Outline and workspace-symbol lines use **human-readable `SymbolKind` labels** (e.g. `Function`, `Class`) from the LSP enum, not raw integers — see the [LSP 3.17 `SymbolKind` specification](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#symbolKind).
+
 | Tool | Description |
 |---|---|
 | `lsp_go_to_definition(path, line, column=1)` | `textDocument/definition` at a **1-based** line/column (grep / `workspace_read` style). Default `column=1` selects line start. |

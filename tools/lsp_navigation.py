@@ -31,6 +31,47 @@ from tools.workspace_patch import _workspace_target
 
 log = logging.getLogger(__name__)
 
+# LSP SymbolKind enum (spec 3.17). Official table:
+# https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#symbolKind
+_SYMBOL_KIND_NAMES: dict[int, str] = {
+    1: "File",
+    2: "Module",
+    3: "Namespace",
+    4: "Package",
+    5: "Class",
+    6: "Method",
+    7: "Property",
+    8: "Field",
+    9: "Constructor",
+    10: "Enum",
+    11: "Interface",
+    12: "Function",
+    13: "Variable",
+    14: "Constant",
+    15: "String",
+    16: "Number",
+    17: "Boolean",
+    18: "Array",
+    19: "Object",
+    20: "Key",
+    21: "Null",
+    22: "EnumMember",
+    23: "Struct",
+    24: "Event",
+    25: "Operator",
+    26: "TypeParameter",
+}
+
+
+def _symbol_kind_name(kind: Any) -> str:
+    """Human-readable LSP SymbolKind for tool output."""
+    try:
+        k = int(kind)
+    except (TypeError, ValueError):
+        return str(kind) if kind not in (None, "") else "Unknown"
+    return _SYMBOL_KIND_NAMES.get(k, f"Kind({k})")
+
+
 # ── caps (keep tool output bounded) ───────────────────────────────────────────
 _MAX_REFERENCES: int = 48
 _MAX_WORKSPACE_SYMBOLS: int = 80
@@ -375,7 +416,8 @@ def _flatten_document_symbols(
         line = int(st.get("line", 0)) + 1
         pad = "  " * depth
         tail = f" — {detail}" if detail else ""
-        out_lines.append(f"{pad}- {name} (kind={kind}) @ `{rel_path}`:{line}{tail}")
+        klabel = _symbol_kind_name(kind)
+        out_lines.append(f"{pad}- {name} ({klabel}) @ `{rel_path}`:{line}{tail}")
         if len(out_lines) >= _MAX_OUTLINE_LINES:
             break
         children = node.get("children")
@@ -482,7 +524,8 @@ def lsp_workspace_symbols(query: str) -> str:
             continue
         name = item.get("name", "?")
         kind = item.get("kind", "")
-        lines.append(_format_location_block(uri, loc) + f" — `{name}` kind={kind}")
+        klabel = _symbol_kind_name(kind)
+        lines.append(_format_location_block(uri, loc) + f" — `{name}` ({klabel})")
         n += 1
         if n >= _MAX_WORKSPACE_SYMBOLS:
             break
