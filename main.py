@@ -85,6 +85,7 @@ async def _persist_stream_turn(state: _StreamTurnState) -> None:
 
     if state.nuke_summary is not None:
         # Nuke explicitly clears session; we just need to make sure the pending row is gone.
+        db.delete_pending_turn(state.pending_row_id)
         _apply_nuke(state.session_id, history, state.nuke_summary)
         return
 
@@ -94,9 +95,10 @@ async def _persist_stream_turn(state: _StreamTurnState) -> None:
         _spawn_finalizer(state.pending, state.turn_messages, state.pending_row_id)
         _spawn_title_update(state.session_id, state.req_message)
     else:
-        # Turn was cancelled or errored. We KEEP the pending user message row
-        # to ensure durability and a correct "waiting for response" UI state.
-        pass
+        # Turn was cancelled or errored.
+        # We DELETE the pending row to avoid consecutive user messages in context,
+        # which corrupts the LLM conversational state.
+        db.delete_pending_turn(state.pending_row_id)
 
 
 async def _run_stream_turn(
@@ -466,7 +468,9 @@ async def chat_stream_cancel(req: StreamCancelRequest):
 @app.get("/sessions/{session_id}/history")
 def session_history(session_id: str):
     # Return history and a signal if the session has an active producer.
-    return {"messages": db.get_display_history(session_id), "active": session_id in _active_stream_turns}
+    s = _active_stream_turns.get(session_id)
+    is_active = s is not None and not s.completed
+    return {"messages": db.get_display_history(session_id), "active": is_active}
 
 
 @app.delete("/sessions/{session_id}")

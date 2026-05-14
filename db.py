@@ -43,6 +43,10 @@ def init() -> None:
                 ts          INTEGER DEFAULT (unixepoch())
             )
         """)
+        # Startup cleanup: remove any pending turns left over from a server crash/restart.
+        # These rows have turn_messages=NULL and would otherwise corrupt LLM context.
+        c.execute("DELETE FROM messages WHERE turn_messages IS NULL")
+        c.commit()
 
 
 def create_pending_turn(session_id: str, user_message: str) -> int:

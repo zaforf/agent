@@ -261,9 +261,8 @@ def test_chat_stream_handles_error_event(client, monkeypatch):
         data = b"".join(r.iter_bytes()).decode()
 
     assert "boom midway" in data
-    # User message should be persisted even on error
-    hist = db.get_history("err-stream")
-    assert [m["role"] for m in hist] == ["user"]
+    # No history should be persisted on error (including the pending user message)
+    assert db.get_history("err-stream") == []
 
 
 def test_chat_stream_cancel_endpoint_cancels_active_stream(client, monkeypatch):
@@ -300,9 +299,8 @@ def test_chat_stream_cancel_endpoint_cancels_active_stream(client, monkeypatch):
     assert not t.is_alive(), "stream thread should finish after cancellation"
     assert stream_data.get("status") == 200
     assert '"type": "cancelled"' in stream_data.get("body", "")
-    # User message should be persisted even on cancel
-    hist = db.get_history("cancel-sess")
-    assert [m["role"] for m in hist] == ["user"]
+    # No history should be persisted on cancel
+    assert db.get_history("cancel-sess") == []
 
 
 def test_chat_stream_cancel_endpoint_noop_when_not_active(client):
@@ -328,9 +326,8 @@ def test_chat_stream_cancel_event_does_not_persist_history(client, monkeypatch):
         body = b"".join(r.iter_bytes()).decode()
 
     assert '"type": "cancelled"' in body
-    # User message should be persisted even on cancel
-    hist = db.get_history("cancel-no-persist")
-    assert [m["role"] for m in hist] == ["user"]
+    # No history should be persisted on cancel
+    assert db.get_history("cancel-no-persist") == []
 
 
 def test_stream_turn_background_persists_without_sse_consumer(tmp_db, monkeypatch):
