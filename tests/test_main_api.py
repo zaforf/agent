@@ -47,7 +47,7 @@ def test_sessions_empty(client):
 def test_history_empty_for_unknown_session(client):
     r = client.get("/sessions/unknown-id/history")
     assert r.status_code == 200
-    assert r.json() == {"messages": []}
+    assert r.json() == {"messages": [], "active": False}
 
 
 # ── /chat (non-streaming) ────────────────────────────────────────────────────
@@ -261,8 +261,9 @@ def test_chat_stream_handles_error_event(client, monkeypatch):
         data = b"".join(r.iter_bytes()).decode()
 
     assert "boom midway" in data
-    # Nothing should have been persisted on error
-    assert db.get_history("err-stream") == []
+    # User message should be persisted even on error
+    hist = db.get_history("err-stream")
+    assert [m["role"] for m in hist] == ["user"]
 
 
 def test_chat_stream_cancel_endpoint_cancels_active_stream(client, monkeypatch):
@@ -299,7 +300,9 @@ def test_chat_stream_cancel_endpoint_cancels_active_stream(client, monkeypatch):
     assert not t.is_alive(), "stream thread should finish after cancellation"
     assert stream_data.get("status") == 200
     assert '"type": "cancelled"' in stream_data.get("body", "")
-    assert db.get_history("cancel-sess") == []
+    # User message should be persisted even on cancel
+    hist = db.get_history("cancel-sess")
+    assert [m["role"] for m in hist] == ["user"]
 
 
 def test_chat_stream_cancel_endpoint_noop_when_not_active(client):
@@ -325,7 +328,9 @@ def test_chat_stream_cancel_event_does_not_persist_history(client, monkeypatch):
         body = b"".join(r.iter_bytes()).decode()
 
     assert '"type": "cancelled"' in body
-    assert db.get_history("cancel-no-persist") == []
+    # User message should be persisted even on cancel
+    hist = db.get_history("cancel-no-persist")
+    assert [m["role"] for m in hist] == ["user"]
 
 
 def test_stream_turn_background_persists_without_sse_consumer(tmp_db, monkeypatch):
@@ -346,7 +351,9 @@ def test_stream_turn_background_persists_without_sse_consumer(tmp_db, monkeypatc
     monkeypatch.setattr(agent, "run_stream", fake_stream)
 
     async def _scenario():
-        state = main._StreamTurnState("dc1", "persist me", [])
+        # Mock the immediate persistence that happens in the API endpoint
+        row_id = db.create_pending_turn("dc1", "persist me")
+        state = main._StreamTurnState("dc1", "persist me", [], row_id)
         history = main._get_history("dc1")
         await main._run_stream_turn(state, "persist me", history)
 

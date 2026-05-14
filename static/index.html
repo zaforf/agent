@@ -1162,6 +1162,12 @@
       }
       if (!data.messages.length) {
         feed.innerHTML = '<div class="empty-hint">New session — say something.</div>';
+      } else {
+        // Show thinking indicator if last message is user AND server is actively producing.
+        const lastMsg = data.messages[data.messages.length - 1];
+        if (lastMsg.role === 'user' && data.active) {
+          _showThinking('waiting for full response...');
+        }
       }
       await scrollToLastAssistantAfterLayout();
       highlightSession();
