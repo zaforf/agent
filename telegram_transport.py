@@ -423,7 +423,9 @@ async def _handle_message(client: httpx.AsyncClient, api: str, message: dict[str
     )
 
     history = main._get_history(sid)
-    state = main._StreamTurnState(sid, text, [])
+    # Immediate persistence to ensure durability.
+    pending_row_id = main.db.create_pending_turn(sid, text)
+    state = main._StreamTurnState(sid, text, [], pending_row_id)
     producer = asyncio.create_task(
         main._run_stream_turn(state, text, history, output_channel="telegram")
     )

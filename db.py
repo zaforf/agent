@@ -10,6 +10,7 @@ LLM; `get_display_history()` collapses the same data into user/assistant pairs
 with tool steps synthesized from tool_calls/tool messages for the UI.
 """
 import json
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -43,6 +44,26 @@ def init() -> None:
                 ts          INTEGER DEFAULT (unixepoch())
             )
         """)
+        # Startup cleanup: remove any pending turns left over from a server crash/restart.
+        # These rows have turn_messages=NULL and would otherwise corrupt LLM context.
+        c.execute("DELETE FROM messages WHERE turn_messages IS NULL")
+        c.commit()
+
+
+def create_pending_turn(session_id: str, user_message: str) -> int:
+    """Insert a user message immediately to ensure durability before the turn begins."""
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO messages (session_id, role, content, turn_messages) VALUES (?, ?, ?, ?)",
+            (session_id, "user", user_message, None),
+        )
+        return cur.lastrowid
+
+
+def delete_pending_turn(row_id: int) -> None:
+    """Remove a pending turn that was never completed."""
+    with _conn() as c:
+        c.execute("DELETE FROM messages WHERE id = ?", (row_id,))
 
 
 def append_turn(session_id: str, user_message: str, turn_messages: list[dict]) -> int:
@@ -84,19 +105,25 @@ def update_turn_messages(row_id: int, turn_messages: list[dict]) -> None:
 def get_history(session_id: str) -> list[dict]:
     """Flat message list for LLM context, concatenated across all turns."""
     with _conn() as c:
+        # Added id to SELECT to support the corruption warning log
         rows = c.execute(
-            "SELECT turn_messages FROM messages WHERE session_id = ? ORDER BY id",
+            "SELECT id, role, content, turn_messages FROM messages WHERE session_id = ? ORDER BY id",
             (session_id,),
         ).fetchall()
     result: list[dict] = []
     for r in rows:
         tm_raw = r["turn_messages"]
-        if not tm_raw:
-            continue
-        try:
-            result.extend(json.loads(tm_raw))
-        except Exception:
-            continue
+        if tm_raw:
+            try:
+                result.extend(json.loads(tm_raw))
+                continue
+            except Exception:
+                logging.warning(f"Corrupted turn_messages blob in session {session_id} row {r['id']}")
+                continue
+        
+        # Pending turns (turn_messages is NULL) are included as a single user message
+        # This ensures the LLM sees the most recent input even if the turn is incomplete.
+        result.append({"role": r["role"], "content": r["content"]})
     return result
 
 
