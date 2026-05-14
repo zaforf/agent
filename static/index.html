@@ -134,6 +134,18 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .sess-title {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .sess-title.is-preview {
+      font-weight: 400;
+      color: var(--text-3);
+    }
     .sess-meta {
       font-size: 11px;
       color: var(--text-3);
@@ -1176,7 +1188,7 @@
       el.innerHTML = `
         <div class="sess-row">
           <div style="flex:1;min-width:0">
-            <div class="sess-preview">${esc(s.preview || '(empty)')}</div>
+            <div class="sess-title${s.title ? '' : ' is-preview'}">${esc(s.title || s.preview || '(empty)')}</div>
             <div class="sess-meta"><span>${s.count} turn${s.count === 1 ? '' : 's'}</span><span>${fmtDate(s.last_ts)}</span></div>
           </div>
           <button class="sess-del" title="Delete" onclick="deleteSession('${s.session_id}',event)">×</button>

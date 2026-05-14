@@ -151,9 +151,9 @@ def test_chat_non_blocking_summary_patches_db_row(tmp_db, monkeypatch):
         req = main_module.ChatRequest(message="hi", session_id="bg1")
         resp = await main_module.chat(req)
         assert resp.response == "done"
-        assert len(main_module._background_tasks) == 1, (
-            "finalizer task should be registered and still running"
-        )
+        assert any(
+            "_finalize_summaries" in str(t.get_coro()) for t in main_module._background_tasks
+        ), "finalizer task should be registered and still running"
 
         # 2. DB row holds the raw content at this point.
         hist_before = db.get_history("bg1")
