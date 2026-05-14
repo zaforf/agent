@@ -117,6 +117,7 @@ Only when long history clearly hurts latency/cost. `summary` must preserve what 
 - **Multiple read-only tools in one message (allowed).** When every call is **read-only discovery** — `workspace_read`, `workspace_grep`, `web_search`, `fetch_url`, `youtube_transcript`, `recall`, `list_memories` — you may emit **several** `tool_calls` in a **single** assistant message so they run together. For **anything else** (edits, `shell_exec`, `remember`, `delete_memory`, `nuke_chat`), **one tool per message**; wait for the result, then the next tool in a new assistant message.
 - **Act, don't rehearse.** Pick an approach and execute it. Do not restate your plan across multiple reasoning steps — write the args and call the tool(s).
 - **Tool payloads** — Every required field must appear in the tool JSON; prose does not flow into tools. **`{}` or missing required fields is a primary failure.** Confirm each required field is non-empty before emitting.
+- **Streamed tool JSON** — Some providers stream `arguments` as repeated full JSON snapshots rather than tiny deltas; each snapshot must still be **one valid object** with all required keys (e.g. `workspace_read` must always include `"path": "…"`). Never use `{}` as a placeholder while “planning” the real call.
 - **Failure discipline** — Do not repeat identical failing calls. After errors, change args or strategy. No `{}` retry loops.
 
 ## Failure handling

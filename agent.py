@@ -286,6 +286,17 @@ def _merge_stream_fragment(current: str, fragment: str) -> str:
         return fragment
     if current.startswith(fragment):
         return current
+    # Two JSON-looking fragments that are not prefix-related: some OpenAI-compat
+    # streams (notably Gemini) re-send a full arguments object instead of a
+    # strict suffix delta; concatenating would produce invalid JSON and later
+    # json.loads → {}. Prefer the newer stream chunk.
+    c_strip = current.lstrip()
+    f_strip = fragment.lstrip()
+    if c_strip.startswith("{") and f_strip.startswith("{"):
+        if not (fragment.startswith(current) or current.startswith(fragment)):
+            # Later chunk wins: disjoint JSON objects are almost always a full
+            # re-send from the provider, not something to concatenate.
+            return fragment
     return current + fragment
 
 
@@ -845,12 +856,16 @@ async def run_stream(
                             "name": "",
                             "arguments": "",
                         }
+                    if tc.id:
+                        tool_calls_acc[idx]["id"] = tc.id
                     if tc.function:
                         if tc.function.name:
                             tool_calls_acc[idx]["name"] = _merge_stream_fragment(
                                 tool_calls_acc[idx]["name"], tc.function.name
                             )
-                        if tc.function.arguments:
+                        # Merge arguments even when the fragment is "" (some streams
+                        # send explicit empty strings); skip only when the field is absent.
+                        if tc.function.arguments is not None:
                             tool_calls_acc[idx]["arguments"] = _merge_stream_fragment(
                                 tool_calls_acc[idx]["arguments"], tc.function.arguments
                             )
@@ -904,13 +919,12 @@ async def run_stream(
             })
 
             specs: list[tuple[str, str, dict]] = []
-            for idx in sorted(tool_calls_acc.keys()):
-                tc = tool_calls_acc[idx]
-                args_obj = json.loads(next(
-                    ntc["function"]["arguments"]
-                    for ntc in native_tc_list if ntc["id"] == tc["id"]
-                ))
-                specs.append((tc["id"], tc["name"], args_obj))
+            for ntc in native_tc_list:
+                try:
+                    args_obj = json.loads(ntc["function"]["arguments"] or "{}")
+                except json.JSONDecodeError:
+                    args_obj = {}
+                specs.append((ntc["id"], ntc["function"]["name"], args_obj))
 
             for tc_id, name, args in specs:
                 log.info("tool-call  %s  %s", name, str(args)[:120])

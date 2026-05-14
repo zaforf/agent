@@ -51,3 +51,17 @@ def test_merge_open_webui_reported_pattern():
     """Regression shape from community reports: full name in consecutive chunks."""
     a = "my_server_search"
     assert agent._merge_stream_fragment(a, a) == a
+
+
+def test_merge_two_json_snapshots_prefers_later_fragment():
+    """Gemini-style streams may send two full JSON objects for arguments; concat is invalid."""
+    cur = '{"path":"wrong.md"}'
+    frag = '{"path":"DESIGN.md"}'
+    assert agent._merge_stream_fragment(cur, frag) == frag
+
+
+def test_merge_json_snapshots_disjoint_prefers_later_chunk():
+    """Disjoint JSON snapshots: later stream chunk replaces (provider re-send)."""
+    cur = '{"path":"DESIGN.md","version":2}'
+    frag = '{"path":"x"}'
+    assert agent._merge_stream_fragment(cur, frag) == frag
