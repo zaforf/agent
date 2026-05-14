@@ -277,7 +277,7 @@ There is **no** standalone `pyright-langserver` package on npm; `npx -y pyright-
 
 **Workspace root:** The language server’s `rootUri` is the shell’s current working directory (`get_shell_cwd()`), same path basis as `workspace_read` / `workspace_grep`. If the user `cd`s into a subproject, Pyright indexes that tree. The process is **restarted** when `get_shell_cwd()` changes (one session per cwd).
 
-**Security / output:** Definition and reference **targets outside** `WORKSPACE` (stdlib, site-packages) are not printed as raw host paths; the tools return a one-line note instead. Reference lists, workspace-symbol hits, and outline depth are **capped** (defaults: 96 / 120 / 400 rows, overridable via `LSP_MAX_REFERENCES`, `LSP_MAX_WORKSPACE_SYMBOLS`, `LSP_MAX_OUTLINE_LINES` — see module docstring) so Pyright payloads and single-tool blobs stay predictable; very large tool rows still flow through the usual §6.5 summarization when persisted.
+**Security / output:** Definition and reference **targets outside** `WORKSPACE` (stdlib, site-packages) are not printed as raw host paths; the tools return a one-line note instead. Reference lists, workspace-symbol hits, and outline depth are **capped** in code (96 / 120 / 400 rows) so Pyright payloads stay predictable; very large tool rows still flow through the usual §6.5 summarization when persisted.
 
 **Python-first:** Pyright is strongest for `.py` / `.pyi`. Other extensions are opened as `plaintext` for `didOpen`; results may be empty.
 

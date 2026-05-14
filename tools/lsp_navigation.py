@@ -11,15 +11,10 @@ Environment:
 
 - ``LSP_PYRIGHT_COMMAND`` — JSON array of argv tokens for the server process
   (default includes ``--package=pyright`` so npx resolves the correct binary).
-- ``LSP_MAX_REFERENCES`` — max ``lsp_find_references`` rows (default **96**, max 500).
-- ``LSP_MAX_WORKSPACE_SYMBOLS`` — max ``lsp_workspace_symbols`` rows (default **120**, max 500).
-- ``LSP_MAX_OUTLINE_LINES`` — max ``lsp_outline`` lines (default **400**, max 2000).
 
-Outputs are capped (references, outline, workspace-symbol rows). Defaults favor
-**latency and signal-to-noise** (huge reference dumps are rarely actionable in one
-step) and keep single-tool payloads predictable; raise via ``LSP_MAX_*`` env vars
-if your provider context is large. Very large results still trigger history
-summarization past the usual 8k threshold (§6.5).
+Outputs are capped (references, outline, workspace-symbol rows) with fixed
+limits in-module — enough for typical navigation without huge Pyright payloads;
+very large tool rows still flow through §6.5 summarization when persisted.
 """
 from __future__ import annotations
 
@@ -78,33 +73,10 @@ def _symbol_kind_name(kind: Any) -> str:
     return _SYMBOL_KIND_NAMES.get(k, f"Kind({k})")
 
 
-def _env_int(name: str, default: int, *, min_v: int = 1, max_v: int) -> int:
-    """Parse optional positive int from env; clamp to [min_v, max_v]."""
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        v = int(raw)
-    except ValueError:
-        log.warning("lsp: invalid int for %s=%r — using default %s", name, raw, default)
-        return default
-    if v < min_v:
-        return min_v
-    return min(v, max_v)
-
-
-def _cap_references() -> int:
-    """Max reference lines (tunable; balances breadth vs noise and Pyright payload size)."""
-    return _env_int("LSP_MAX_REFERENCES", 96, min_v=8, max_v=500)
-
-
-def _cap_workspace_symbols() -> int:
-    return _env_int("LSP_MAX_WORKSPACE_SYMBOLS", 120, min_v=8, max_v=500)
-
-
-def _cap_outline_lines() -> int:
-    """Max outline lines (deep trees can be huge)."""
-    return _env_int("LSP_MAX_OUTLINE_LINES", 400, min_v=40, max_v=2000)
+# Output caps (tweak here if needed — keep bounded for latency vs huge LSP trees).
+_MAX_REFERENCES: int = 96
+_MAX_WORKSPACE_SYMBOLS: int = 120
+_MAX_OUTLINE_LINES: int = 400
 
 
 # Default: npx runs the ``pyright-langserver`` binary from the ``pyright`` npm package
@@ -487,7 +459,6 @@ def lsp_find_references(path: str, line: int, column: int = 1, include_declarati
 
     Results are capped and paths are restricted to the agent workspace mount.
     """
-    cap = _cap_references()
     try:
         s = _get_session()
         result = s.references(path.strip(), int(line), int(column), include_declaration)
@@ -500,11 +471,11 @@ def lsp_find_references(path: str, line: int, column: int = 1, include_declarati
             ws_locs.append((uri, loc))
     if not ws_locs:
         return "No in-workspace references found."
-    lines = [f"**References** (showing up to {cap}, workspace-only)"]
-    for uri, loc in ws_locs[:cap]:
+    lines = [f"**References** (showing up to {_MAX_REFERENCES}, workspace-only)"]
+    for uri, loc in ws_locs[:_MAX_REFERENCES]:
         lines.append(_format_location_block(uri, loc))
-    if len(ws_locs) > cap:
-        lines.append(f"(… {len(ws_locs) - cap} more omitted)")
+    if len(ws_locs) > _MAX_REFERENCES:
+        lines.append(f"(… {len(ws_locs) - _MAX_REFERENCES} more omitted)")
     return "\n".join(lines)
 
 
@@ -520,13 +491,12 @@ def lsp_outline(path: str) -> str:
     if not isinstance(result, list):
         return f"Unexpected documentSymbol shape: {type(result).__name__}"
     rel = path.strip()
-    cap = _cap_outline_lines()
-    lines = _flatten_document_symbols(result, rel, cap)
+    lines = _flatten_document_symbols(result, rel, _MAX_OUTLINE_LINES)
     if not lines:
         return "No symbols parsed from Pyright response."
-    hdr = f"**Outline** for `{path.strip()}` (cap {cap} lines)\n"
+    hdr = f"**Outline** for `{path.strip()}` (cap {_MAX_OUTLINE_LINES} lines)\n"
     body = "\n".join(lines)
-    if len(lines) >= cap:
+    if len(lines) >= _MAX_OUTLINE_LINES:
         body += "\n(… outline truncated — use workspace_read on a narrow range if needed)"
     return hdr + body
 
@@ -539,7 +509,6 @@ def lsp_workspace_symbols(query: str) -> str:
     q = (query or "").strip()
     if len(q) < 2:
         return "Error: query must be at least 2 characters."
-    cap = _cap_workspace_symbols()
     try:
         s = _get_session()
         result = s.workspace_symbol(q)
@@ -547,7 +516,7 @@ def lsp_workspace_symbols(query: str) -> str:
         return f"Error in lsp_workspace_symbols: {e}"
     if not result:
         return f"No workspace symbols matching {q!r}."
-    lines = [f"**Workspace symbols** matching {q!r} (up to {cap}, workspace-only)"]
+    lines = [f"**Workspace symbols** matching {q!r} (up to {_MAX_WORKSPACE_SYMBOLS}, workspace-only)"]
     n = 0
     for item in result:
         if not isinstance(item, dict):
@@ -561,7 +530,7 @@ def lsp_workspace_symbols(query: str) -> str:
         klabel = _symbol_kind_name(kind)
         lines.append(_format_location_block(uri, loc) + f" — `{name}` ({klabel})")
         n += 1
-        if n >= cap:
+        if n >= _MAX_WORKSPACE_SYMBOLS:
             break
     if n == 0:
         return f"No in-workspace symbols for {q!r} (matches may be in dependencies only)."
