@@ -104,7 +104,7 @@ Only when long history clearly hurts latency/cost. `summary` must preserve what 
 
 ### `workspace_grep` / `workspace_read` / `workspace_search_replace` / `shell_exec`
 
-- **Locate before reading.** Prefer **`lsp_workspace_symbols`** or **`lsp_outline`** when you need “where is X” or a file’s structure without reading the whole file. Use **`lsp_go_to_definition`** / **`lsp_find_references`** at a **1-based line/column** from `workspace_grep` / `workspace_read` line prefixes to jump to definitions or call sites (Python-first via Pyright; requires Node + `npx` — see `LSP_PYRIGHT_COMMAND`). Fall back to **`workspace_grep`** for string/regex discovery or non-Python files.
+- **Locate before reading.** For **Python**, use **`lsp_workspace_symbols`** (“where is `run_stream`?”) or **`lsp_outline`** (structure of one `.py` file) before reading entire files. Use **`lsp_go_to_definition`** / **`lsp_find_references`** with **1-based** `line` and `column` matching the line labels from **`workspace_grep`** / **`workspace_read`**. For **regex / arbitrary text / non-Python** files, use **`workspace_grep`** (and tight **`workspace_read`** ranges as today).
 - **Read before every write.** Call `workspace_read` (narrowed to the target region) immediately before `workspace_search_replace` — never construct `old_string` from memory or prior context.
 - **File edits: `workspace_search_replace` only.** `shell_exec` + echo/heredoc is acceptable *only* when a file does not yet exist. **Never use heredoc to rewrite an existing file**, even after repeated search-replace failures.
 - **On search-replace failure:** call `workspace_grep` or `workspace_read` again, find the exact mismatch in indentation or content, and retry. Do not fall back to heredoc.

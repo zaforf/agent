@@ -497,10 +497,9 @@ SCHEMAS: list[dict] = [
         "function": {
             "name": "lsp_go_to_definition",
             "description": (
-                "Pyright LSP: jump to where the symbol at (line, column) is defined. "
-                "Use after workspace_grep / workspace_read to land on a name. "
-                "Line and column are 1-based like grep/read output; default column=1 (start of line). "
-                "Python-first; requires Node+npx and the pyright npm package (see LSP_PYRIGHT_COMMAND)."
+                "Python: jump from a position in a file to where that name is defined. "
+                "Use 1-based line and column like `workspace_grep` / `workspace_read` line labels; "
+                "default column=1 (start of line). If nothing is found, move column onto the identifier."
             ),
             "parameters": {
                 "type": "object",
@@ -509,7 +508,7 @@ SCHEMAS: list[dict] = [
                     "line": {"type": "integer", "description": "1-based line number"},
                     "column": {
                         "type": "integer",
-                        "description": "1-based UTF-16 column (default 1 = line start)",
+                        "description": "1-based column on that line (default 1 = line start)",
                         "default": 1,
                     },
                 },
@@ -522,8 +521,8 @@ SCHEMAS: list[dict] = [
         "function": {
             "name": "lsp_find_references",
             "description": (
-                "Pyright LSP: list references to the symbol at (line, column) within the workspace. "
-                "1-based positions. Results capped; use a tight symbol location."
+                "Python: list references in the workspace to the symbol at (1-based line, column). "
+                "Results are capped; point at the identifier when possible."
             ),
             "parameters": {
                 "type": "object",
@@ -546,8 +545,8 @@ SCHEMAS: list[dict] = [
         "function": {
             "name": "lsp_outline",
             "description": (
-                "Pyright LSP: structured list of functions/classes/etc. in one file "
-                "(document symbols) without reading the entire file body."
+                "Python: list functions/classes/methods in one `.py` file with line numbers—"
+                "without reading the whole file."
             ),
             "parameters": {
                 "type": "object",
@@ -561,8 +560,8 @@ SCHEMAS: list[dict] = [
         "function": {
             "name": "lsp_workspace_symbols",
             "description": (
-                "Pyright LSP: search symbols across the indexed workspace (fuzzy-ish name query). "
-                "Good for 'where is X implemented' before opening files."
+                "Python: search symbols by name substring across the project (min 2 characters). "
+                "Use to find likely files before opening them."
             ),
             "parameters": {
                 "type": "object",
