@@ -4,7 +4,7 @@ Tool registry. To add a new tool:
   2. Import and register it here — that's it.
 """
 
-from tools import memory, nuke, shell, web, workspace_patch, youtube
+from tools import lsp_navigation, memory, nuke, shell, web, workspace_patch, youtube
 
 TOOL_SCHEMAS: list[dict] = [
     *memory.SCHEMAS,
@@ -12,6 +12,7 @@ TOOL_SCHEMAS: list[dict] = [
     *web.SCHEMAS,
     *shell.SCHEMAS,
     *workspace_patch.SCHEMAS,
+    *lsp_navigation.SCHEMAS,
     *youtube.SCHEMAS,
 ]
 
@@ -21,5 +22,6 @@ TOOL_FUNCTIONS: dict[str, callable] = {
     **web.FUNCTIONS,
     **shell.FUNCTIONS,
     **workspace_patch.FUNCTIONS,
+    **lsp_navigation.FUNCTIONS,
     **youtube.FUNCTIONS,
 }

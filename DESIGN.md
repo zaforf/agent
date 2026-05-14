@@ -71,7 +71,8 @@ Both `/chat` (non-streaming) and `/chat/stream` (SSE streaming) share the same l
 2. If the LLM response contains tool calls:
    a. Append the assistant message (with tool_calls)
    b. Execute tool calls: **in parallel** when every call is read-only and in the
-      server's safe set (`workspace_read`, `workspace_grep`, `web_search`,
+      server's safe set (`workspace_read`, `workspace_grep`, `lsp_go_to_definition`,
+      `lsp_find_references`, `lsp_outline`, `lsp_workspace_symbols`, `web_search`,
       `fetch_url`, `youtube_transcript`, `recall`, `list_memories`); otherwise
       **sequentially** in model order. (`AGENT_PARALLEL_TOOL_CALLS` gates both
       the API `parallel_tool_calls` hint and server-side concurrency.)
@@ -124,7 +125,7 @@ See §11 for the repaired streaming edge case and the summarizer model choice, p
 
 Tools are registered in `tools/__init__.py`. Adding a new tool requires only creating a module with `SCHEMAS` and `FUNCTIONS` dicts and importing it there.
 
-All tools are called synchronously. `fetch_url`, `web_search`, `youtube_transcript`, and the Mem0 tools (`remember`, `recall`, `list_memories`, `delete_memory`) are classified as blocking sync tools (`_BLOCKING_SYNC_TOOLS`) and are run in a thread via `asyncio.to_thread()` to avoid blocking the event loop.
+All tools are called synchronously. `fetch_url`, `web_search`, `youtube_transcript`, the Mem0 tools (`remember`, `recall`, `list_memories`, `delete_memory`), `shell_exec`, `workspace_search_replace`, and the Pyright LSP tools (`lsp_go_to_definition`, `lsp_find_references`, `lsp_outline`, `lsp_workspace_symbols`) are classified as blocking sync tools (`_BLOCKING_SYNC_TOOLS`) and are run in a thread via `asyncio.to_thread()` to avoid blocking the event loop.
 
 The model is instructed to use native API `tool_calls` only — no XML or fenced-code tool invocations.
 
@@ -263,6 +264,31 @@ If the summarizer fails, falls back to raw mode silently (logs a warning).
 - Appends a pagination note: `[… N more chars — call youtube_transcript with offset=M to continue]`
 
 Runs via `asyncio.to_thread` (`_BLOCKING_SYNC_TOOLS`) because the Supadata SDK uses `requests` synchronously.
+
+### 5.6 Pyright LSP navigation (`tools/lsp_navigation.py`)
+
+**Purpose:** Cursor-style **structured code navigation** for the agent workspace — go-to-definition, find references, file outline, and workspace symbol search — without reading whole files or chaining many blind greps.
+
+**Server:** **Pyright** over JSON-RPC stdio (`pyright-langserver` binary from the npm **`pyright`** package). Default command is a JSON argv array:
+
+`["npx","-y","--package=pyright","pyright-langserver","--stdio"]`
+
+There is **no** standalone `pyright-langserver` package on npm; `npx -y pyright-langserver` 404s. Override with **`LSP_PYRIGHT_COMMAND`** (JSON array of strings) if Pyright is installed elsewhere (e.g. a global `pyright-langserver` on `PATH`).
+
+**Workspace root:** The language server’s `rootUri` is the shell’s current working directory (`get_shell_cwd()`), same path basis as `workspace_read` / `workspace_grep`. If the user `cd`s into a subproject, Pyright indexes that tree. The process is **restarted** when `get_shell_cwd()` changes (one session per cwd).
+
+**Security / output:** Definition and reference **targets outside** `WORKSPACE` (stdlib, site-packages) are not printed as raw host paths; the tools return a one-line note instead. Reference lists and outlines are **capped** (order of tens to low hundreds of lines) so tool output stays bounded for the model and §6.5 summarization.
+
+**Python-first:** Pyright is strongest for `.py` / `.pyi`. Other extensions are opened as `plaintext` for `didOpen`; results may be empty.
+
+| Tool | Description |
+|---|---|
+| `lsp_go_to_definition(path, line, column=1)` | `textDocument/definition` at a **1-based** line/column (grep / `workspace_read` style). Default `column=1` selects line start. |
+| `lsp_find_references(path, line, column=1, include_declaration=True)` | `textDocument/references` within the workspace (capped). |
+| `lsp_outline(path)` | `textDocument/documentSymbol` — structured outline (names, kinds, line numbers) without reading the full file. |
+| `lsp_workspace_symbols(query)` | `workspace/symbol` — fuzzy-ish name search across indexed workspace (min query length 2; capped). |
+
+**Concurrency:** These tools are in `_BLOCKING_SYNC_TOOLS` and `_PARALLEL_SAFE_TOOLS` — they may appear in the same parallel read-only batch as `workspace_read` / `workspace_grep` / web tools when `AGENT_PARALLEL_TOOL_CALLS` is true. The implementation serializes JSON-RPC on a **single** Pyright subprocess per cwd (parallel calls may queue on a lock — acceptable).
 
 ---
 
@@ -500,7 +526,7 @@ The prompt is organized into compact sections so the file stays scannable. Headi
 - **Response style** — visible outside thinking blocks; Markdown + KaTeX (**`\(...\)` / `\[...\]` only for math**; **`$` in prose OK**; no `$`/`$$` math); native `tool_calls` only; matrix row breaks `\\`.
 - **System context** — multi-turn loop (30 tool iterations), streaming UI, repair if no visible text.
 - **Context, turns, and tool results** — turn boundary; raw tool I/O for all model calls in the same turn; `[history summary of …]` only after the turn; summaries faithful/sparse; pagination hints.
-- **Tool strategy** — subsections: **`fetch_url`** (128k vs 8k, prompt vs raw), **`web_search`**, **`youtube_transcript`** (same prompt/raw pattern as fetch), **memory** (bias toward `recall`; query craft; `remember` atomicity + teaching cluster summaries + ask-when-thin; cleanup), **`nuke_chat`**, **`workspace_grep` / `workspace_read` / `workspace_search_replace`** + **`shell_exec`**, then **sequencing** (multiple **read-only** tool_calls per assistant message allowed; writes/shell one at a time) and **payloads** (intent–action gap, mirror/fill/buffer, failure discipline). Generated `agent._tool_docs()` appends a short **Tool usage** block (native calls, parallel read-only batches, workspace_search_replace narrow edits, empty-args discipline).
+- **Tool strategy** — subsections: **`fetch_url`** (128k vs 8k, prompt vs raw), **`web_search`**, **`youtube_transcript`** (same prompt/raw pattern as fetch), **memory** (bias toward `recall`; query craft; `remember` atomicity + teaching cluster summaries + ask-when-thin; cleanup), **`nuke_chat`**, **Pyright LSP** (`lsp_go_to_definition`, `lsp_find_references`, `lsp_outline`, `lsp_workspace_symbols` — Python-first; §5.6), **`workspace_grep` / `workspace_read` / `workspace_search_replace`** + **`shell_exec`**, then **sequencing** (multiple **read-only** tool_calls per assistant message allowed; writes/shell one at a time) and **payloads** (intent–action gap, mirror/fill/buffer, failure discipline). Generated `agent._tool_docs()` appends a short **Tool usage** block (native calls, parallel read-only batches, workspace_search_replace narrow edits, empty-args discipline).
 - **Failure handling** — tool errors as data; don't loop blindly.
 
 ---

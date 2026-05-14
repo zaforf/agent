@@ -207,6 +207,10 @@ _BLOCKING_SYNC_TOOLS = frozenset({
     "delete_memory",
     "shell_exec",
     "workspace_search_replace",
+    "lsp_go_to_definition",
+    "lsp_find_references",
+    "lsp_outline",
+    "lsp_workspace_symbols",
 })
 
 # Tools that never mutate workspace files, shell session, or destructive memory
@@ -220,6 +224,10 @@ _PARALLEL_SAFE_TOOLS: frozenset[str] = frozenset({
     "youtube_transcript",
     "recall",
     "list_memories",
+    "lsp_go_to_definition",
+    "lsp_find_references",
+    "lsp_outline",
+    "lsp_workspace_symbols",
 })
 
 
@@ -550,7 +558,8 @@ def _tool_docs() -> str:
         "## Tool usage\n"
         "Use native API function/tool_calls only (no XML or fenced tool syntax).\n"
         "You may emit multiple tool_calls in one assistant message only when every call is "
-        "read-only discovery (e.g. several workspace_read / workspace_grep / web_search / fetch_url / "
+        "read-only discovery (e.g. several workspace_read / workspace_grep / lsp_outline / "
+        "lsp_go_to_definition / lsp_find_references / lsp_workspace_symbols / web_search / fetch_url / "
         "youtube_transcript / recall / list_memories together). Prefer that batch when the calls are "
         "independent (none needs another tool's return to choose its arguments); if you must read A "
         "before you can decide B's args, call A first, then batch the rest. For writes, shell session, or "
