@@ -34,6 +34,25 @@ def test_snap_identifier_column_1based():
     assert col2 == 13
 
 
+def test_snap_column_1_async_def_line():
+    line = "    async def _run_tool_async(self) -> None:"
+    c, n = lnav._snap_identifier_column_1based(line, 1, None)
+    assert n == "_run_tool_async"
+    assert line[c - 1] == "_"
+
+
+def test_snap_def_line_column_1_targets_name_not_async():
+    line = "def foo() -> None:"
+    c, n = lnav._snap_identifier_column_1based(line, 1, None)
+    assert n == "foo"
+
+
+def test_snap_if_line_prefers_non_keyword():
+    line = "if bar:"
+    c, n = lnav._snap_identifier_column_1based(line, 1, None)
+    assert n == "bar"
+
+
 def test_safe_rel_path_under_workspace(monkeypatch, tmp_path):
     monkeypatch.setattr(lnav, "WORKSPACE", tmp_path)
     f = tmp_path / "a" / "b.py"
@@ -147,7 +166,7 @@ def test_lsp_go_to_definition_mocked(monkeypatch):
     assert "Definitions" in out
     assert "b.py" in out
     assert seen["rel"] == "b.py"
-    assert seen["pos"] == {"line": 0, "character": 0}
+    assert seen["pos"] == {"line": 0, "character": 4}
     assert "```text" in out
 
 

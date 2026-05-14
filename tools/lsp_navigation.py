@@ -19,6 +19,7 @@ very large tool rows still flow through §6.5 summarization when persisted.
 from __future__ import annotations
 
 import json
+import keyword
 import logging
 import os
 import re
@@ -63,6 +64,27 @@ _SYMBOL_KIND_NAMES: dict[int, str] = {
     25: "Operator",
     26: "TypeParameter",
 }
+
+# Identifiers Pyright won't navigate meaningfully as a "symbol" for def/refs.
+_PY_SNAP_SKIP: frozenset[str] = frozenset(
+    list(keyword.kwlist) + list(getattr(keyword, "softkwlist", ()))
+) | {"True", "False", "None"}
+
+# ``documentSymbol`` kinds to omit from outline (locals / literals — too noisy).
+_OUTLINE_OMIT_KINDS: frozenset[int] = frozenset(
+    {
+        13,  # Variable
+        14,  # Constant
+        15,  # String
+        16,  # Number
+        17,  # Boolean
+        20,  # Key
+        21,  # Null
+    }
+)
+
+_ANCHOR_DEF_NAME = re.compile(r"^[ \t]*(?:async[ \t]+)?def[ \t]+([A-Za-z_]\w*)\b")
+_ANCHOR_CLASS_NAME = re.compile(r"^[ \t]*class[ \t]+([A-Za-z_]\w*)\b")
 
 
 def _symbol_kind_name(kind: Any) -> str:
@@ -177,12 +199,24 @@ def _identifier_spans(line: str) -> list[tuple[int, int, str]]:
     return [(m.start(), m.end(), m.group(0)) for m in re.finditer(r"\b[A-Za-z_]\w*\b", code)]
 
 
+def _def_or_class_name_span(line: str) -> tuple[int, int, str] | None:
+    """If this line is a ``def`` / ``async def`` / ``class``, return ``(start, end, name)`` for the defined name."""
+    m = _ANCHOR_DEF_NAME.match(line)
+    if m:
+        return (m.start(1), m.end(1), m.group(1))
+    m = _ANCHOR_CLASS_NAME.match(line)
+    if m:
+        return (m.start(1), m.end(1), m.group(1))
+    return None
+
+
 def _snap_identifier_column_1based(line: str, col_1based: int, symbol: str | None) -> tuple[int, str | None]:
     """Pick a 1-based column at an identifier start; return ``(column, picked_name)``."""
     spans = _identifier_spans(line)
     if not spans:
         return col_1based, None
     idx0 = max(0, int(col_1based) - 1)
+    col1 = max(1, int(col_1based))
     sym = symbol.strip() if symbol and str(symbol).strip() else None
     if sym:
         exact = [s for s in spans if s[2] == sym]
@@ -194,10 +228,26 @@ def _snap_identifier_column_1based(line: str, col_1based: int, symbol: str | Non
         if len(exact) > 1:
             best = min(exact, key=lambda s: min(abs(idx0 - s[0]), abs(idx0 - (s[1] - 1))))
             return best[0] + 1, best[2]
+
+    anchor = _def_or_class_name_span(line)
+    if anchor is not None:
+        a0, a1, aname = anchor
+        # Line-start / indent clicks: jump to the defined name, not ``async``/``def``.
+        if col1 == 1 or idx0 < a0:
+            return a0 + 1, aname
+
     for s in spans:
-        if s[0] <= idx0 < s[1]:
+        if s[0] <= idx0 < s[1] and s[2] not in _PY_SNAP_SKIP:
             return s[0] + 1, s[2]
-    best = min(spans, key=lambda s: min(abs(idx0 - s[0]), abs(idx0 - (s[1] - 1))))
+
+    if anchor is not None:
+        a0, a1, aname = anchor
+        if idx0 < a1:
+            return a0 + 1, aname
+
+    non_kw = [s for s in spans if s[2] not in _PY_SNAP_SKIP]
+    pool = non_kw if non_kw else spans
+    best = min(pool, key=lambda s: min(abs(idx0 - s[0]), abs(idx0 - (s[1] - 1))))
     return best[0] + 1, best[2]
 
 
@@ -551,6 +601,10 @@ def _flatten_document_symbols(
             continue
         name = node.get("name", "?")
         kind = node.get("kind", "")
+        try:
+            kind_i = int(kind)
+        except (TypeError, ValueError):
+            kind_i = -1
         detail = node.get("detail") or ""
         rng = node.get("selectionRange") or node.get("range") or {}
         st = (rng.get("start") or {})
@@ -558,7 +612,9 @@ def _flatten_document_symbols(
         pad = "  " * depth
         klabel = _symbol_kind_name(kind)
         sig = _outline_sig_suffix(rel_path, line, klabel, detail, file_lines)
-        out_lines.append(f"{pad}{klabel}: {name} @ `{rel_path}`:{line}{sig}")
+        emit = kind_i not in _OUTLINE_OMIT_KINDS
+        if emit:
+            out_lines.append(f"{pad}{klabel}: {name} @ `{rel_path}`:{line}{sig}")
         if len(out_lines) >= max_lines:
             break
         children = node.get("children")
@@ -571,8 +627,9 @@ def lsp_go_to_definition(path: str, line: int, column: int = 1, symbol: str | No
     """Jump to the definition of the symbol at (line, column) in a workspace file.
 
     ``line`` and ``column`` are **1-based**, matching ``workspace_grep`` /
-    ``workspace_read`` line prefixes. Default ``column=1`` selects the start
-    of the line (works when the cursor is on the ``def`` / ``class`` keyword).
+    ``workspace_read`` line prefixes. On ``def`` / ``async def`` / ``class`` lines,
+    ``column=1`` snaps to the **defined name** (not ``async``/``def``); elsewhere
+    the column snaps to a sensible identifier (keywords avoided when possible).
 
     **Python-first:** powered by Pyright. Non-Python files may return no results.
     """
@@ -720,10 +777,10 @@ SCHEMAS: list[dict] = [
             "name": "lsp_go_to_definition",
             "description": (
                 "Python: jump from a position in a file to where that name is defined. "
-                "Use 1-based line and column like `workspace_grep` / `workspace_read` line labels; "
-                "column 1 snaps to the nearest identifier on the line. Optional `symbol` picks "
-                "that name when several identifiers share the line. Returns a short source snippet "
-                "for in-workspace definitions."
+                "Use 1-based line and column like `workspace_grep` / `workspace_read` line labels. "
+                "On `def` / `async def` / `class` lines, `column=1` targets the defined name; "
+                "otherwise the tool snaps to a nearby non-keyword identifier. Optional `symbol` "
+                "disambiguates busy lines. Returns a short source snippet for in-workspace definitions."
             ),
             "parameters": {
                 "type": "object",
@@ -750,8 +807,8 @@ SCHEMAS: list[dict] = [
             "name": "lsp_find_references",
             "description": (
                 "Python: list references in the workspace to the symbol at (1-based line, column). "
-                "Column 1 snaps to the nearest identifier; optional `symbol` disambiguates. "
-                "Results are capped."
+                "Same snapping rules as `lsp_go_to_definition` (`def`/`class` line column 1 → defined name; "
+                "optional `symbol`). Results are capped."
             ),
             "parameters": {
                 "type": "object",
@@ -778,8 +835,9 @@ SCHEMAS: list[dict] = [
         "function": {
             "name": "lsp_outline",
             "description": (
-                "Python: list functions/classes/methods in one `.py` file with line numbers—"
-                "without reading the whole file."
+                "Python: structured outline (classes, functions, methods, fields, etc.) for one `.py` "
+                "file with line numbers—without reading the whole file. Local variables and literal "
+                "symbol kinds are omitted to reduce noise."
             ),
             "parameters": {
                 "type": "object",
