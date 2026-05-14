@@ -179,7 +179,7 @@ def _recent_turns_text(session_id: str, n: int = 5) -> str:
     parts = []
     for m in messages[-(n * 2):]:
         role = "User" if m["role"] == "user" else "Assistant"
-        parts.append(f"{role}: {(m.get('content') or '')[:300]}")
+        parts.append(f"{role}: {(m.get('content') or '')[:400]}")
     return "\n".join(parts)
 
 
@@ -203,7 +203,11 @@ async def _maybe_update_title(session_id: str, user_text: str) -> None:
         existing   = db.get_session_title(session_id)
 
         if existing is None:
-            prompt = f"Title this conversation: {user_text[:400]}"
+            if turn_count > 1:
+                recent = _recent_turns_text(session_id, n=5)
+                prompt = f"Title this conversation based on the following exchange:\n{recent}"
+            else:
+                prompt = f"Title this conversation: {user_text[:400]}"
             title  = await asyncio.get_event_loop().run_in_executor(
                 None, summarize_gemma, _TITLE_SYSTEM, prompt, 20
             )
