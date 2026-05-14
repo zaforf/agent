@@ -1207,6 +1207,15 @@
   }
 
   async function switchSession(newSid) {
+    if (currentStreamController) {
+        currentStreamController.abort();
+        currentStreamController = null;
+    }
+    isStreaming = false;
+    sendBtn.textContent = 'Send';
+    sendBtn.classList.remove('stop-state');
+    _hideThinking();
+
     sid = newSid;
     localStorage.setItem('sid', sid);
     await loadHistory();
@@ -1325,6 +1334,7 @@
   }
 
   async function send() {
+    const streamSid = sid;
     const { text, attachments } = getInputContent();
     if ((!text && !attachments.length) || isStreaming) return;
     clearInput();
@@ -1413,6 +1423,7 @@
         sseBuf = lines.pop();   // keep incomplete line
 
         for (const line of lines) {
+          if (sid !== streamSid) break;
           if (!line.startsWith('data: ')) continue;
           let event;
           try { event = JSON.parse(line.slice(6)); }
