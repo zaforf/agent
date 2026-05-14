@@ -437,6 +437,11 @@ class _PyrightSession:
                     "rootUri": root_uri,
                     "capabilities": {
                         "workspace": {"symbol": {"dynamicRegistration": False}},
+                        "textDocument": {
+                            "documentSymbol": {
+                                "hierarchicalDocumentSymbolSupport": True,
+                            },
+                        },
                     },
                     "initializationOptions": {},
                 },
@@ -646,7 +651,13 @@ def _flatten_document_symbols(
         except (TypeError, ValueError):
             kind_i = -1
         detail = node.get("detail") or ""
-        rng = node.get("selectionRange") or node.get("range") or {}
+        # DocumentSymbol has top-level range/selectionRange; SymbolInformation has location.range
+        rng = (
+            node.get("selectionRange")
+            or node.get("range")
+            or (node.get("location") or {}).get("range")
+            or {}
+        )
         st = (rng.get("start") or {})
         line = int(st.get("line", 0)) + 1
         pad = "  " * depth
