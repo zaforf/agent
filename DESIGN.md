@@ -98,6 +98,15 @@ Both `/chat` (non-streaming) and `/chat/stream` (SSE streaming) share the same l
 
 The ordering guarantee that must never regress: `_apply_finished_summaries` must **not** run between step 1 and the next tool execution round — only at turn end (or from `main.py` after persist). The model must never receive a summary **instead of** raw text for a tool result on a `_call` that happens **before** the turn's final no-tools reply. Pinned by `test_raw_tool_content_preserved_even_when_summary_wins_race` and `test_multi_iteration_tools_prior_results_stay_raw_until_turn_end`.
 
+### 4.1.1 Post-edit verification (`workspace_search_replace`)
+
+When `workspace_search_replace` **succeeds** (result starts with `updated `) on a **`.py`** path under `WORKSPACE`, the harness **appends** extra text to the **same** tool result message (no extra model round):
+
+- **`ruff check <file>`** — when `AGENT_POST_EDIT_VERIFY` is true (default). The harness runs Ruff with **`--output-format=json`** (falling back to plain text if JSON is unavailable). Invokes `ruff` on `PATH` when present, otherwise **`python -m ruff`**. If **11 or more** diagnostics are returned, a **summary** block is prepended (counts grouped by rule code + message, e.g. many identical `F821` lines collapse to one line with an occurrence count). Each detail line is prefixed with **`[*]`** when Ruff attached an automatic **fix**; for those, the harness adds **`old_string` / `new_string` snippets** derived from the fix edit range and replacement text so the model can often apply `workspace_search_replace` without re-reading the file. Output is capped (~8k chars) so history summarization behavior stays predictable.
+- **Scoped `pytest`** — only when `AGENT_POST_EDIT_PYTEST` is true (default **false**). The server looks for `tests/test_<stem>.py` and `tests/<stem>_test.py` matching the edited file’s basename, **or** runs the touched file itself when it lives under `tests/`. Runs `python -m pytest -q --tb=line <paths…>` from the **repository root** (same cwd semantics as CI). This is intentionally conservative so routine edits do not launch the full suite unless opted in.
+
+Timeouts are bounded by `AGENT_POST_EDIT_VERIFY_TIMEOUT` (seconds, default 120). This is a **harness-side** check (Cursor-like “see diagnostics after save”); the model should still fix issues before declaring the task done.
+
 ### 4.2 Thinking blocks
 
 Models may emit reasoning inside `<thought>`, `<think>`, `<thinking>`, `<redacted_reasoning>`, or `<redacted_thinking>` blocks. These are stripped before the response is shown to the user or stored in history.
