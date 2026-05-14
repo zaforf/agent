@@ -88,9 +88,19 @@ async def _persist_stream_turn(state: _StreamTurnState) -> None:
 
     if (not state.was_cancelled) and state.full_response and state.turn_messages:
         history.extend(state.turn_messages)
-        row_id = db.append_turn(state.session_id, state.req_message, state.turn_messages)
-        _spawn_finalizer(state.pending, state.turn_messages, row_id)
-        _spawn_title_update(state.session_id, state.req_message)
+        # Update the pending turn created at the start of the stream
+        # We look for the most recent user message in this session that hasn't been 'closed' with turn_messages
+        with db._conn() as c:
+            row = c.execute(
+                "SELECT id FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+                (state.session_id,),
+            ).fetchone()
+            if row:
+                row_id = row["id"]
+                db.update_turn_messages(row_id, state.turn_messages)
+                _spawn_finalizer(state.pending, state.turn_messages, row_id)
+                _spawn_title_update(state.session_id, state.req_message)
+
 
 
 async def _run_stream_turn(
@@ -421,6 +431,9 @@ async def chat_stream(req: ChatRequest):
     # is running attaches to existing stream events instead of starting duplicate generation.
     state = _active_stream_turns.get(req.session_id)
     if state is None or state.completed:
+        # Persist the user message immediately to ensure durability before LLM begins.
+        db.create_pending_turn(req.session_id, req.message)
+        
         state = _StreamTurnState(req.session_id, req.message, display_files)
         state.task = asyncio.create_task(_run_stream_turn(state, user_content, history))
         _active_stream_turns[req.session_id] = state

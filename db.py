@@ -45,6 +45,18 @@ def init() -> None:
         """)
 
 
+def create_pending_turn(session_id: str, user_message: str) -> int:
+    """Insert a user message into the database immediately to ensure durability
+    before the LLM turn begins. turn_messages is left empty until the turn completes.
+    """
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO messages (session_id, role, content, turn_messages) VALUES (?, ?, ?, ?)",
+            (session_id, "user", user_message, None),
+        )
+        return cur.lastrowid
+
+
 def append_turn(session_id: str, user_message: str, turn_messages: list[dict]) -> int:
     """Store a complete turn as a single row. Returns the inserted row ID.
 

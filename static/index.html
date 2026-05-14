@@ -1162,6 +1162,12 @@
       }
       if (!data.messages.length) {
         feed.innerHTML = '<div class="empty-hint">New session — say something.</div>';
+      } else {
+        // If the last message is from the user, the assistant is still thinking.
+        const lastMsg = data.messages[data.messages.length - 1];
+        if (lastMsg.role === 'user') {
+          _showThinking('waiting for full response...');
+        }
       }
       await scrollToLastAssistantAfterLayout();
       highlightSession();
@@ -1207,6 +1213,11 @@
   }
 
   async function switchSession(newSid) {
+    // Kill active SSE connection to prevent "bleeding" into the new session
+    if (currentStreamController) {
+      currentStreamController.abort();
+      currentStreamController = null;
+    }
     sid = newSid;
     localStorage.setItem('sid', sid);
     await loadHistory();
