@@ -70,7 +70,11 @@ Both `/chat` (non-streaming) and `/chat/stream` (SSE streaming) share the same l
 1. Call LLM with current messages (system prompt + full history + user message + any tool results so far)
 2. If the LLM response contains tool calls:
    a. Append the assistant message (with tool_calls)
-   b. Execute each tool call sequentially
+   b. Execute tool calls: **in parallel** when every call is read-only and in the
+      server's safe set (`workspace_read`, `workspace_grep`, `web_search`,
+      `fetch_url`, `youtube_transcript`, `recall`, `list_memories`); otherwise
+      **sequentially** in model order. (`AGENT_PARALLEL_TOOL_CALLS` gates both
+      the API `parallel_tool_calls` hint and server-side concurrency.)
    c. Append tool results to messages (with full content)
    d. If a tool result exceeds 8,000 chars, start a background summarization task
        (does NOT block — runs concurrently during later LLM calls in this turn)
@@ -82,6 +86,8 @@ Both `/chat` (non-streaming) and `/chat/stream` (SSE streaming) share the same l
    c. Return/emit the final response
 4. If max tool iterations exceeded: resolve finished summaries, then return error
 ```
+
+**Streaming tool-call accumulation (`run_stream`):** Some OpenAI-compatible providers (notably Gemini) may reuse the same per-chunk `index` while streaming several different tools in parallel. The server **splits** consecutive distinct **registered** tool names into separate slots and routes `function.arguments` deltas to the matching `tool_call_id` when present, otherwise to the same-index slot whose accumulated arguments are not yet valid JSON — avoiding concatenated names like `workspace_readworkspace_grep` and merged argument blobs across tools.
 
 **Critical invariant (precise):** For each tool-result message, **every** LLM call in the **same user turn** that runs **after** that message was appended sees the **full, unsummarized** text. In-place summary swaps run **only** when the turn is finishing (no more tool rounds in step 3, or step 4) — **not** between tool iterations. Therefore:
 
@@ -481,7 +487,7 @@ The system prompt is stored in `data/system_prompt.md` and read on every LLM cal
 
 1. `Today's date: {weekday} YYYY-MM-DD` — prepended at request time so the model has a concrete present to reason against its January 2025 training cutoff. This is the structural anchor that makes the Trust & calibration section actually bind: without a known "today", post-cutoff stays abstract and the model's RLHF-trained reflex to disclaim recent info as possible hallucination tends to fire even on tool-grounded data.
 2. The contents of `data/system_prompt.md` — the editable behavioral spec.
-3. A compact **Tool usage** block from `agent._tool_docs()` (native `tool_calls`, one tool per message, narrow `workspace_search_replace`, empty-args discipline). Tool **schemas** are still passed separately via `TOOL_SCHEMAS` on the API; the markdown file does not duplicate full schema text.
+3. A compact **Tool usage** block from `agent._tool_docs()` (native `tool_calls`, **parallel read-only batches** when every call is discovery, one-at-a-time for writes/shell/memory mutations, narrow `workspace_search_replace`, empty-args discipline). Tool **schemas** are still passed separately via `TOOL_SCHEMAS` on the API; the markdown file does not duplicate full schema text.
 
 ### 10.1 Current behavioral directives
 
@@ -494,7 +500,7 @@ The prompt is organized into compact sections so the file stays scannable. Headi
 - **Response style** — visible outside thinking blocks; Markdown + KaTeX (**`\(...\)` / `\[...\]` only for math**; **`$` in prose OK**; no `$`/`$$` math); native `tool_calls` only; matrix row breaks `\\`.
 - **System context** — multi-turn loop (30 tool iterations), streaming UI, repair if no visible text.
 - **Context, turns, and tool results** — turn boundary; raw tool I/O for all model calls in the same turn; `[history summary of …]` only after the turn; summaries faithful/sparse; pagination hints.
-- **Tool strategy** — subsections: **`fetch_url`** (128k vs 8k, prompt vs raw), **`web_search`**, **`youtube_transcript`** (same prompt/raw pattern as fetch), **memory** (bias toward `recall`; query craft; `remember` atomicity + teaching cluster summaries + ask-when-thin; cleanup), **`nuke_chat`**, **`workspace_search_replace`** + **`shell_exec`**, then **sequencing** (one tool per message) and **payloads** (intent–action gap, mirror/fill/buffer, failure discipline). Generated `agent._tool_docs()` appends a short **Tool usage** block (native calls, one per message, workspace_search_replace narrow edits, empty-args discipline).
+- **Tool strategy** — subsections: **`fetch_url`** (128k vs 8k, prompt vs raw), **`web_search`**, **`youtube_transcript`** (same prompt/raw pattern as fetch), **memory** (bias toward `recall`; query craft; `remember` atomicity + teaching cluster summaries + ask-when-thin; cleanup), **`nuke_chat`**, **`workspace_grep` / `workspace_read` / `workspace_search_replace`** + **`shell_exec`**, then **sequencing** (multiple **read-only** tool_calls per assistant message allowed; writes/shell one at a time) and **payloads** (intent–action gap, mirror/fill/buffer, failure discipline). Generated `agent._tool_docs()` appends a short **Tool usage** block (native calls, parallel read-only batches, workspace_search_replace narrow edits, empty-args discipline).
 - **Failure handling** — tool errors as data; don't loop blindly.
 
 ---
