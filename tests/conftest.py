@@ -209,3 +209,13 @@ def providers(monkeypatch):
     def _install(chains, names=None):
         return install_providers(monkeypatch, chains, names=names)
     return _install
+
+
+@pytest.fixture(autouse=True)
+def _stub_title_summarizer(monkeypatch):
+    """Prevent session-title generation from making real Gemini API calls in unit tests."""
+    try:
+        import main as _main
+        monkeypatch.setattr(_main, "summarize_gemma", lambda *a, **kw: "Stub Title")
+    except Exception:
+        pass
