@@ -312,19 +312,19 @@ def _outline_sig_suffix(
     detail: str,
     file_lines: list[str] | None,
 ) -> str:
+    # For functions/methods/constructors always show the actual source line.
+    # Pyright's detail field for these kinds can contain misleading content
+    # (e.g. the module's first import) so we read the file directly instead.
+    if kind_label in ("Function", "Method", "Constructor"):
+        if file_lines and 1 <= line_1 <= len(file_lines):
+            raw = file_lines[line_1 - 1].rstrip()
+            if raw:
+                if len(raw) > 160:
+                    raw = raw[:157] + "..."
+                return f" — `{raw}`"
+        return ""
     d = (detail or "").strip()
-    if d:
-        return f" — {d}"
-    if kind_label not in ("Function", "Method", "Constructor") or not file_lines:
-        return ""
-    if line_1 < 1 or line_1 > len(file_lines):
-        return ""
-    raw = file_lines[line_1 - 1].rstrip()
-    if not raw:
-        return ""
-    if len(raw) > 160:
-        raw = raw[:157] + "..."
-    return f" — `{raw}`"
+    return f" — {d}" if d else ""
 
 
 class _PyrightJsonRpc:
@@ -442,12 +442,44 @@ class _PyrightSession:
                 },
             )
             self.rpc.notify("initialized", {})
+            self._warm_workspace()
         except Exception:
             try:
                 self._proc.kill()
             except Exception:
                 pass
             raise
+
+    _WARM_SKIP_DIRS: frozenset[str] = frozenset({
+        ".venv", "venv", "env", ".env",
+        "node_modules", "__pycache__", ".git",
+        "site-packages", "dist-packages",
+    })
+
+    def _warm_workspace(self) -> None:
+        """Send didOpen for all project .py files so workspace/symbol has a full index.
+
+        Pyright only returns workspace/symbol results for files it has analysed.
+        Sending didOpen notifications (non-blocking) queues them for analysis before
+        any workspace/symbol request arrives, so the index is populated in time.
+        """
+        try:
+            py_files: list[Path] = []
+            for f in self.root.rglob("*.py"):
+                if any(part in self._WARM_SKIP_DIRS for part in f.parts):
+                    continue
+                py_files.append(f)
+                if len(py_files) >= 300:
+                    break
+            for f in sorted(py_files):
+                try:
+                    rel = str(f.resolve().relative_to(self.root))
+                    self.did_open(rel)
+                except Exception:
+                    pass
+            log.info("lsp: warmed workspace with %d .py files", len(py_files))
+        except Exception as e:
+            log.warning("lsp: workspace warm-up failed: %s", e)
 
     def shutdown(self) -> None:
         try:
@@ -509,6 +541,14 @@ class _PyrightSession:
 
     def workspace_symbol(self, query: str) -> Any:
         return self.rpc.request("workspace/symbol", {"query": query})
+
+    def hover(self, rel: str, position: dict[str, int]) -> Any:
+        self.did_open(rel)
+        uri = self._file_uri(rel)
+        return self.rpc.request(
+            "textDocument/hover",
+            {"textDocument": {"uri": uri}, "position": position},
+        )
 
 
 _SESSION_LOCK = threading.Lock()
@@ -724,10 +764,50 @@ def lsp_outline(path: str) -> str:
     return hdr + body
 
 
+_ID_RE = re.compile(r"^[A-Za-z_]\w*$")
+_WARM_SKIP_DIRS_SET: frozenset[str] = frozenset({
+    ".venv", "venv", "env", ".env",
+    "node_modules", "__pycache__", ".git",
+    "site-packages", "dist-packages",
+})
+
+
+def _grep_defs_fallback(query: str) -> list[tuple[str, str, int]]:
+    """Pure-Python grep for ``def <query>`` / ``class <query>`` across workspace .py files.
+
+    Returns ``[(kind, rel_path, line_1)]``. Used when Pyright's workspace/symbol
+    index hasn't been built yet (e.g. first call before analysis completes).
+    """
+    pat = re.compile(
+        rf"^\s*(?:async\s+)?def\s+({re.escape(query)})\s*[:(]"
+        rf"|^\s*class\s+({re.escape(query)})\s*[:(]"
+    )
+    results: list[tuple[str, str, int]] = []
+    try:
+        root = WORKSPACE.resolve()
+        for f in sorted(root.rglob("*.py")):
+            if any(part in _WARM_SKIP_DIRS_SET for part in f.parts):
+                continue
+            try:
+                rel = str(f.resolve().relative_to(root))
+                lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+            except (OSError, ValueError):
+                continue
+            for i, line in enumerate(lines):
+                m = pat.match(line)
+                if m:
+                    kind = "Class" if m.group(2) else "Function"
+                    results.append((kind, rel, i + 1))
+    except Exception:
+        pass
+    return results
+
+
 def lsp_workspace_symbols(query: str) -> str:
     """Fuzzy / name query across the workspace (``workspace/symbol``).
 
     Prefer a concrete substring (e.g. ``Summarize``, ``run_stream``). Min length 2.
+    Falls back to a grep-based def/class search when the LSP index is not yet built.
     """
     q = (query or "").strip()
     if len(q) < 2:
@@ -737,10 +817,8 @@ def lsp_workspace_symbols(query: str) -> str:
         result = s.workspace_symbol(q)
     except Exception as e:
         return f"Error in lsp_workspace_symbols: {e}"
-    if not result:
-        return f"No workspace symbols matching {q!r}."
     buckets: defaultdict[str, list[tuple[str, str, str, dict[str, Any]]]] = defaultdict(list)
-    for item in result:
+    for item in result or []:
         if not isinstance(item, dict):
             continue
         loc = item.get("location") or {}
@@ -753,7 +831,15 @@ def lsp_workspace_symbols(query: str) -> str:
         klabel = _symbol_kind_name(kind)
         buckets[klabel].append((rel2, name, uri, loc))
     if not buckets:
-        return f"No in-workspace symbols for {q!r} (matches may be in dependencies only)."
+        # LSP index not ready yet (Pyright hasn't finished analysing) — grep fallback.
+        if _ID_RE.match(q):
+            hits = _grep_defs_fallback(q)
+            if hits:
+                lines = [f"**Workspace symbols** matching {q!r} (grep fallback — LSP index still warming)"]
+                for kind, rel2, line_1 in hits[:_MAX_WORKSPACE_SYMBOLS]:
+                    lines.append(f"  {kind}: `{rel2}`:{line_1} — `{q}`")
+                return "\n".join(lines)
+        return f"No workspace symbols matching {q!r}."
     lines = [f"**Workspace symbols** matching {q!r} (up to {_MAX_WORKSPACE_SYMBOLS}, grouped by kind)"]
     emitted = 0
     ordered = [k for k in _WORKSPACE_SYMBOL_KIND_ORDER if k in buckets]
@@ -768,6 +854,47 @@ def lsp_workspace_symbols(query: str) -> str:
             lines.append(_format_location_block(uri, loc) + f" — `{name}`")
             emitted += 1
     return "\n".join(lines)
+
+
+def lsp_hover(path: str, line: int, column: int = 1, symbol: str | None = None) -> str:
+    """Return Pyright's type, signature, and documentation for the symbol at (line, column).
+
+    Same coordinate and snapping rules as ``lsp_go_to_definition``. Use this to
+    inspect a type, see a function signature with types, or read a docstring without
+    opening the defining file.
+    """
+    rel = path.strip()
+    try:
+        pos, snap_note = _lsp_position_for_anchor(rel, int(line), int(column), symbol)
+        s = _get_session()
+        result = s.hover(rel, pos)
+    except Exception as e:
+        return f"Error in lsp_hover: {e}"
+    if not result:
+        return "No hover information at that position."
+    contents = result.get("contents") or ""
+    if isinstance(contents, str):
+        text = contents
+    elif isinstance(contents, dict):
+        text = contents.get("value") or contents.get("text") or ""
+    elif isinstance(contents, list):
+        parts: list[str] = []
+        for c in contents:
+            if isinstance(c, str):
+                parts.append(c)
+            elif isinstance(c, dict):
+                parts.append(c.get("value") or c.get("text") or "")
+        text = "\n\n".join(p for p in parts if p)
+    else:
+        text = str(contents)
+    text = (text or "").strip()
+    if not text:
+        return "No hover information at that position."
+    out = [f"**Hover** `{rel}`:{line}"]
+    if snap_note:
+        out.append(snap_note)
+    out.append(text)
+    return "\n".join(out)
 
 
 SCHEMAS: list[dict] = [
@@ -852,7 +979,8 @@ SCHEMAS: list[dict] = [
             "name": "lsp_workspace_symbols",
             "description": (
                 "Python: search symbols by name substring across the project (min 2 characters). "
-                "Use to find likely files before opening them."
+                "Use to find likely files before opening them. Falls back to grep when the LSP "
+                "index is still warming up."
             ),
             "parameters": {
                 "type": "object",
@@ -863,6 +991,35 @@ SCHEMAS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "lsp_hover",
+            "description": (
+                "Python: return Pyright's type signature and documentation for the symbol at "
+                "(1-based line, column). Use to inspect a type, read a function signature with "
+                "full type annotations, or view a docstring — without opening the defining file. "
+                "Same coordinate and snapping rules as `lsp_go_to_definition`."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Workspace-relative file path"},
+                    "line": {"type": "integer", "description": "1-based line number"},
+                    "column": {
+                        "type": "integer",
+                        "description": "1-based column (default 1 = snaps to nearest identifier)",
+                        "default": 1,
+                    },
+                    "symbol": {
+                        "type": "string",
+                        "description": "Optional exact identifier on that line (disambiguation)",
+                    },
+                },
+                "required": ["path", "line"],
+            },
+        },
+    },
 ]
 
 FUNCTIONS: dict[str, callable] = {
@@ -870,4 +1027,5 @@ FUNCTIONS: dict[str, callable] = {
     "lsp_find_references": lsp_find_references,
     "lsp_outline": lsp_outline,
     "lsp_workspace_symbols": lsp_workspace_symbols,
+    "lsp_hover": lsp_hover,
 }

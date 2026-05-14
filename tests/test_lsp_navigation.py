@@ -170,6 +170,74 @@ def test_lsp_go_to_definition_mocked(monkeypatch):
     assert "```text" in out
 
 
+def test_lsp_hover_mocked(monkeypatch, tmp_path):
+    class FakeS:
+        def hover(self, rel, pos):
+            assert rel == "pkg/x.py"
+            return {"contents": {"kind": "markdown", "value": "```python\n(function) foo: () -> None\n```"}}
+
+    root = tmp_path
+    p = root / "pkg" / "x.py"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("def foo():\n    pass\n", encoding="utf-8")
+
+    monkeypatch.setattr(lnav, "WORKSPACE", root)
+    import tools.workspace_patch as wp
+    monkeypatch.setattr(wp, "WORKSPACE", root)
+    monkeypatch.setattr(wp, "get_shell_cwd", lambda: root)
+    monkeypatch.setattr(lnav, "_get_session", lambda: FakeS())
+
+    out = lnav.lsp_hover("pkg/x.py", line=1, column=1)
+    assert "Hover" in out
+    assert "foo" in out
+    assert "-> None" in out
+
+
+def test_lsp_workspace_symbols_grep_fallback(monkeypatch, tmp_path):
+    """When LSP returns nothing, grep fallback should find def/class definitions."""
+    class FakeS:
+        def workspace_symbol(self, query):
+            return []  # simulate empty LSP index
+
+    root = tmp_path
+    (root / "mymod.py").write_text("def _sanitize_history(h):\n    pass\n", encoding="utf-8")
+    monkeypatch.setattr(lnav, "WORKSPACE", root)
+    monkeypatch.setattr(lnav, "_WARM_SKIP_DIRS_SET", frozenset())
+    monkeypatch.setattr(lnav, "_get_session", lambda: FakeS())
+
+    out = lnav.lsp_workspace_symbols("_sanitize_history")
+    assert "_sanitize_history" in out
+    assert "mymod.py" in out
+    assert "grep fallback" in out
+
+
+def test_lsp_outline_ignores_detail_for_functions(monkeypatch, tmp_path):
+    """Pyright's detail field must be ignored for Function kind — use source line instead."""
+    root = tmp_path
+    p = root / "m.py"
+    p.write_text("import asyncio\n\nasync def my_func(x: int) -> str:\n    pass\n", encoding="utf-8")
+
+    class FakeS:
+        def document_symbol(self, rel):
+            return [{
+                "name": "my_func",
+                "kind": 12,  # Function
+                "detail": "import asyncio",  # misleading detail Pyright sometimes returns
+                "selectionRange": {"start": {"line": 2, "character": 10}, "end": {"line": 2, "character": 17}},
+                "children": [],
+            }]
+
+    monkeypatch.setattr(lnav, "WORKSPACE", root)
+    import tools.workspace_patch as wp
+    monkeypatch.setattr(wp, "WORKSPACE", root)
+    monkeypatch.setattr(wp, "get_shell_cwd", lambda: root)
+    monkeypatch.setattr(lnav, "_get_session", lambda: FakeS())
+
+    out = lnav.lsp_outline("m.py")
+    assert "import asyncio" not in out
+    assert "async def my_func" in out
+
+
 @pytest.mark.net
 def test_pyright_jsonrpc_roundtrip_smoke():
     """Optional: requires npx + network on first pyright-langserver pull."""
