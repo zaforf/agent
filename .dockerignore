@@ -1,0 +1,16 @@
+.git
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+.venv
+node_modules
+workspace
+data
+logs
+*.egg-info
+dist
+build
+.env
+uv.lock
