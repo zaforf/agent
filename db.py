@@ -220,6 +220,12 @@ def get_session_title(session_id: str) -> dict | None:
     return {"title": row["title"], "turn_count": row["turn_count"]} if row else None
 
 
+def delete_pending_turn(row_id: int) -> None:
+    """Remove a pending user message that was never completed by the assistant."""
+    with _conn() as c:
+        c.execute("DELETE FROM messages WHERE id = ?", (row_id,))
+
+
 def set_session_title(session_id: str, title: str, turn_count: int) -> None:
     with _conn() as c:
         c.execute(

@@ -351,9 +351,9 @@ def test_stream_turn_background_persists_without_sse_consumer(tmp_db, monkeypatc
     monkeypatch.setattr(agent, "run_stream", fake_stream)
 
     async def _scenario():
-        state = main._StreamTurnState("dc1", "persist me", [])
         # Mock the immediate persistence that happens in the API endpoint
-        db.create_pending_turn("dc1", "persist me")
+        row_id = db.create_pending_turn("dc1", "persist me")
+        state = main._StreamTurnState("dc1", "persist me", [], row_id)
         history = main._get_history("dc1")
         await main._run_stream_turn(state, "persist me", history)
 

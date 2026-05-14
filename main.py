@@ -61,10 +61,11 @@ _background_tasks: set[asyncio.Task] = set()
 class _StreamTurnState:
     """Server-owned lifecycle for one streaming turn per session."""
 
-    def __init__(self, session_id: str, req_message: str, display_files: list[dict]):
+    def __init__(self, session_id: str, req_message: str, display_files: list[dict], pending_row_id: int):
         self.session_id = session_id
         self.req_message = req_message
         self.display_files = display_files
+        self.pending_row_id = pending_row_id
         self.queue: asyncio.Queue[dict | None] = asyncio.Queue()
         self.turn_messages: list[dict] = []
         self.pending: list[tuple[dict, asyncio.Task]] = []
@@ -88,18 +89,12 @@ async def _persist_stream_turn(state: _StreamTurnState) -> None:
 
     if (not state.was_cancelled) and state.full_response and state.turn_messages:
         history.extend(state.turn_messages)
-        # Update the pending turn created at the start of the stream
-        # We look for the most recent user message in this session that hasn't been 'closed' with turn_messages
-        with db._conn() as c:
-            row = c.execute(
-                "SELECT id FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 1",
-                (state.session_id,),
-            ).fetchone()
-            if row:
-                row_id = row["id"]
-                db.update_turn_messages(row_id, state.turn_messages)
-                _spawn_finalizer(state.pending, state.turn_messages, row_id)
-                _spawn_title_update(state.session_id, state.req_message)
+        db.update_turn_messages(state.pending_row_id, state.turn_messages)
+        _spawn_finalizer(state.pending, state.turn_messages, state.pending_row_id)
+        _spawn_title_update(state.session_id, state.req_message)
+    # We no longer delete the pending turn on cancel/error.
+    # The user message is kept in the DB to ensure durability.
+    # The only case for deletion is if a nuke is processed, which is handled by _apply_nuke.
 
 
 
@@ -432,9 +427,9 @@ async def chat_stream(req: ChatRequest):
     state = _active_stream_turns.get(req.session_id)
     if state is None or state.completed:
         # Persist the user message immediately to ensure durability before LLM begins.
-        db.create_pending_turn(req.session_id, req.message)
+        pending_row_id = db.create_pending_turn(req.session_id, req.message)
         
-        state = _StreamTurnState(req.session_id, req.message, display_files)
+        state = _StreamTurnState(req.session_id, req.message, display_files, pending_row_id)
         state.task = asyncio.create_task(_run_stream_turn(state, user_content, history))
         _active_stream_turns[req.session_id] = state
 
