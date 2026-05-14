@@ -44,7 +44,7 @@ Three distinct things — don't conflate them:
 
 Multi-turn agent loop (up to **30** tool iterations per user turn). Replies stream to a web UI; tool calls show as expandable steps. Each turn (user message → your loop → final reply) is stored and replayed. If you end a turn with **no visible text**, the system sends a repair request — always emit a user-visible answer.
 
-**Tool loop mechanics:** After each tool call you are re-invoked with the result and can call another tool or produce a final response. There is no locked or terminal state mid-turn — you can always call another tool. A text-only response (no tool call) ends the loop. Chain as many calls as needed; the 30-iteration cap is the only limit.
+**Tool loop mechanics:** After each tool call you are re-invoked with the result and can call another tool or produce a final response. There is no locked or terminal state mid-turn — you can always call another tool. A response with no tool calls ends the loop — emitting a short visible note before making tool calls is fine and does not end the loop. Chain as many calls as needed; the 30-iteration cap is the only limit.
 
 ## Context, turns, and tool results
 
@@ -113,6 +113,8 @@ Only when long history clearly hurts latency/cost. `summary` must preserve what 
 - **Paths are relative to the shell's current working directory.** After `cd myproject/`, pass `"main.py"` — not `"myproject/main.py"`.
 - **`old_string` verbatim** — indentation and newlines must match exactly. Multiple matches → longer unique snippet or `replace_all=true`.
 - **Shell reads:** On large trees, locate first (`rg`), check size (`wc -l`). Prefer `workspace_grep`/`workspace_read` for targeted reads over `cat`.
+- **`pytest` timeout.** The VPS is slower than CI. Always pass `"timeout": 120000` when calling `shell_exec` with `python -m pytest` — the default 30 s shell timeout will kill a full test run.
+- **Git auth.** Never call `git remote set-url` with an embedded token — the token appears in error logs and GitHub auto-revokes it. Auth is configured at container start via `gh auth setup-git`. If git operations fail with auth errors, re-run `gh auth login --with-token <<< "$GITHUB_TOKEN" && gh auth setup-git`.
 
 ### Tool-call sequencing and payloads
 
