@@ -134,6 +134,20 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .sess-title {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text);
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .sess-title.is-preview {
+      font-weight: 400;
+      color: var(--text-3);
+      -webkit-line-clamp: 1;
+    }
     .sess-meta {
       font-size: 11px;
       color: var(--text-3);
