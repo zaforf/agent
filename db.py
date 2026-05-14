@@ -35,6 +35,14 @@ def init() -> None:
                 ts             INTEGER DEFAULT (unixepoch())
             )
         """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS session_titles (
+                session_id  TEXT    PRIMARY KEY,
+                title       TEXT    NOT NULL,
+                turn_count  INTEGER NOT NULL DEFAULT 0,
+                ts          INTEGER DEFAULT (unixepoch())
+            )
+        """)
 
 
 def append_turn(session_id: str, user_message: str, turn_messages: list[dict]) -> int:
@@ -175,20 +183,52 @@ def get_display_history(session_id: str) -> list[dict]:
 def clear(session_id: str) -> None:
     with _conn() as c:
         c.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+        c.execute("DELETE FROM session_titles WHERE session_id = ?", (session_id,))
+
+
+def get_turn_count(session_id: str) -> int:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT COUNT(*) as n FROM messages WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+    return row["n"] if row else 0
+
+
+def get_session_title(session_id: str) -> dict | None:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT title, turn_count FROM session_titles WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+    return {"title": row["title"], "turn_count": row["turn_count"]} if row else None
+
+
+def set_session_title(session_id: str, title: str, turn_count: int) -> None:
+    with _conn() as c:
+        c.execute(
+            """INSERT INTO session_titles (session_id, title, turn_count)
+               VALUES (?, ?, ?)
+               ON CONFLICT(session_id) DO UPDATE
+               SET title=excluded.title, turn_count=excluded.turn_count, ts=unixepoch()""",
+            (session_id, title, turn_count),
+        )
 
 
 def get_sessions() -> list[dict]:
     with _conn() as c:
         rows = c.execute("""
             SELECT
-                session_id,
+                m.session_id,
                 COUNT(*) as count,
-                MAX(ts)  as last_ts,
+                MAX(m.ts) as last_ts,
                 (SELECT content FROM messages m2
                  WHERE m2.session_id = m.session_id AND m2.role = 'user'
-                 ORDER BY id DESC LIMIT 1) as preview
+                 ORDER BY id DESC LIMIT 1) as preview,
+                st.title
             FROM messages m
-            GROUP BY session_id
+            LEFT JOIN session_titles st ON st.session_id = m.session_id
+            GROUP BY m.session_id
             ORDER BY last_ts DESC
         """).fetchall()
     return [
@@ -197,6 +237,7 @@ def get_sessions() -> list[dict]:
             "count":      r["count"],
             "last_ts":    r["last_ts"],
             "preview":    (r["preview"] or "")[:72],
+            "title":      r["title"],
         }
         for r in rows
     ]

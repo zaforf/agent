@@ -1,10 +1,12 @@
 import asyncio
+import datetime
 import io
 import inspect
 import json
 import logging
 import os
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 from typing import Literal
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -13,6 +15,7 @@ from pydantic import BaseModel
 import agent
 import config
 import db
+from summarizer import summarize_gemma
 from tools.memory import get_all as get_all_memories, delete_memory
 
 logging.basicConfig(
@@ -87,6 +90,7 @@ async def _persist_stream_turn(state: _StreamTurnState) -> None:
         history.extend(state.turn_messages)
         row_id = db.append_turn(state.session_id, state.req_message, state.turn_messages)
         _spawn_finalizer(state.pending, state.turn_messages, row_id)
+        _spawn_title_update(state.session_id, state.req_message)
 
 
 async def _run_stream_turn(
@@ -157,6 +161,81 @@ def _spawn_finalizer(pending, turn_messages, row_id) -> None:
     if not pending:
         return
     task = asyncio.create_task(_finalize_summaries(pending, turn_messages, row_id))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+# ── Session titles ────────────────────────────────────────────────────────────
+
+_TITLE_SYSTEM = (
+    "You are a conversation titler. "
+    "Reply with only a short title (4–6 words). No quotes, no punctuation at the end."
+)
+_TITLE_REVISION_EVERY = 10
+
+
+def _recent_turns_text(session_id: str, n: int = 5) -> str:
+    messages = db.get_display_history(session_id)
+    parts = []
+    for m in messages[-(n * 2):]:
+        role = "User" if m["role"] == "user" else "Assistant"
+        parts.append(f"{role}: {(m.get('content') or '')[:400]}")
+    return "\n".join(parts)
+
+
+def _write_title_to_debug_log(session_id: str, title: str, updated: bool) -> None:
+    if not config.DEBUG_LOGGING:
+        return
+    log_path = Path("logs") / f"debug_{session_id}.log"
+    log_path.parent.mkdir(exist_ok=True)
+    ts = datetime.datetime.now().strftime("%H:%M:%S")
+    tag = "TITLE UPDATED" if updated else "TITLE"
+    try:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] [{tag}] {title}\n")
+    except OSError:
+        pass
+
+
+async def _maybe_update_title(session_id: str, user_text: str) -> None:
+    try:
+        turn_count = db.get_turn_count(session_id)
+        existing   = db.get_session_title(session_id)
+
+        if existing is None:
+            if turn_count > 1:
+                recent = _recent_turns_text(session_id, n=5)
+                prompt = f"Title this conversation based on the following exchange:\n{recent}"
+            else:
+                prompt = f"Title this conversation: {user_text[:400]}"
+            title  = await asyncio.get_event_loop().run_in_executor(
+                None, summarize_gemma, _TITLE_SYSTEM, prompt, 20
+            )
+            title = title.strip().strip("\"'").strip()
+            db.set_session_title(session_id, title, turn_count)
+            _write_title_to_debug_log(session_id, title, updated=False)
+
+        elif turn_count % _TITLE_REVISION_EVERY == 0:
+            recent = _recent_turns_text(session_id, n=5)
+            prompt = (
+                f'Current title: "{existing["title"]}"\n\n'
+                f"Recent exchange:\n{recent}\n\n"
+                f"Give an updated 4–6 word title. "
+                f'If the topic has shifted significantly, use "OldTopic → NewTopic" format.'
+            )
+            title = await asyncio.get_event_loop().run_in_executor(
+                None, summarize_gemma, _TITLE_SYSTEM, prompt, 20
+            )
+            title = title.strip().strip("\"'").strip()
+            db.set_session_title(session_id, title, turn_count)
+            _write_title_to_debug_log(session_id, title, updated=True)
+
+    except Exception:
+        log.exception("title generation failed for session %s", session_id)
+
+
+def _spawn_title_update(session_id: str, user_text: str) -> None:
+    task = asyncio.create_task(_maybe_update_title(session_id, user_text))
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 
@@ -311,6 +390,7 @@ async def complete_chat_turn(
     history.extend(turn_messages)
     row_id = db.append_turn(session_id, message, turn_messages)
     _spawn_finalizer(pending, turn_messages, row_id)
+    _spawn_title_update(session_id, message)
 
     return response, provider
 
