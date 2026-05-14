@@ -44,6 +44,32 @@ def _atomic_write_text(path: Path, text: str) -> None:
                 pass
 
 
+def _fuzzy_hint(content: str, old_string: str) -> str:
+    """Return a line-numbered snippet near the closest match to old_string's first line.
+
+    Used to give the agent a targeted context window after a failed search_replace,
+    so it can do a narrow workspace_read instead of rereading the whole file.
+    """
+    first_line = next((l.strip() for l in old_string.splitlines() if l.strip()), "")
+    if not first_line:
+        return ""
+    words = first_line.split()
+    if not words:
+        return ""
+    lines = content.splitlines()
+    best_idx, best_score = -1, 0
+    for i, line in enumerate(lines):
+        score = sum(1 for w in words if w in line)
+        if score > best_score:
+            best_score, best_idx = score, i
+    if best_idx < 0 or best_score == 0:
+        return ""
+    s = max(0, best_idx - 5)
+    e = min(len(lines), best_idx + 6)
+    snippet = "".join(f"{s + i + 1:>4} | {lines[s + i]}\n" for i in range(e - s))
+    return f"\nClosest match near line {best_idx + 1}:\n{snippet}Use start_line/end_line with workspace_read to inspect this region."
+
+
 def workspace_read(
     path: str,
     start_line: int = 1,
@@ -61,6 +87,7 @@ def workspace_read(
         raise FileNotFoundError(
             f"not a file: {rel!r} (resolved to {target} from cwd={cwd})"
         )
+    cwd = get_shell_cwd()
     raw = target.read_text(encoding="utf-8", errors="replace")
     lines = raw.splitlines(keepends=True)
     total = len(lines)
@@ -69,7 +96,8 @@ def workspace_read(
     selected = lines[s:e]
     if not selected:
         return f"(no lines in range {start_line}-{end_line or total} of {total}-line file)"
-    return "".join(f"{s + i + 1:>4} | {line}" for i, line in enumerate(selected))
+    header = f"[cwd: {cwd}]\n"
+    return header + "".join(f"{s + i + 1:>4} | {line}" for i, line in enumerate(selected))
 
 
 def workspace_grep(
@@ -117,10 +145,12 @@ def workspace_grep(
             start, end = s2, e2
     blocks.append((start, end))
 
+    cwd = get_shell_cwd()
     parts = []
     for s, e in blocks:
         parts.append("".join(f"{s + i + 1:>4} | {lines[s + i]}\n" for i in range(e - s + 1)))
-    return ("--\n").join(parts) + f"\n({len(matched_indices)} match(es) in {total}-line file)"
+    body = ("--\n").join(parts) + f"\n({len(matched_indices)} match(es) in {total}-line file)"
+    return f"[cwd: {cwd}]\n{body}"
 
 
 def workspace_search_replace(
@@ -144,11 +174,13 @@ def workspace_search_replace(
             f"not a file: {rel!r} (resolved to {target} from cwd={cwd})"
         )
 
+    cwd = get_shell_cwd()
     content = target.read_text(encoding="utf-8", errors="replace")
     n = content.count(old_string)
     if n == 0:
+        hint = _fuzzy_hint(content, old_string)
         raise ValueError(
-            f"old_string not found in {rel!r} (copy exact text from the file, including whitespace)"
+            f"old_string not found in {rel!r} (copy exact text including whitespace){hint}"
         )
     if n > 1 and not replace_all:
         raise ValueError(
@@ -157,10 +189,10 @@ def workspace_search_replace(
 
     if replace_all:
         new_content = content.replace(old_string, new_string)
-        out = f"updated {target.relative_to(WORKSPACE.resolve()).as_posix()} ({n} replacement(s))"
+        out = f"[cwd: {cwd}]\nupdated {target.relative_to(WORKSPACE.resolve()).as_posix()} ({n} replacement(s))"
     else:
         new_content = content.replace(old_string, new_string, 1)
-        out = f"updated {target.relative_to(WORKSPACE.resolve()).as_posix()}"
+        out = f"[cwd: {cwd}]\nupdated {target.relative_to(WORKSPACE.resolve()).as_posix()}"
 
     _atomic_write_text(target, new_content)
     return out
