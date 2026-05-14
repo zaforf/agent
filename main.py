@@ -100,7 +100,7 @@ async def _run_stream_turn(
     try:
         run_stream_sig = inspect.signature(agent.run_stream)
         kwargs = {"output_channel": output_channel} if "output_channel" in run_stream_sig.parameters else {}
-        async for event in agent.run_stream(user_content, history, **kwargs):
+        async for event in agent.run_stream(user_content, history, session_id=state.session_id, **kwargs):
             if event.get("type") == "text_chunk":
                 state.full_response += event.get("text", "")
             elif event.get("type") == "done":
@@ -299,7 +299,7 @@ async def complete_chat_turn(
     user_content = _build_user_content(message, attachments)
     display_files = [{"type": a.type, "filename": a.filename} for a in attachments]
     response, provider, turn_messages, pending = await agent.run(
-        user_content, history, output_channel=output_channel
+        user_content, history, session_id=session_id, output_channel=output_channel
     )
 
     nuke_summary = _extract_nuke_summary(turn_messages)
@@ -466,21 +466,26 @@ async def get_token_count(session_id: str):
     import httpx
     system_prompt = agent._build_system_prompt()
     history = _get_history(session_id)
-    model = config.PROVIDERS[0]["model"]
+    # countTokens only works with Gemini models, not Gemma. Use a lightweight
+    # Gemini model regardless of which provider is active for chat.
+    count_model = "gemini-2.0-flash"
     api_key = config.GEMINI_API_KEY
     if api_key:
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:countTokens"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{count_model}:countTokens"
+            contents = _history_to_gemini_contents(history)
             body = {
                 "generateContentRequest": {
-                    "model": f"models/{model}",
+                    "model": f"models/{count_model}",
                     "systemInstruction": {"parts": [{"text": system_prompt}]},
-                    "contents": _history_to_gemini_contents(history),
+                    "contents": contents or [{"role": "user", "parts": [{"text": " "}]}],
                 }
             }
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(url, params={"key": api_key}, json=body)
-                resp.raise_for_status()
+                if not resp.is_success:
+                    log.warning("countTokens failed (%s): %s", resp.status_code, resp.text)
+                    raise httpx.HTTPStatusError("countTokens error", request=resp.request, response=resp)
                 return {"tokens": resp.json()["totalTokens"]}
         except Exception as e:
             log.warning("countTokens failed, using heuristic: %s", e)
