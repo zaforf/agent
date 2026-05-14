@@ -279,16 +279,24 @@ There is **no** standalone `pyright-langserver` package on npm; `npx -y pyright-
 
 **Security / output:** Definition and reference **targets outside** `WORKSPACE` (stdlib, site-packages) are not printed as raw host paths; the tools return a one-line note instead. Reference lists, workspace-symbol hits, and outline depth are **capped** in code (96 / 120 / 400 rows) so Pyright payloads stay predictable; very large tool rows still flow through the usual §6.5 summarization when persisted.
 
+**Anchor column:** `lsp_go_to_definition` and `lsp_find_references` resolve the requested **1-based** `line` / `column` (same convention as `workspace_grep` / `workspace_read`) to an LSP position by **snapping** to the nearest identifier on that line when the cursor is not already on a name (e.g. `column=1` at line start). Optional `symbol` picks a specific identifier when several names appear on one line. Columns are converted to **UTF-16** code units for LSP `Position.character`, matching the protocol.
+
+**Definition snippets:** For in-workspace definition targets, `lsp_go_to_definition` appends a short numbered source excerpt (up to a few dozen lines per hit, capped) so the model often avoids a follow-up `workspace_read`.
+
+**Outline:** `lsp_outline` prints each node as `Kind: name @ path:line` with Pyright `detail` when present; for callables with empty `detail`, the tool falls back to the **source line** at the symbol’s start for a quick signature hint.
+
+**Workspace symbols:** Results are **grouped by `SymbolKind` label** (Class, Function, …) with stable section ordering, then sorted by path and start position inside each group.
+
 **Python-first:** Pyright is strongest for `.py` / `.pyi`. Other extensions are opened as `plaintext` for `didOpen`; results may be empty.
 
 Outline and workspace-symbol lines use **human-readable `SymbolKind` labels** (e.g. `Function`, `Class`) from the LSP enum, not raw integers — see the [LSP 3.17 `SymbolKind` specification](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#symbolKind).
 
 | Tool | Description |
 |---|---|
-| `lsp_go_to_definition(path, line, column=1)` | `textDocument/definition` at a **1-based** line/column (grep / `workspace_read` style). Default `column=1` selects line start. |
-| `lsp_find_references(path, line, column=1, include_declaration=True)` | `textDocument/references` within the workspace (capped). |
-| `lsp_outline(path)` | `textDocument/documentSymbol` — structured outline (names, kinds, line numbers) without reading the full file. |
-| `lsp_workspace_symbols(query)` | `workspace/symbol` — fuzzy-ish name search across indexed workspace (min query length 2; capped). |
+| `lsp_go_to_definition(path, line, column=1, symbol=None)` | `textDocument/definition` at a **1-based** line/column; snaps to identifiers; optional `symbol`; includes short **snippets** for in-workspace definitions. |
+| `lsp_find_references(path, line, column=1, include_declaration=True, symbol=None)` | `textDocument/references` within the workspace (capped); same snapping / optional `symbol`. |
+| `lsp_outline(path)` | `textDocument/documentSymbol` — structured outline (`Kind: name`, `detail` or source-line hint, hierarchy) without reading the full file. |
+| `lsp_workspace_symbols(query)` | `workspace/symbol` — fuzzy-ish name search across indexed workspace (min query length 2; capped), **grouped by kind**. |
 
 **Concurrency:** These tools are in `_BLOCKING_SYNC_TOOLS` and `_PARALLEL_SAFE_TOOLS` — they may appear in the same parallel read-only batch as `workspace_read` / `workspace_grep` / web tools when `AGENT_PARALLEL_TOOL_CALLS` is true. The implementation serializes JSON-RPC on a **single** Pyright subprocess per cwd (parallel calls may queue on a lock — acceptable).
 

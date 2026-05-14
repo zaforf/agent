@@ -20,6 +20,20 @@ def test_symbol_kind_name_maps_lsp_enum():
     assert lnav._symbol_kind_name(99) == "Kind(99)"
 
 
+def test_utf16_codeunits_before_ascii():
+    assert lnav._utf16_codeunits_before("hello", 0) == 0
+    assert lnav._utf16_codeunits_before("hello", 3) == 3
+
+
+def test_snap_identifier_column_1based():
+    col, name = lnav._snap_identifier_column_1based("  foo(bar)", 1, None)
+    assert name == "foo"
+    assert col == 3
+    col2, name2 = lnav._snap_identifier_column_1based("x = foo() + bar", 1, "bar")
+    assert name2 == "bar"
+    assert col2 == 13
+
+
 def test_safe_rel_path_under_workspace(monkeypatch, tmp_path):
     monkeypatch.setattr(lnav, "WORKSPACE", tmp_path)
     f = tmp_path / "a" / "b.py"
@@ -29,7 +43,12 @@ def test_safe_rel_path_under_workspace(monkeypatch, tmp_path):
     assert lnav._safe_rel_path(uri) == str(f.resolve().relative_to(tmp_path.resolve()))
 
 
-def test_lsp_outline_mocked_session(monkeypatch):
+def test_lsp_outline_mocked_session(monkeypatch, tmp_path):
+    root = tmp_path
+    p = root / "pkg" / "x.py"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("# line1\ndef foo():\n    pass\n", encoding="utf-8")
+
     class FakeS:
         def document_symbol(self, rel: str):
             assert rel == "pkg/x.py"
@@ -37,20 +56,25 @@ def test_lsp_outline_mocked_session(monkeypatch):
                 {
                     "name": "foo",
                     "kind": 12,
-                    "range": {
-                        "start": {"line": 2, "character": 0},
-                        "end": {"line": 10, "character": 1},
+                    "selectionRange": {
+                        "start": {"line": 1, "character": 0},
+                        "end": {"line": 1, "character": 3},
                     },
                     "children": [],
                 }
             ]
 
+    monkeypatch.setattr(lnav, "WORKSPACE", root)
+    import tools.workspace_patch as wp
+
+    monkeypatch.setattr(wp, "WORKSPACE", root)
+    monkeypatch.setattr(wp, "get_shell_cwd", lambda: root)
     monkeypatch.setattr(lnav, "_get_session", lambda: FakeS())
     out = lnav.lsp_outline("pkg/x.py")
     assert "Outline" in out
-    assert "foo" in out
-    assert "`pkg/x.py`:3" in out
-    assert "Function" in out
+    assert "Function: foo" in out
+    assert "`pkg/x.py`:2" in out
+    assert "def foo()" in out
 
 
 def test_lsp_workspace_symbols_mocked(monkeypatch):
@@ -58,47 +82,73 @@ def test_lsp_workspace_symbols_mocked(monkeypatch):
         def workspace_symbol(self, query: str):
             assert query == "run"
             root = Path("/tmp/ws").resolve()
-            uri = (root / "agent.py").as_uri()
+            uri_a = (root / "models.py").as_uri()
+            uri_b = (root / "agent.py").as_uri()
             return [
                 {
                     "name": "run_stream",
                     "kind": 12,
                     "location": {
-                        "uri": uri,
+                        "uri": uri_b,
                         "range": {
                             "start": {"line": 40, "character": 0},
                             "end": {"line": 41, "character": 1},
                         },
                     },
-                }
+                },
+                {
+                    "name": "Runner",
+                    "kind": 5,
+                    "location": {
+                        "uri": uri_a,
+                        "range": {
+                            "start": {"line": 2, "character": 0},
+                            "end": {"line": 10, "character": 1},
+                        },
+                    },
+                },
             ]
 
     root = Path("/tmp/ws").resolve()
     root.mkdir(parents=True, exist_ok=True)
     (root / "agent.py").write_text("#", encoding="utf-8")
+    (root / "models.py").write_text("#", encoding="utf-8")
     monkeypatch.setattr(lnav, "WORKSPACE", root)
     monkeypatch.setattr(lnav, "_get_session", lambda: FakeS())
     out = lnav.lsp_workspace_symbols("run")
     assert "run_stream" in out
     assert "agent.py" in out
-    assert "Function" in out
+    assert "### Class" in out
+    assert "### Function" in out
+    assert out.index("### Class") < out.index("### Function")
 
 
 def test_lsp_go_to_definition_mocked(monkeypatch):
+    seen: dict[str, object] = {}
+
     class FakeS:
-        def definition(self, rel, line, col):
+        def definition(self, rel, pos):
+            seen["rel"] = rel
+            seen["pos"] = pos
             root = Path("/tmp/ws2").resolve()
             uri = (root / "b.py").as_uri()
             return {"uri": uri, "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}}
 
     root = Path("/tmp/ws2").resolve()
     root.mkdir(parents=True, exist_ok=True)
-    (root / "b.py").write_text("def x(): pass", encoding="utf-8")
+    (root / "b.py").write_text("def x():\n    return 1\n", encoding="utf-8")
     monkeypatch.setattr(lnav, "WORKSPACE", root)
+    import tools.workspace_patch as wp
+
+    monkeypatch.setattr(wp, "WORKSPACE", root)
+    monkeypatch.setattr(wp, "get_shell_cwd", lambda: root)
     monkeypatch.setattr(lnav, "_get_session", lambda: FakeS())
     out = lnav.lsp_go_to_definition("b.py", line=1, column=1)
     assert "Definitions" in out
     assert "b.py" in out
+    assert seen["rel"] == "b.py"
+    assert seen["pos"] == {"line": 0, "character": 0}
+    assert "```text" in out
 
 
 @pytest.mark.net

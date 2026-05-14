@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import threading
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +78,37 @@ def _symbol_kind_name(kind: Any) -> str:
 _MAX_REFERENCES: int = 96
 _MAX_WORKSPACE_SYMBOLS: int = 120
 _MAX_OUTLINE_LINES: int = 400
+_MAX_DEFINITION_SNIPPET_LINES: int = 24
+
+# ``workspace/symbol`` buckets: high-signal kinds first, then the rest alphabetically.
+_WORKSPACE_SYMBOL_KIND_ORDER: tuple[str, ...] = (
+    "Class",
+    "Interface",
+    "Struct",
+    "Function",
+    "Method",
+    "Constructor",
+    "Field",
+    "Property",
+    "Variable",
+    "Constant",
+    "Enum",
+    "EnumMember",
+    "Module",
+    "Namespace",
+    "Package",
+    "TypeParameter",
+    "Operator",
+    "Event",
+    "String",
+    "Number",
+    "Boolean",
+    "Key",
+    "Null",
+    "File",
+    "Array",
+    "Object",
+)
 
 
 # Default: npx runs the ``pyright-langserver`` binary from the ``pyright`` npm package
@@ -120,14 +152,6 @@ def _uri_to_path(uri: str) -> Path | None:
         return None
 
 
-def _under_workspace(p: Path) -> bool:
-    try:
-        p.resolve().relative_to(WORKSPACE.resolve())
-        return True
-    except ValueError:
-        return False
-
-
 def _safe_rel_path(uri: str) -> str | None:
     path = _uri_to_path(uri)
     if path is None:
@@ -136,6 +160,121 @@ def _safe_rel_path(uri: str) -> str | None:
         return str(path.resolve().relative_to(WORKSPACE.resolve()))
     except ValueError:
         return None
+
+
+def _utf16_codeunits_before(line: str, codepoint_index: int) -> int:
+    """UTF-16 length of ``line[:codepoint_index]`` (LSP ``Position.character``)."""
+    if codepoint_index <= 0:
+        return 0
+    if codepoint_index > len(line):
+        codepoint_index = len(line)
+    return len(line[:codepoint_index].encode("utf-16-le")) // 2
+
+
+def _identifier_spans(line: str) -> list[tuple[int, int, str]]:
+    """``(start, end_exclusive, name)`` for identifiers on the code portion of a line."""
+    code = line.split("#", 1)[0]
+    return [(m.start(), m.end(), m.group(0)) for m in re.finditer(r"\b[A-Za-z_]\w*\b", code)]
+
+
+def _snap_identifier_column_1based(line: str, col_1based: int, symbol: str | None) -> tuple[int, str | None]:
+    """Pick a 1-based column at an identifier start; return ``(column, picked_name)``."""
+    spans = _identifier_spans(line)
+    if not spans:
+        return col_1based, None
+    idx0 = max(0, int(col_1based) - 1)
+    sym = symbol.strip() if symbol and str(symbol).strip() else None
+    if sym:
+        exact = [s for s in spans if s[2] == sym]
+        if not exact:
+            low = sym.lower()
+            exact = [s for s in spans if s[2].lower() == low]
+        if len(exact) == 1:
+            return exact[0][0] + 1, exact[0][2]
+        if len(exact) > 1:
+            best = min(exact, key=lambda s: min(abs(idx0 - s[0]), abs(idx0 - (s[1] - 1))))
+            return best[0] + 1, best[2]
+    for s in spans:
+        if s[0] <= idx0 < s[1]:
+            return s[0] + 1, s[2]
+    best = min(spans, key=lambda s: min(abs(idx0 - s[0]), abs(idx0 - (s[1] - 1))))
+    return best[0] + 1, best[2]
+
+
+def _lsp_position_for_anchor(rel: str, line_1: int, col_1: int, symbol: str | None) -> tuple[dict[str, int], str]:
+    """0-based LSP ``Position`` plus a short note if we snapped the column."""
+    try:
+        target = _workspace_target(rel)
+        lines = target.read_text(encoding="utf-8", errors="replace").splitlines(False)
+    except Exception:
+        ln = max(0, int(line_1) - 1)
+        ch = max(0, int(col_1) - 1)
+        return {"line": ln, "character": ch}, ""
+    if line_1 < 1 or line_1 > len(lines):
+        return {"line": max(0, line_1 - 1), "character": max(0, int(col_1) - 1)}, ""
+    text = lines[line_1 - 1]
+    col_snapped, picked = _snap_identifier_column_1based(text, col_1, symbol)
+    char0 = max(0, col_snapped - 1)
+    utf16 = _utf16_codeunits_before(text, char0)
+    note = ""
+    want = (symbol or "").strip() if symbol else None
+    if picked is not None and col_snapped != col_1:
+        note = f"Snapped column {col_1} → {col_snapped} (identifier `{picked}`)."
+    elif picked is not None and want and (picked == want or picked.lower() == want.lower()):
+        note = f"Resolved `{picked}` at column {col_snapped}."
+    elif picked is not None:
+        note = f"Using identifier `{picked}` at column {col_snapped}."
+    return {"line": line_1 - 1, "character": utf16}, note
+
+
+def _range_start_sort_tuple(loc: dict[str, Any]) -> tuple[int, int]:
+    r = loc.get("range") or {}
+    st = r.get("start") or {}
+    return (int(st.get("line", 0)), int(st.get("character", 0)))
+
+
+def _snippet_for_location(uri: str, loc: dict[str, Any], max_lines: int) -> str:
+    """Numbered source lines from definition start (``workspace_read`` style)."""
+    rel = _safe_rel_path(uri)
+    if not rel or max_lines <= 0:
+        return ""
+    try:
+        path = _workspace_target(rel)
+        raw = path.read_text(encoding="utf-8", errors="replace").splitlines(False)
+    except OSError:
+        return ""
+    rng = loc.get("range") or {}
+    st = rng.get("start") or {}
+    line0 = int(st.get("line", 0))
+    if line0 < 0 or line0 >= len(raw):
+        return ""
+    chunk = raw[line0 : line0 + max_lines]
+    if not chunk:
+        return ""
+    parts = [f"{line0 + i + 1:>4} | {ln}" for i, ln in enumerate(chunk)]
+    return "\n".join(parts)
+
+
+def _outline_sig_suffix(
+    rel_path: str,
+    line_1: int,
+    kind_label: str,
+    detail: str,
+    file_lines: list[str] | None,
+) -> str:
+    d = (detail or "").strip()
+    if d:
+        return f" — {d}"
+    if kind_label not in ("Function", "Method", "Constructor") or not file_lines:
+        return ""
+    if line_1 < 1 or line_1 > len(file_lines):
+        return ""
+    raw = file_lines[line_1 - 1].rstrip()
+    if not raw:
+        return ""
+    if len(raw) > 160:
+        raw = raw[:157] + "..."
+    return f" — `{raw}`"
 
 
 class _PyrightJsonRpc:
@@ -293,24 +432,22 @@ class _PyrightSession:
             },
         )
 
-    def definition(self, rel: str, line: int, column: int) -> Any:
+    def definition(self, rel: str, position: dict[str, int]) -> Any:
         self.did_open(rel)
         uri = self._file_uri(rel)
-        pos = _grep_style_to_lsp_position(line, column)
         return self.rpc.request(
             "textDocument/definition",
-            {"textDocument": {"uri": uri}, "position": pos},
+            {"textDocument": {"uri": uri}, "position": position},
         )
 
-    def references(self, rel: str, line: int, column: int, include_declaration: bool) -> Any:
+    def references(self, rel: str, position: dict[str, int], include_declaration: bool) -> Any:
         self.did_open(rel)
         uri = self._file_uri(rel)
-        pos = _grep_style_to_lsp_position(line, column)
         return self.rpc.request(
             "textDocument/references",
             {
                 "textDocument": {"uri": uri},
-                "position": pos,
+                "position": position,
                 "context": {"includeDeclaration": bool(include_declaration)},
             },
         )
@@ -403,6 +540,7 @@ def _flatten_document_symbols(
     max_lines: int,
     depth: int = 0,
     out_lines: list[str] | None = None,
+    file_lines: list[str] | None = None,
 ) -> list[str]:
     if out_lines is None:
         out_lines = []
@@ -418,18 +556,18 @@ def _flatten_document_symbols(
         st = (rng.get("start") or {})
         line = int(st.get("line", 0)) + 1
         pad = "  " * depth
-        tail = f" — {detail}" if detail else ""
         klabel = _symbol_kind_name(kind)
-        out_lines.append(f"{pad}- {name} ({klabel}) @ `{rel_path}`:{line}{tail}")
+        sig = _outline_sig_suffix(rel_path, line, klabel, detail, file_lines)
+        out_lines.append(f"{pad}{klabel}: {name} @ `{rel_path}`:{line}{sig}")
         if len(out_lines) >= max_lines:
             break
         children = node.get("children")
         if isinstance(children, list) and children:
-            _flatten_document_symbols(children, rel_path, max_lines, depth + 1, out_lines)
+            _flatten_document_symbols(children, rel_path, max_lines, depth + 1, out_lines, file_lines)
     return out_lines
 
 
-def lsp_go_to_definition(path: str, line: int, column: int = 1) -> str:
+def lsp_go_to_definition(path: str, line: int, column: int = 1, symbol: str | None = None) -> str:
     """Jump to the definition of the symbol at (line, column) in a workspace file.
 
     ``line`` and ``column`` are **1-based**, matching ``workspace_grep`` /
@@ -438,30 +576,52 @@ def lsp_go_to_definition(path: str, line: int, column: int = 1) -> str:
 
     **Python-first:** powered by Pyright. Non-Python files may return no results.
     """
+    rel = path.strip()
     try:
+        pos, snap_note = _lsp_position_for_anchor(rel, int(line), int(column), symbol)
         s = _get_session()
-        result = s.definition(path.strip(), int(line), int(column))
+        result = s.definition(rel, pos)
     except Exception as e:
         return f"Error in lsp_go_to_definition: {e}"
     locs = _locations_from_result(result)
     if not locs:
-        return "No definition found (try a different line/column on the symbol name)."
-    lines = ["**Definitions**"]
+        hint = " Optional: pass `symbol` if several names share the line."
+        return (
+            "No definition found (try `symbol` to pick a name on that line, or a closer line/column)."
+            + hint
+        )
+    lines: list[str] = ["**Definitions**"]
+    if snap_note:
+        lines.append(snap_note)
+    ws_snippets = 0
     for uri, loc in locs[:12]:
         lines.append(_format_location_block(uri, loc))
+        if _safe_rel_path(uri) and ws_snippets < 3:
+            sn = _snippet_for_location(uri, loc, _MAX_DEFINITION_SNIPPET_LINES)
+            if sn:
+                lines.append("```text\n" + sn + "\n```")
+                ws_snippets += 1
     if len(locs) > 12:
         lines.append(f"(… {len(locs) - 12} more locations omitted)")
     return "\n".join(lines)
 
 
-def lsp_find_references(path: str, line: int, column: int = 1, include_declaration: bool = True) -> str:
+def lsp_find_references(
+    path: str,
+    line: int,
+    column: int = 1,
+    include_declaration: bool = True,
+    symbol: str | None = None,
+) -> str:
     """List workspace references to the symbol at (1-based line, column).
 
     Results are capped and paths are restricted to the agent workspace mount.
     """
+    rel = path.strip()
     try:
+        pos, snap_note = _lsp_position_for_anchor(rel, int(line), int(column), symbol)
         s = _get_session()
-        result = s.references(path.strip(), int(line), int(column), include_declaration)
+        result = s.references(rel, pos, include_declaration)
     except Exception as e:
         return f"Error in lsp_find_references: {e}"
     locs = _locations_from_result(result)
@@ -472,6 +632,8 @@ def lsp_find_references(path: str, line: int, column: int = 1, include_declarati
     if not ws_locs:
         return "No in-workspace references found."
     lines = [f"**References** (showing up to {_MAX_REFERENCES}, workspace-only)"]
+    if snap_note:
+        lines.append(snap_note)
     for uri, loc in ws_locs[:_MAX_REFERENCES]:
         lines.append(_format_location_block(uri, loc))
     if len(ws_locs) > _MAX_REFERENCES:
@@ -481,20 +643,24 @@ def lsp_find_references(path: str, line: int, column: int = 1, include_declarati
 
 def lsp_outline(path: str) -> str:
     """Structured outline (functions/classes) for one file — without reading the whole file."""
+    rel = path.strip()
+    try:
+        file_lines = _workspace_target(rel).read_text(encoding="utf-8", errors="replace").splitlines(False)
+    except (OSError, ValueError):
+        file_lines = None
     try:
         s = _get_session()
-        result = s.document_symbol(path.strip())
+        result = s.document_symbol(rel)
     except Exception as e:
         return f"Error in lsp_outline: {e}"
     if not result:
         return "No symbols (empty file, unsupported type, or Pyright returned nothing)."
     if not isinstance(result, list):
         return f"Unexpected documentSymbol shape: {type(result).__name__}"
-    rel = path.strip()
-    lines = _flatten_document_symbols(result, rel, _MAX_OUTLINE_LINES)
+    lines = _flatten_document_symbols(result, rel, _MAX_OUTLINE_LINES, file_lines=file_lines)
     if not lines:
         return "No symbols parsed from Pyright response."
-    hdr = f"**Outline** for `{path.strip()}` (cap {_MAX_OUTLINE_LINES} lines)\n"
+    hdr = f"**Outline** for `{rel}` (cap {_MAX_OUTLINE_LINES} lines)\n"
     body = "\n".join(lines)
     if len(lines) >= _MAX_OUTLINE_LINES:
         body += "\n(… outline truncated — use workspace_read on a narrow range if needed)"
@@ -516,24 +682,34 @@ def lsp_workspace_symbols(query: str) -> str:
         return f"Error in lsp_workspace_symbols: {e}"
     if not result:
         return f"No workspace symbols matching {q!r}."
-    lines = [f"**Workspace symbols** matching {q!r} (up to {_MAX_WORKSPACE_SYMBOLS}, workspace-only)"]
-    n = 0
+    buckets: defaultdict[str, list[tuple[str, str, str, dict[str, Any]]]] = defaultdict(list)
     for item in result:
         if not isinstance(item, dict):
             continue
         loc = item.get("location") or {}
         uri = str(loc.get("uri") or "")
-        if not _safe_rel_path(uri):
+        rel2 = _safe_rel_path(uri)
+        if not rel2:
             continue
         name = item.get("name", "?")
         kind = item.get("kind", "")
         klabel = _symbol_kind_name(kind)
-        lines.append(_format_location_block(uri, loc) + f" — `{name}` ({klabel})")
-        n += 1
-        if n >= _MAX_WORKSPACE_SYMBOLS:
-            break
-    if n == 0:
+        buckets[klabel].append((rel2, name, uri, loc))
+    if not buckets:
         return f"No in-workspace symbols for {q!r} (matches may be in dependencies only)."
+    lines = [f"**Workspace symbols** matching {q!r} (up to {_MAX_WORKSPACE_SYMBOLS}, grouped by kind)"]
+    emitted = 0
+    ordered = [k for k in _WORKSPACE_SYMBOL_KIND_ORDER if k in buckets]
+    rest = sorted(set(buckets) - set(_WORKSPACE_SYMBOL_KIND_ORDER))
+    for kind in ordered + rest:
+        chunk = sorted(buckets[kind], key=lambda t: (t[0], _range_start_sort_tuple(t[3])))
+        lines.append(f"### {kind} ({len(chunk)})")
+        for rel2, name, uri, loc in chunk:
+            if emitted >= _MAX_WORKSPACE_SYMBOLS:
+                lines.append(f"\n(… cap {_MAX_WORKSPACE_SYMBOLS} rows — narrow the query.)")
+                return "\n".join(lines)
+            lines.append(_format_location_block(uri, loc) + f" — `{name}`")
+            emitted += 1
     return "\n".join(lines)
 
 
@@ -545,7 +721,9 @@ SCHEMAS: list[dict] = [
             "description": (
                 "Python: jump from a position in a file to where that name is defined. "
                 "Use 1-based line and column like `workspace_grep` / `workspace_read` line labels; "
-                "default column=1 (start of line). If nothing is found, move column onto the identifier."
+                "column 1 snaps to the nearest identifier on the line. Optional `symbol` picks "
+                "that name when several identifiers share the line. Returns a short source snippet "
+                "for in-workspace definitions."
             ),
             "parameters": {
                 "type": "object",
@@ -556,6 +734,10 @@ SCHEMAS: list[dict] = [
                         "type": "integer",
                         "description": "1-based column on that line (default 1 = line start)",
                         "default": 1,
+                    },
+                    "symbol": {
+                        "type": "string",
+                        "description": "Optional exact identifier on that line (disambiguation)",
                     },
                 },
                 "required": ["path", "line"],
@@ -568,7 +750,8 @@ SCHEMAS: list[dict] = [
             "name": "lsp_find_references",
             "description": (
                 "Python: list references in the workspace to the symbol at (1-based line, column). "
-                "Results are capped; point at the identifier when possible."
+                "Column 1 snaps to the nearest identifier; optional `symbol` disambiguates. "
+                "Results are capped."
             ),
             "parameters": {
                 "type": "object",
@@ -580,6 +763,10 @@ SCHEMAS: list[dict] = [
                         "type": "boolean",
                         "description": "Include the definition site in results",
                         "default": True,
+                    },
+                    "symbol": {
+                        "type": "string",
+                        "description": "Optional exact identifier on that line (disambiguation)",
                     },
                 },
                 "required": ["path", "line"],

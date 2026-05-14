@@ -564,8 +564,8 @@ def _tool_docs() -> str:
         "independent (none needs another tool's return to choose its arguments); if you must read A "
         "before you can decide B's args, call A first, then batch the rest. For writes, shell session, or "
         "memory mutations, emit one tool call per message and wait for its result before the next.\n"
-        "The lsp_* tools are for Python symbol navigation (outline, project-wide symbol search, go-to-definition, references); "
-        "use workspace_grep for plain-text/regex or non-Python files.\n"
+        "The lsp_* tools are for Python symbol navigation (outline, project-wide symbol search grouped by kind, go-to-definition with short definition snippets, references); "
+        "column=1 snaps to an identifier on that line and optional `symbol` disambiguates; use workspace_grep for plain-text/regex or non-Python files.\n"
         "Never emit empty arguments: every required field must be present in the tool JSON; prose does not substitute for arguments. After missing-argument errors, fix fields—do not retry `{}` or the same empty pattern.\n"
         "For code edits, use workspace_search_replace as primary. Keep replacements narrow and surgical: use short, unique old_string snippets around only the target lines. Avoid whole-file old/new payloads unless the user explicitly asks for a full rewrite. It is okay to use multiple sequential calls when each call is thoughtful and based on fresh file state. Do not repeat identical failing calls; after a failure, change snippet or strategy.\n"
     )
