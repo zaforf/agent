@@ -10,6 +10,7 @@ LLM; `get_display_history()` collapses the same data into user/assistant pairs
 with tool steps synthesized from tool_calls/tool messages for the UI.
 """
 import json
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -104,8 +105,9 @@ def update_turn_messages(row_id: int, turn_messages: list[dict]) -> None:
 def get_history(session_id: str) -> list[dict]:
     """Flat message list for LLM context, concatenated across all turns."""
     with _conn() as c:
+        # Added id to SELECT to support the corruption warning log
         rows = c.execute(
-            "SELECT role, content, turn_messages FROM messages WHERE session_id = ? ORDER BY id",
+            "SELECT id, role, content, turn_messages FROM messages WHERE session_id = ? ORDER BY id",
             (session_id,),
         ).fetchall()
     result: list[dict] = []
@@ -116,7 +118,6 @@ def get_history(session_id: str) -> list[dict]:
                 result.extend(json.loads(tm_raw))
                 continue
             except Exception:
-                import logging
                 logging.warning(f"Corrupted turn_messages blob in session {session_id} row {r['id']}")
                 continue
         
