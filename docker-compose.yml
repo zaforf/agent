@@ -8,6 +8,7 @@ services:
     environment:
       - HOME=/tmp
       - RUFF_CACHE_DIR=/tmp/.ruff_cache
+      - LSP_PYRIGHT_COMMAND=["pyright-langserver","--stdio"]
     depends_on:
       - qdrant
     volumes:
