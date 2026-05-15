@@ -561,15 +561,10 @@
     .btn-send.stop-state { background: var(--call-accent); color: #fff; }
     .btn-send.stop-state:hover:not(:disabled) { background: #446b57; }
     .btn-send:disabled { opacity: 0.35; cursor: default; }
-    #loop-badge {
-      display: none; font-size: 11px; font-weight: 600; letter-spacing: .04em;
-      background: #7c4dff22; color: #a78bfa; border: 1px solid #7c4dff55;
-      border-radius: 4px; padding: 2px 7px; white-space: nowrap; cursor: pointer;
-    }
-    #loop-badge.active { display: inline-block; }
+    .btn-icon.loop-active { color: var(--text); border-color: var(--border-2); }
     .needs-input-banner {
-      background: #7c4dff22; border: 1px solid #7c4dff55; border-radius: 6px;
-      color: #a78bfa; font-size: 13px; padding: 8px 12px; margin: 6px 0;
+      font-size: 13px; color: var(--text-2); padding: 6px 0; margin: 4px 0;
+      border-top: 1px solid var(--border);
     }
     .btn-icon {
       background: none;
@@ -695,7 +690,7 @@
       <input type="file" id="file-input" style="display:none" multiple
              accept="image/*,.pdf,.txt,.md,.py,.js,.ts,.jsx,.tsx,.json,.csv,.html,.css,.yaml,.yml,.toml,.sh,.c,.cpp,.h,.java,.rs,.go">
       <div id="input" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Message…"></div>
-      <span id="loop-badge" title="Loop mode active — click to stop" onclick="_stopLoop()">⟳ LOOP</span>
+      <button class="btn btn-icon" id="btn-loop" onclick="_toggleLoop()" title="Loop mode">↻</button>
       <button class="btn btn-send" id="send-btn" onclick="sendOrStop()">Send</button>
       <button class="btn btn-icon" id="btn-mem" onclick="togglePanel('mem-panel','btn-mem')" title="Memories">◉</button>
     </div>
@@ -1332,17 +1327,22 @@
   let _loopMode = false;
   let _loopNeedsInput = false;
   const _LOOP_STOP_STRING = '[NEEDS_INPUT]';
-  const loopBadge = document.getElementById('loop-badge');
+  const loopBtn = document.getElementById('btn-loop');
 
   function _startLoop() {
     _loopMode = true;
     _loopNeedsInput = false;
-    loopBadge.classList.add('active');
+    loopBtn.classList.add('loop-active');
   }
 
   function _stopLoop() {
     _loopMode = false;
-    loopBadge.classList.remove('active');
+    loopBtn.classList.remove('loop-active');
+  }
+
+  function _toggleLoop() {
+    if (_loopMode) _stopLoop();
+    else _startLoop();
   }
 
   function _stopRejoinPoll() {
@@ -1617,7 +1617,7 @@
           _stopLoop();
           const banner = document.createElement('div');
           banner.className = 'needs-input-banner';
-          banner.textContent = '⟳ Loop paused — model needs your input';
+          banner.textContent = 'Loop paused — model needs your input';
           feed.appendChild(banner);
           messagesEl.scrollTop = messagesEl.scrollHeight;
         } else if (sid === streamSid) {
