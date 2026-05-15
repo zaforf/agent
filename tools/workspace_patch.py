@@ -198,6 +198,52 @@ def workspace_search_replace(
     return out
 
 
+def workspace_edit(
+    path: str,
+    start_line: int,
+    end_line: int,
+    new_text: str,
+) -> str:
+    """Replace lines start_line..end_line (1-indexed, inclusive) with new_text.
+
+    Call workspace_read first to confirm the line numbers, then call this.
+    Unlike workspace_search_replace, this cannot fail due to whitespace or
+    encoding mismatches — line numbers from workspace_read are always valid.
+    Pass new_text="" to delete the lines without replacement.
+    """
+    rel = path.strip().replace("\\", "/")
+    target = _workspace_target(rel)
+    if not target.is_file():
+        cwd = get_shell_cwd()
+        raise FileNotFoundError(
+            f"not a file: {rel!r} (resolved to {target} from cwd={cwd})"
+        )
+
+    cwd = get_shell_cwd()
+    content = target.read_text(encoding="utf-8", errors="replace")
+    lines = content.splitlines(keepends=True)
+    total = len(lines)
+
+    if start_line < 1 or start_line > total + 1:
+        raise ValueError(f"start_line {start_line} out of range (file has {total} lines)")
+    if end_line < start_line:
+        raise ValueError(f"end_line {end_line} must be >= start_line {start_line}")
+    end_line = min(end_line, total)
+
+    if new_text and not new_text.endswith("\n"):
+        new_text += "\n"
+    replacement = new_text.splitlines(keepends=True) if new_text else []
+
+    new_lines = lines[: start_line - 1] + replacement + lines[end_line:]
+    _atomic_write_text(target, "".join(new_lines))
+
+    rel_path = target.relative_to(WORKSPACE.resolve()).as_posix()
+    return (
+        f"[cwd: {cwd}]\n"
+        f"updated {rel_path} (replaced lines {start_line}-{end_line} with {len(replacement)} line(s))"
+    )
+
+
 SCHEMAS = [
     {
         "type": "function",
@@ -273,11 +319,38 @@ SCHEMAS = [
                 "required": ["path", "old_string", "new_string"],
             },
         },
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "workspace_edit",
+            "description": (
+                "Replace a line range in a workspace file with new text. "
+                "Prefer this over workspace_search_replace whenever workspace_search_replace "
+                "has failed even once on the same file — line numbers never mismatch. "
+                "Workflow: call workspace_read (with start_line/end_line) to confirm the region, "
+                "then call workspace_edit with those exact line numbers. "
+                "new_text replaces lines start_line..end_line inclusive (1-indexed, matching "
+                "workspace_read output). Pass new_text='' to delete lines. "
+                "new_text should end with a newline; one is appended automatically if missing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path relative to shell's current working directory"},
+                    "start_line": {"type": "integer", "description": "First line to replace (1-indexed)"},
+                    "end_line": {"type": "integer", "description": "Last line to replace inclusive (1-indexed)"},
+                    "new_text": {"type": "string", "description": "Replacement text ('' to delete the lines)"},
+                },
+                "required": ["path", "start_line", "end_line", "new_text"],
+            },
+        },
+    },
 ]
 
 FUNCTIONS = {
     "workspace_read": workspace_read,
     "workspace_grep": workspace_grep,
     "workspace_search_replace": workspace_search_replace,
+    "workspace_edit": workspace_edit,
 }
