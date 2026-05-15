@@ -561,6 +561,12 @@
     .btn-send.stop-state { background: var(--call-accent); color: #fff; }
     .btn-send.stop-state:hover:not(:disabled) { background: #446b57; }
     .btn-send:disabled { opacity: 0.35; cursor: default; }
+    #btn-loop { display: none; }
+    #btn-loop.loop-active { display: inline-flex; color: var(--text-2); border-color: var(--border-2); }
+    .needs-input-banner {
+      font-size: 13px; color: var(--text-2); padding: 6px 0; margin: 4px 0;
+      border-top: 1px solid var(--border);
+    }
     .btn-icon {
       background: none;
       border: 1px solid var(--border);
@@ -685,6 +691,7 @@
       <input type="file" id="file-input" style="display:none" multiple
              accept="image/*,.pdf,.txt,.md,.py,.js,.ts,.jsx,.tsx,.json,.csv,.html,.css,.yaml,.yml,.toml,.sh,.c,.cpp,.h,.java,.rs,.go">
       <div id="input" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Message…"></div>
+      <button class="btn btn-icon" id="btn-loop" onclick="_toggleLoop()" title="Loop mode">↻</button>
       <button class="btn btn-send" id="send-btn" onclick="sendOrStop()">Send</button>
       <button class="btn btn-icon" id="btn-mem" onclick="togglePanel('mem-panel','btn-mem')" title="Memories">◉</button>
     </div>
@@ -1318,6 +1325,26 @@
   let currentStreamController = null;
   let isStreaming = false;
   let _rejoinPollTimer = null;
+  let _loopMode = false;
+  let _loopNeedsInput = false;
+  const _LOOP_STOP_STRING = '[NEEDS_INPUT]';
+  const loopBtn = document.getElementById('btn-loop');
+
+  function _startLoop() {
+    _loopMode = true;
+    _loopNeedsInput = false;
+    loopBtn.classList.add('loop-active');
+  }
+
+  function _stopLoop() {
+    _loopMode = false;
+    loopBtn.classList.remove('loop-active');
+  }
+
+  function _toggleLoop() {
+    if (_loopMode) _stopLoop();
+    else _startLoop();
+  }
 
   function _stopRejoinPoll() {
     if (_rejoinPollTimer) { clearInterval(_rejoinPollTimer); _rejoinPollTimer = null; }
@@ -1343,6 +1370,7 @@
 
   function sendOrStop() {
     if (isStreaming) {
+      _stopLoop();
       cancelStream();
       return;
     }
@@ -1363,11 +1391,30 @@
     currentStreamController.abort();
   }
 
+  async function _sendText(text) {
+    // Programmatically inject text into input and send (used by loop auto-continue).
+    input.textContent = text;
+    send();
+  }
+
   async function send() {
     const streamSid = sid;
     const { text, attachments } = getInputContent();
     if ((!text && !attachments.length) || isStreaming) return;
+
+    // Handle /loop command.
+    if (text.trim().toLowerCase().startsWith('/loop')) {
+      const rest = text.trim().slice(5).trim();
+      clearInput();
+      _startLoop();
+      if (rest) { input.textContent = rest; }
+      else { input.textContent = 'continue'; }
+      send();
+      return;
+    }
+
     clearInput();
+    _loopNeedsInput = false;
     isStreaming = true;
     sendBtn.textContent = 'Stop';
     sendBtn.classList.add('stop-state');
@@ -1503,6 +1550,9 @@
             textBuffer  += event.text;
             _charQueue  += event.text;
             if (_charDrainId === null) _charDrainId = requestAnimationFrame(_drainCharQueue);
+            if (_loopMode && textBuffer.includes(_LOOP_STOP_STRING)) {
+              _loopNeedsInput = true;
+            }
 
           } else if (event.type === 'done') {
             providerUsed = event.provider;
@@ -1562,6 +1612,19 @@
       _hideThinking();
       input.focus();
       updateTokenCount();
+
+      if (_loopMode) {
+        if (_loopNeedsInput) {
+          _stopLoop();
+          const banner = document.createElement('div');
+          banner.className = 'needs-input-banner';
+          banner.textContent = 'Loop paused — model needs your input';
+          feed.appendChild(banner);
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        } else if (sid === streamSid) {
+          setTimeout(() => _sendText('continue'), 800);
+        }
+      }
     }
   }
 
