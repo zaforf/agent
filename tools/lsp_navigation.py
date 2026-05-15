@@ -25,6 +25,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -559,13 +560,41 @@ class _PyrightSession:
 _SESSION_LOCK = threading.Lock()
 _SESSION: _PyrightSession | None = None
 _SESSION_ROOT: Path | None = None
+_SESSION_LAST_USED: float = 0.0
+
+# Shut down the pyright Node.js process after this many seconds of inactivity.
+# Frees ~300-500 MB on low-RAM hosts (e.g. e2-micro). Re-created on next LSP call.
+_IDLE_TIMEOUT: float = float(os.environ.get("LSP_IDLE_TIMEOUT", "300"))
+
+
+def _reap_idle_session() -> None:
+    """Background thread: shut down pyright when idle for _IDLE_TIMEOUT seconds."""
+    while True:
+        time.sleep(60)
+        with _SESSION_LOCK:
+            global _SESSION, _SESSION_ROOT, _SESSION_LAST_USED
+            if _SESSION is None:
+                continue
+            if time.monotonic() - _SESSION_LAST_USED < _IDLE_TIMEOUT:
+                continue
+            log.info("lsp: idle timeout — shutting down pyright to free memory")
+            try:
+                _SESSION.shutdown()
+            except Exception as e:
+                log.warning("lsp: idle shutdown error: %s", e)
+            _SESSION = None
+            _SESSION_ROOT = None
+
+
+threading.Thread(target=_reap_idle_session, daemon=True, name="lsp-idle-reaper").start()
 
 
 def _get_session() -> _PyrightSession:
-    global _SESSION, _SESSION_ROOT
+    global _SESSION, _SESSION_ROOT, _SESSION_LAST_USED
     cwd = get_shell_cwd().resolve()
     with _SESSION_LOCK:
         if _SESSION is not None and _SESSION_ROOT == cwd:
+            _SESSION_LAST_USED = time.monotonic()
             return _SESSION
         if _SESSION is not None:
             try:
@@ -589,6 +618,7 @@ def _get_session() -> _PyrightSession:
                 "Try: npx -y --package=pyright pyright-langserver --stdio"
             ) from e
         _SESSION_ROOT = cwd
+        _SESSION_LAST_USED = time.monotonic()
         return _SESSION
 
 
