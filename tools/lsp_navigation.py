@@ -564,7 +564,7 @@ _SESSION_LAST_USED: float = 0.0
 
 # Shut down the pyright Node.js process after this many seconds of inactivity.
 # Frees ~300-500 MB on low-RAM hosts (e.g. e2-micro). Re-created on next LSP call.
-_IDLE_TIMEOUT: float = float(os.environ.get("LSP_IDLE_TIMEOUT", "300"))
+_IDLE_TIMEOUT: float = float(os.environ.get("LSP_IDLE_TIMEOUT", "1800"))
 
 
 def _reap_idle_session() -> None:
