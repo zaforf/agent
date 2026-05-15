@@ -1,7 +1,6 @@
 #!/bin/bash
 set -e
 
-gh auth login --with-token <<< "$GITHUB_TOKEN"
-gh auth setup-git
+git config --global credential.helper '!f() { echo username=x-access-token; printf "password=%s\n" "$GITHUB_TOKEN"; }; f'
 
 exec gunicorn main:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
