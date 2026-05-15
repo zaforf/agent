@@ -121,6 +121,7 @@ def shell_exec(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     timeout: seconds to wait for the command (default from AGENT_SHELL_TIMEOUT,
     typically 30). Increase for long-running tasks like package installs or builds.
     """
+    global _shell_cwd
     if not command or not command.strip():
         return "(empty command)"
 
@@ -160,8 +161,9 @@ def shell_exec(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
                 log.warning("shell: command timed out after %ds", timeout)
                 _kill_shell()
                 partial = "".join(lines).rstrip("\n")
-                trailer = f"[timed out after {timeout}s — output may be incomplete; shell restarted]"
-                return f"{partial}\n{trailer}" if partial else trailer
+                trailer = f"[timed out after {timeout}s — output may be incomplete; shell restarted, cwd reset to {WORKSPACE}]"
+                result = f"{partial}\n{trailer}" if partial else trailer
+                return f"[cwd: {_shell_cwd}]\n{result}"
 
             try:
                 raw = _out_queue.get(timeout=min(remaining, 1.0))
@@ -170,7 +172,7 @@ def shell_exec(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
 
             if raw is None:
                 _kill_shell()
-                return "Error: shell process died unexpectedly"
+                return f"[cwd: {_shell_cwd}]\nError: shell process died unexpectedly; shell restarted, cwd reset to {WORKSPACE}"
 
             decoded = raw.decode("utf-8", errors="replace")
 
@@ -183,13 +185,12 @@ def shell_exec(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
                 except ValueError:
                     exit_code = 0
                 if cwd_raw:
-                    global _shell_cwd
                     _shell_cwd = Path(cwd_raw.strip())
                 output = "".join(lines).rstrip("\n")
                 if exit_code != 0:
                     trailer = f"(exit code {exit_code})"
                     output = f"{output}\n{trailer}" if output else trailer
-                return output or "(no output)"
+                return f"[cwd: {_shell_cwd}]\n{output or '(no output)'}"
 
             total_bytes += len(raw)
             if total_bytes > _MAX_OUTPUT_BYTES:
