@@ -209,3 +209,44 @@ def test_grep_invalid_regex_treated_as_literal(ws):
 def test_grep_missing_file_raises(ws):
     with pytest.raises(FileNotFoundError):
         wp.workspace_grep("nope.py", "anything")
+
+
+# ── CWD header injection ──────────────────────────────────────────────────────
+
+def test_read_includes_cwd_header(ws):
+    (ws / "r.txt").write_text("hello\n", encoding="utf-8")
+    out = wp.workspace_read("r.txt")
+    assert out.startswith("[cwd:")
+
+
+def test_grep_includes_cwd_header(ws):
+    (ws / "g.py").write_text("def foo(): pass\n", encoding="utf-8")
+    out = wp.workspace_grep("g.py", "foo")
+    assert out.startswith("[cwd:")
+
+
+def test_search_replace_success_includes_cwd_header(ws):
+    (ws / "x.txt").write_text("old\n", encoding="utf-8")
+    out = wp.workspace_search_replace("x.txt", "old\n", "new\n")
+    assert out.startswith("[cwd:")
+
+
+# ── Fuzzy hint on not-found ───────────────────────────────────────────────────
+
+def test_not_found_includes_fuzzy_hint(ws):
+    (ws / "f.py").write_text("def my_function():\n    return 42\n", encoding="utf-8")
+    with pytest.raises(ValueError) as exc_info:
+        wp.workspace_search_replace("f.py", "def my_function():\n    return 99\n", "x")
+    msg = str(exc_info.value)
+    assert "old_string not found" in msg
+    assert "Closest match" in msg
+
+
+def test_not_found_no_hint_when_no_words_match(ws):
+    (ws / "f.py").write_text("def my_function():\n    return 42\n", encoding="utf-8")
+    with pytest.raises(ValueError) as exc_info:
+        wp.workspace_search_replace("f.py", "zzz_totally_absent\n", "x")
+    msg = str(exc_info.value)
+    assert "old_string not found" in msg
+    # No fuzzy hint when nothing matches
+    assert "Closest match" not in msg

@@ -279,7 +279,7 @@ def _run_ruff_check_pretty(target: Path, repo_root: Path, timeout: int) -> str:
 
 def append_workspace_edit_verification(path_rel: str, base_result: str) -> str:
     """If ``workspace_search_replace`` succeeded on a ``.py`` file, append ruff/pytest blocks."""
-    if not base_result.startswith("updated "):
+    if "updated " not in base_result:
         return base_result
     rel = (path_rel or "").strip().replace("\\", "/")
     if not rel:

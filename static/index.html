@@ -1367,7 +1367,6 @@
     const streamSid = sid;
     const { text, attachments } = getInputContent();
     if ((!text && !attachments.length) || isStreaming) return;
-    const streamSid = sid;
     clearInput();
     isStreaming = true;
     sendBtn.textContent = 'Stop';
