@@ -561,7 +561,8 @@
     .btn-send.stop-state { background: var(--call-accent); color: #fff; }
     .btn-send.stop-state:hover:not(:disabled) { background: #446b57; }
     .btn-send:disabled { opacity: 0.35; cursor: default; }
-    .btn-icon.loop-active { color: var(--text); border-color: var(--border-2); }
+    #btn-loop { display: none; }
+    #btn-loop.loop-active { display: inline-flex; color: var(--text); border-color: var(--border-2); }
     .needs-input-banner {
       font-size: 13px; color: var(--text-2); padding: 6px 0; margin: 4px 0;
       border-top: 1px solid var(--border);
