@@ -62,7 +62,12 @@ def test_empty_command(shell_env):
 def test_no_output_command(shell_env):
     sh = shell_env
     result = sh.shell_exec("true")
-    assert result == "(no output)"
+    assert "(no output)" in result
+
+
+def test_cwd_header_in_output(shell_env):
+    result = shell_env.shell_exec("echo hello")
+    assert result.startswith("[cwd:")
 
 
 # ── Exit codes ────────────────────────────────────────────────────────────────
