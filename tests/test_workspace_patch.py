@@ -250,3 +250,47 @@ def test_not_found_no_hint_when_no_words_match(ws):
     assert "old_string not found" in msg
     # No fuzzy hint when nothing matches
     assert "Closest match" not in msg
+
+
+# ── workspace_edit ────────────────────────────────────────────────────────────
+
+def test_edit_replaces_lines(ws):
+    (ws / "e.py").write_text("a\nb\nc\nd\n", encoding="utf-8")
+    wp.workspace_edit("e.py", 2, 3, "X\nY\n")
+    assert (ws / "e.py").read_text() == "a\nX\nY\nd\n"
+
+
+def test_edit_single_line(ws):
+    (ws / "e.py").write_text("a\nb\nc\n", encoding="utf-8")
+    wp.workspace_edit("e.py", 2, 2, "replaced\n")
+    assert (ws / "e.py").read_text() == "a\nreplaced\nc\n"
+
+
+def test_edit_deletes_lines(ws):
+    (ws / "e.py").write_text("a\nb\nc\n", encoding="utf-8")
+    wp.workspace_edit("e.py", 2, 2, "")
+    assert (ws / "e.py").read_text() == "a\nc\n"
+
+
+def test_edit_appends_newline_if_missing(ws):
+    (ws / "e.py").write_text("a\nb\nc\n", encoding="utf-8")
+    wp.workspace_edit("e.py", 2, 2, "replaced")  # no trailing newline
+    assert (ws / "e.py").read_text() == "a\nreplaced\nc\n"
+
+
+def test_edit_includes_cwd_header(ws):
+    (ws / "e.py").write_text("a\nb\n", encoding="utf-8")
+    out = wp.workspace_edit("e.py", 1, 1, "x\n")
+    assert out.startswith("[cwd:")
+    assert "updated" in out
+
+
+def test_edit_out_of_range_raises(ws):
+    (ws / "e.py").write_text("a\nb\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="out of range"):
+        wp.workspace_edit("e.py", 99, 99, "x\n")
+
+
+def test_edit_missing_file_raises(ws):
+    with pytest.raises(FileNotFoundError):
+        wp.workspace_edit("nope.py", 1, 1, "x\n")

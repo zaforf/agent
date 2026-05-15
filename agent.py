@@ -208,6 +208,7 @@ _BLOCKING_SYNC_TOOLS = frozenset({
     "delete_memory",
     "shell_exec",
     "workspace_search_replace",
+    "workspace_edit",
     "lsp_go_to_definition",
     "lsp_find_references",
     "lsp_outline",
@@ -661,7 +662,7 @@ async def _run_tool_async(name: str, args: dict) -> str:
             result = str(fn(**args))
         except Exception as e:
             return f"Error in {name}: {e}"
-        if name == "workspace_search_replace":
+        if name in ("workspace_search_replace", "workspace_edit"):
             result = append_workspace_edit_verification(args.get("path", "") or "", result)
         return result
 
