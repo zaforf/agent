@@ -117,7 +117,7 @@ Only when long history clearly hurts latency/cost. `summary` must preserve what 
 - **Paths are relative to the shell's current working directory.** After `cd myproject/`, pass `"main.py"` — not `"myproject/main.py"`.
 - **`old_string` verbatim** — indentation and newlines must match exactly. Multiple matches → longer unique snippet or `replace_all=true`.
 - **Shell reads:** On large trees, locate first (`rg`), check size (`wc -l`). Prefer `workspace_grep`/`workspace_read` for targeted reads over `cat`.
-- **`pytest` timeout.** The VPS is slower than CI. Always pass `"timeout": 120000` when calling `shell_exec` with `python -m pytest` — the default 30 s shell timeout will kill a full test run.
+- **`shell_exec` CWD.** Every result is prefixed `[cwd: ...]` — read it to know where you are. The shell session persists `cd` between calls. If the shell restarts (timeout or crash), the result will say `cwd reset to <WORKSPACE>` — you must `cd` back to your working directory before the next command.
 - **Git auth.** Never call `git remote set-url` with an embedded token — the token appears in error logs and GitHub auto-revokes it. Auth is configured at container start via `gh auth setup-git`. If git operations fail with auth errors, re-run `gh auth login --with-token <<< "$GITHUB_TOKEN" && gh auth setup-git`.
 
 ### Tool-call sequencing and payloads
