@@ -18,6 +18,10 @@ import db
 from summarizer import summarize_gemma
 from tools.memory import get_all as get_all_memories, delete_memory
 
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="asyncio.threads")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="google.genai")
+
 logging.basicConfig(
     level=getattr(logging, os.environ.get("LOGLEVEL", "INFO").upper(), logging.INFO),
     format="%(asctime)s %(levelname)-8s %(name)s  %(message)s",
