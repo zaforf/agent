@@ -261,8 +261,33 @@ def test_chat_stream_handles_error_event(client, monkeypatch):
         data = b"".join(r.iter_bytes()).decode()
 
     assert "boom midway" in data
-    # No history should be persisted on error (including the pending user message)
-    assert db.get_history("err-stream") == []
+    hist = db.get_history("err-stream")
+    assert [m["role"] for m in hist] == ["user", "assistant"]
+    assert hist[0]["content"] == "x"
+    assert "partial" in (hist[1].get("content") or "")
+    assert "boom midway" in (hist[1].get("content") or "")
+
+
+def test_chat_stream_persists_on_agent_error_yield(client, monkeypatch):
+    async def fake_stream(user_message, history, **kwargs):
+        yield {"type": "text_chunk", "text": "hi"}
+        yield {"type": "error", "detail": "max tool iterations"}
+
+    monkeypatch.setattr(agent, "run_stream", fake_stream)
+
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        json={"message": "ask", "session_id": "err-yield"},
+    ) as r:
+        assert r.status_code == 200
+        body = b"".join(r.iter_bytes()).decode()
+
+    assert '"type": "error"' in body
+    hist = db.get_history("err-yield")
+    assert len(hist) == 2
+    assert hist[1]["content"].startswith("hi")
+    assert "max tool iterations" in hist[1]["content"]
 
 
 def test_chat_stream_cancel_endpoint_cancels_active_stream(client, monkeypatch):

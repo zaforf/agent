@@ -1459,6 +1459,7 @@
       _charDrainId = requestAnimationFrame(_drainCharQueue);
     }
 
+    let streamHadError = false;
     try {
       // Yield so the browser can paint the user bubble before we open the
       // network stream (otherwise some engines batch layout until after fetch
@@ -1594,7 +1595,7 @@
             }
           } else if (event.type === 'error') {
             console.error('[agent] error:', event.detail);
-            addAgentMsg('**Error:** ' + esc(event.detail || 'Unknown error'));
+            streamHadError = true;
           }
         }
       }
@@ -1610,6 +1611,8 @@
       sendBtn.textContent = 'Send';
       sendBtn.classList.remove('stop-state');
       _hideThinking();
+      if (streamHadError && sid === streamSid)
+        await loadHistory();
       input.focus();
       updateTokenCount();
 

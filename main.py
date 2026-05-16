@@ -65,22 +65,55 @@ _background_tasks: set[asyncio.Task] = set()
 class _StreamTurnState:
     """Server-owned lifecycle for one streaming turn per session."""
 
-    def __init__(self, session_id: str, req_message: str, display_files: list[dict], pending_row_id: int):
+    def __init__(
+        self,
+        session_id: str,
+        req_message: str,
+        display_files: list[dict],
+        pending_row_id: int,
+        *,
+        user_content: "str | list | None" = None,
+    ):
         self.session_id = session_id
         self.req_message = req_message
         self.display_files = display_files
         self.pending_row_id = pending_row_id
+        self.user_content = user_content if user_content is not None else req_message
         self.queue: asyncio.Queue[dict | None] = asyncio.Queue()
         self.turn_messages: list[dict] = []
         self.pending: list[tuple[dict, asyncio.Task]] = []
         self.full_response = ""
         self.nuke_summary: str | None = None
+        self.abort_detail: str | None = None
+        self.stream_error_detail: str | None = None
         self.completed = False
         self.was_cancelled = False
         self.task: asyncio.Task | None = None
 
 
 _active_stream_turns: dict[str, _StreamTurnState] = {}
+
+
+def _synthetic_failed_turn_messages(
+    user_content: "str | list",
+    display_files: list[dict],
+    partial_visible: str,
+    error_detail: str,
+) -> list[dict]:
+    """Build a minimal turn for DB/cache when streaming stops with an error.
+
+    Mirrors a normal ``turn_messages`` slice: user (with optional ``_display_files``)
+    then assistant text combining any streamed visible prefix and a final error line.
+    """
+    user_msg: dict = {"role": "user", "content": user_content}
+    if display_files:
+        user_msg["_display_files"] = list(display_files)
+    chunks: list[str] = []
+    pv = (partial_visible or "").strip()
+    if pv:
+        chunks.append(pv)
+    chunks.append(f"**Error:** {error_detail.strip()}")
+    return [user_msg, {"role": "assistant", "content": "\n\n".join(chunks)}]
 
 
 async def _persist_stream_turn(state: _StreamTurnState) -> None:
@@ -93,16 +126,33 @@ async def _persist_stream_turn(state: _StreamTurnState) -> None:
         _apply_nuke(state.session_id, history, state.nuke_summary)
         return
 
-    if (not state.was_cancelled) and state.full_response and state.turn_messages:
+    if state.was_cancelled:
+        db.delete_pending_turn(state.pending_row_id)
+        return
+
+    if state.turn_messages:
         history.extend(state.turn_messages)
         db.update_turn_messages(state.pending_row_id, state.turn_messages)
         _spawn_finalizer(state.pending, state.turn_messages, state.pending_row_id)
         _spawn_title_update(state.session_id, state.req_message)
-    else:
-        # Turn was cancelled or errored.
-        # We DELETE the pending row to avoid consecutive user messages in context,
-        # which corrupts the LLM conversational state.
-        db.delete_pending_turn(state.pending_row_id)
+        return
+
+    err = (state.abort_detail or state.stream_error_detail or "").strip()
+    if err:
+        synthetic = _synthetic_failed_turn_messages(
+            state.user_content,
+            state.display_files,
+            state.full_response,
+            err,
+        )
+        _patch_display_files(synthetic, state.display_files)
+        history.extend(synthetic)
+        db.update_turn_messages(state.pending_row_id, synthetic)
+        _spawn_title_update(state.session_id, state.req_message)
+        return
+
+    # No completion, no error — drop the pending row (should be rare).
+    db.delete_pending_turn(state.pending_row_id)
 
 
 async def _run_stream_turn(
@@ -125,12 +175,15 @@ async def _run_stream_turn(
                 state.nuke_summary = _extract_nuke_summary(state.turn_messages)
                 if state.nuke_summary is None:
                     _patch_display_files(state.turn_messages, state.display_files)
+            elif event.get("type") == "error":
+                state.stream_error_detail = str(event.get("detail") or "Unknown error")
             await state.queue.put(event)
     except asyncio.CancelledError:
         state.was_cancelled = True
         await state.queue.put({"type": "cancelled"})
         raise
     except Exception as e:
+        state.abort_detail = str(e)
         await state.queue.put({"type": "error", "detail": str(e)})
     finally:
         with suppress(Exception):
@@ -435,7 +488,13 @@ async def chat_stream(req: ChatRequest):
     if state is None or state.completed:
         # Immediate persistence to ensure durability.
         pending_row_id = db.create_pending_turn(req.session_id, req.message)
-        state = _StreamTurnState(req.session_id, req.message, display_files, pending_row_id)
+        state = _StreamTurnState(
+            req.session_id,
+            req.message,
+            display_files,
+            pending_row_id,
+            user_content=user_content,
+        )
         state.task = asyncio.create_task(_run_stream_turn(state, user_content, history))
         _active_stream_turns[req.session_id] = state
 
