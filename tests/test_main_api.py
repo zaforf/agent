@@ -328,7 +328,43 @@ def test_chat_stream_cancel_endpoint_cancels_active_stream(client, monkeypatch):
     assert db.get_history("cancel-sess") == []
 
 
-def test_chat_stream_cancel_endpoint_noop_when_not_active(client):
+def test_chat_stream_error_uses_turn_messages_when_sent(client, monkeypatch):
+    """Error payload may include full turn (e.g. tool_calls + tool + error footer)."""
+    tc = {
+        "id": "tc_0",
+        "type": "function",
+        "function": {"name": "workspace_read", "arguments": "{}"},
+    }
+    tm = [
+        {"role": "user", "content": "ask"},
+        {"role": "assistant", "content": None, "tool_calls": [tc]},
+        {
+            "role": "tool",
+            "name": "workspace_read",
+            "tool_call_id": "tc_0",
+            "content": "file contents",
+        },
+        {"role": "assistant", "content": "**Error:** injected"},
+    ]
+
+    async def fake_stream(user_message, history, **kwargs):
+        assert user_message == "ask"
+        yield {"type": "error", "detail": "injected", "turn_messages": tm}
+
+    monkeypatch.setattr(agent, "run_stream", fake_stream)
+
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        json={"message": "ask", "session_id": "err-tm"},
+    ) as r:
+        assert r.status_code == 200
+        body = b"".join(r.iter_bytes()).decode()
+    assert "turn_messages" not in body
+    hist = db.get_history("err-tm")
+    assert [m.get("role") for m in hist] == ["user", "assistant", "tool", "assistant"]
+    assert hist[2]["name"] == "workspace_read"
+    assert hist[2]["content"] == "file contents"
     r = client.post("/chat/stream/cancel", json={"session_id": "nope"})
     assert r.status_code == 200
     assert r.json() == {"cancelled": False}

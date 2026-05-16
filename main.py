@@ -86,6 +86,7 @@ class _StreamTurnState:
         self.nuke_summary: str | None = None
         self.abort_detail: str | None = None
         self.stream_error_detail: str | None = None
+        self.error_turn_messages: list[dict] | None = None
         self.completed = False
         self.was_cancelled = False
         self.task: asyncio.Task | None = None
@@ -139,12 +140,15 @@ async def _persist_stream_turn(state: _StreamTurnState) -> None:
 
     err = (state.abort_detail or state.stream_error_detail or "").strip()
     if err:
-        synthetic = _synthetic_failed_turn_messages(
-            state.user_content,
-            state.display_files,
-            state.full_response,
-            err,
-        )
+        if state.error_turn_messages:
+            synthetic = state.error_turn_messages
+        else:
+            synthetic = _synthetic_failed_turn_messages(
+                state.user_content,
+                state.display_files,
+                state.full_response,
+                err,
+            )
         _patch_display_files(synthetic, state.display_files)
         history.extend(synthetic)
         db.update_turn_messages(state.pending_row_id, synthetic)
@@ -177,6 +181,9 @@ async def _run_stream_turn(
                     _patch_display_files(state.turn_messages, state.display_files)
             elif event.get("type") == "error":
                 state.stream_error_detail = str(event.get("detail") or "Unknown error")
+                tms = event.pop("turn_messages", None)
+                if isinstance(tms, list) and tms:
+                    state.error_turn_messages = tms
             await state.queue.put(event)
     except asyncio.CancelledError:
         state.was_cancelled = True
