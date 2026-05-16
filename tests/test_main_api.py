@@ -261,8 +261,33 @@ def test_chat_stream_handles_error_event(client, monkeypatch):
         data = b"".join(r.iter_bytes()).decode()
 
     assert "boom midway" in data
-    # No history should be persisted on error (including the pending user message)
-    assert db.get_history("err-stream") == []
+    hist = db.get_history("err-stream")
+    assert [m["role"] for m in hist] == ["user", "assistant"]
+    assert hist[0]["content"] == "x"
+    assert "partial" in (hist[1].get("content") or "")
+    assert "boom midway" in (hist[1].get("content") or "")
+
+
+def test_chat_stream_persists_on_agent_error_yield(client, monkeypatch):
+    async def fake_stream(user_message, history, **kwargs):
+        yield {"type": "text_chunk", "text": "hi"}
+        yield {"type": "error", "detail": "max tool iterations"}
+
+    monkeypatch.setattr(agent, "run_stream", fake_stream)
+
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        json={"message": "ask", "session_id": "err-yield"},
+    ) as r:
+        assert r.status_code == 200
+        body = b"".join(r.iter_bytes()).decode()
+
+    assert '"type": "error"' in body
+    hist = db.get_history("err-yield")
+    assert len(hist) == 2
+    assert hist[1]["content"].startswith("hi")
+    assert "max tool iterations" in hist[1]["content"]
 
 
 def test_chat_stream_cancel_endpoint_cancels_active_stream(client, monkeypatch):
@@ -303,7 +328,43 @@ def test_chat_stream_cancel_endpoint_cancels_active_stream(client, monkeypatch):
     assert db.get_history("cancel-sess") == []
 
 
-def test_chat_stream_cancel_endpoint_noop_when_not_active(client):
+def test_chat_stream_error_uses_turn_messages_when_sent(client, monkeypatch):
+    """Error payload may include full turn (e.g. tool_calls + tool + error footer)."""
+    tc = {
+        "id": "tc_0",
+        "type": "function",
+        "function": {"name": "workspace_read", "arguments": "{}"},
+    }
+    tm = [
+        {"role": "user", "content": "ask"},
+        {"role": "assistant", "content": None, "tool_calls": [tc]},
+        {
+            "role": "tool",
+            "name": "workspace_read",
+            "tool_call_id": "tc_0",
+            "content": "file contents",
+        },
+        {"role": "assistant", "content": "**Error:** injected"},
+    ]
+
+    async def fake_stream(user_message, history, **kwargs):
+        assert user_message == "ask"
+        yield {"type": "error", "detail": "injected", "turn_messages": tm}
+
+    monkeypatch.setattr(agent, "run_stream", fake_stream)
+
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        json={"message": "ask", "session_id": "err-tm"},
+    ) as r:
+        assert r.status_code == 200
+        body = b"".join(r.iter_bytes()).decode()
+    assert "turn_messages" not in body
+    hist = db.get_history("err-tm")
+    assert [m.get("role") for m in hist] == ["user", "assistant", "tool", "assistant"]
+    assert hist[2]["name"] == "workspace_read"
+    assert hist[2]["content"] == "file contents"
     r = client.post("/chat/stream/cancel", json={"session_id": "nope"})
     assert r.status_code == 200
     assert r.json() == {"cancelled": False}

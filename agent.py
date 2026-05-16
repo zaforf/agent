@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import datetime
 import json
 import logging
@@ -74,6 +75,24 @@ _REPAIR_USER = (
     "closed reasoning blocks such as <thought>, <thinking>, or <redacted_reasoning> (or the reply was empty). "
     "Reply again with ONLY the answer the user should see — no reasoning tags."
 )
+
+
+def _turn_messages_for_stream_error(
+    messages: list[dict],
+    turn_start: int,
+    partial_visible: str,
+    error_detail: str,
+) -> list[dict]:
+    """Persistable turn slice: messages so far this turn + final assistant error line."""
+    out = copy.deepcopy(messages[turn_start:])
+    chunks: list[str] = []
+    pv = (partial_visible or "").strip()
+    if pv:
+        chunks.append(pv)
+    chunks.append(f"**Error:** {error_detail.strip()}")
+    out.append({"role": "assistant", "content": "\n\n".join(chunks)})
+    return out
+
 
 # Tool results longer than this get summarized for history; shorter ones kept verbatim.
 _HISTORY_SUMMARIZE_THRESHOLD = 8000
@@ -896,7 +915,7 @@ async def run_stream(
       {"type": "tool_result", "name": str, "result": str}
       {"type": "text_chunk",  "text": str}
       {"type": "done",        "provider": str, "turn_messages": list, "pending_summaries": list}
-      {"type": "error",       "detail": str}
+      {"type": "error",       "detail": str, optional "turn_messages" for failure persistence}
 
     `user_content` is either a plain string or a multimodal content list
     (OpenAI vision format). See `run()` for full contract.
@@ -930,188 +949,214 @@ async def run_stream(
     pending_summaries: list[tuple[dict, asyncio.Task]] = []
 
     for iteration in range(MAX_TOOL_ITERATIONS):
-        stream, provider = await _call_stream(messages)
-        provider_used    = provider
-        log.info("turn[%d]  provider=%s", iteration, provider)
+        try:
+            raw_parts: list[str] = []
+            visible_parts: list[str] = []
+            stream, provider = await _call_stream(messages)
+            provider_used    = provider
+            log.info("turn[%d]  provider=%s", iteration, provider)
         
-        # The raw stream contains the thoughts; we capture them for the debug log.
-        raw_parts       = []   # raw stream content including thinking tags
-        visible_parts   = []   # stripped visible content for history storage
-        tool_calls_slots: list[dict] = []
-        stripper        = _ThinkStripper()
-        tool_mode       = False   # once True, suppress text forwarding
+            # The raw stream contains the thoughts; we capture them for the debug log.
+            tool_calls_slots: list[dict] = []
+            stripper        = _ThinkStripper()
+            tool_mode       = False   # once True, suppress text forwarding
 
-        async for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
 
-            if delta.tool_calls:
-                tool_mode = True
-                for tc in delta.tool_calls:
-                    if not tc.function:
-                        continue
-                    idx = tc.index if tc.index is not None else 0
-                    tid = (tc.id or "").strip()
-                    fn = tc.function
-                    name_frag = (fn.name or "").strip()
-                    has_args = fn.arguments is not None
+                if delta.tool_calls:
+                    tool_mode = True
+                    for tc in delta.tool_calls:
+                        if not tc.function:
+                            continue
+                        idx = tc.index if tc.index is not None else 0
+                        tid = (tc.id or "").strip()
+                        fn = tc.function
+                        name_frag = (fn.name or "").strip()
+                        has_args = fn.arguments is not None
 
-                    slot: dict | None = None
-                    if name_frag:
-                        slot = _stream_resolve_slot_for_name(tool_calls_slots, tid, idx)
-                        merged, split = _merge_stream_tool_name(slot["name"], name_frag)
-                        if split:
-                            new_slot = {
-                                "id": tid or "",
-                                "stream_index": idx,
-                                "name": name_frag,
-                                "arguments": "",
-                            }
-                            tool_calls_slots.append(new_slot)
-                            slot = new_slot
-                        else:
-                            slot["name"] = merged
-                        if tid and not slot["id"]:
-                            slot["id"] = tid
-                    if has_args:
-                        if slot is None:
-                            slot = _stream_slot_for_arguments(tool_calls_slots, tid, idx)
-                        if tid and not slot["id"]:
-                            slot["id"] = tid
-                        slot["arguments"] = _merge_stream_fragment(
-                            slot["arguments"], fn.arguments
-                        )
+                        slot: dict | None = None
+                        if name_frag:
+                            slot = _stream_resolve_slot_for_name(tool_calls_slots, tid, idx)
+                            merged, split = _merge_stream_tool_name(slot["name"], name_frag)
+                            if split:
+                                new_slot = {
+                                    "id": tid or "",
+                                    "stream_index": idx,
+                                    "name": name_frag,
+                                    "arguments": "",
+                                }
+                                tool_calls_slots.append(new_slot)
+                                slot = new_slot
+                            else:
+                                slot["name"] = merged
+                            if tid and not slot["id"]:
+                                slot["id"] = tid
+                        if has_args:
+                            if slot is None:
+                                slot = _stream_slot_for_arguments(tool_calls_slots, tid, idx)
+                            if tid and not slot["id"]:
+                                slot["id"] = tid
+                            slot["arguments"] = _merge_stream_fragment(
+                                slot["arguments"], fn.arguments
+                            )
 
-            if delta.content and not tool_mode:
-                raw_parts.append(delta.content)
-                prev_state = stripper._state
-                forwarded  = stripper.feed(delta.content)
-                # Thinking block just closed → tell the UI to drop the stale count.
-                # The model may still be generating before streaming its first output
-                # token, so we keep the dots visible rather than hiding entirely.
-                if prev_state == "buffering" and stripper._state == "scanning":
-                    yield {"type": "thinking_done"}
-                if forwarded:
-                    visible_parts.append(forwarded)
-                    yield {"type": "text_chunk", "text": forwarded}
-                elif stripper._state == "buffering":
-                    yield {"type": "thinking_chars", "count": len(stripper._buf)}
+                if delta.content and not tool_mode:
+                    raw_parts.append(delta.content)
+                    prev_state = stripper._state
+                    forwarded  = stripper.feed(delta.content)
+                    # Thinking block just closed → tell the UI to drop the stale count.
+                    # The model may still be generating before streaming its first output
+                    # token, so we keep the dots visible rather than hiding entirely.
+                    if prev_state == "buffering" and stripper._state == "scanning":
+                        yield {"type": "thinking_done"}
+                    if forwarded:
+                        visible_parts.append(forwarded)
+                        yield {"type": "text_chunk", "text": forwarded}
+                    elif stripper._state == "buffering":
+                        yield {"type": "thinking_chars", "count": len(stripper._buf)}
 
-        # Flush any partial thought buffer
-        tail = stripper.finalize()
-        if tail and not tool_mode:
-            visible_parts.append(tail)
-            yield {"type": "text_chunk", "text": tail}
-            raw_parts.append(tail)
+            # Flush any partial thought buffer
+            tail = stripper.finalize()
+            if tail and not tool_mode:
+                visible_parts.append(tail)
+                yield {"type": "text_chunk", "text": tail}
+                raw_parts.append(tail)
 
-        full_content    = "".join(raw_parts)
-        session_log.log("THOUGHT", full_content)
-        visible_content = "".join(visible_parts)
+            full_content    = "".join(raw_parts)
+            session_log.log("THOUGHT", full_content)
+            visible_content = "".join(visible_parts)
 
-        if tool_calls_slots:
-            native_tc_list = []
-            for i, tc in enumerate(tool_calls_slots):
-                tc_id = tc["id"] or f"tc_{i}"
-                # Streamed argument chunks can be malformed/incomplete JSON.
-                # Normalize once here so history replay stays provider-safe.
-                try:
-                    args_obj = json.loads(tc["arguments"] or "{}")
-                except json.JSONDecodeError:
-                    args_obj = {}
-                native_tc_list.append({
-                    "id":   tc_id,
-                    "type": "function",
-                    "function": {"name": tc["name"], "arguments": json.dumps(args_obj)},
+            if tool_calls_slots:
+                native_tc_list = []
+                for i, tc in enumerate(tool_calls_slots):
+                    tc_id = tc["id"] or f"tc_{i}"
+                    # Streamed argument chunks can be malformed/incomplete JSON.
+                    # Normalize once here so history replay stays provider-safe.
+                    try:
+                        args_obj = json.loads(tc["arguments"] or "{}")
+                    except json.JSONDecodeError:
+                        args_obj = {}
+                    native_tc_list.append({
+                        "id":   tc_id,
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": json.dumps(args_obj)},
+                    })
+
+                messages.append({
+                    "role":       "assistant",
+                    "content":    visible_content or None,
+                    "tool_calls": native_tc_list,
                 })
 
-            messages.append({
-                "role":       "assistant",
-                "content":    visible_content or None,
-                "tool_calls": native_tc_list,
-            })
+                specs: list[tuple[str, str, dict]] = []
+                for ntc in native_tc_list:
+                    try:
+                        args_obj = json.loads(ntc["function"]["arguments"] or "{}")
+                    except json.JSONDecodeError:
+                        args_obj = {}
+                    specs.append((ntc["id"], ntc["function"]["name"], args_obj))
 
-            specs: list[tuple[str, str, dict]] = []
-            for ntc in native_tc_list:
-                try:
-                    args_obj = json.loads(ntc["function"]["arguments"] or "{}")
-                except json.JSONDecodeError:
-                    args_obj = {}
-                specs.append((ntc["id"], ntc["function"]["name"], args_obj))
+                for tc_id, name, args in specs:
+                    log.info("tool-call  %s  %s", name, str(args)[:120])
+                    session_log.log("TOOL_CALL", f"{name}({json.dumps(args)})")
+                    yield {"type": "tool_call", "name": name, "args": args}
 
-            for tc_id, name, args in specs:
-                log.info("tool-call  %s  %s", name, str(args)[:120])
-                session_log.log("TOOL_CALL", f"{name}({json.dumps(args)})")
-                yield {"type": "tool_call", "name": name, "args": args}
+                rows = await _run_tool_specs_to_results(specs)
+                result_messages = []
+                for tc_id, name, args, result in rows:
+                    log.debug("stream: tool_result %s → %.120s", name, result)
+                    session_log.log("TOOL_RESULT", f"{name} -> {result}")
+                    yield {"type": "tool_result", "name": name, "result": result}
 
-            rows = await _run_tool_specs_to_results(specs)
-            result_messages = []
-            for tc_id, name, args, result in rows:
-                log.debug("stream: tool_result %s → %.120s", name, result)
-                session_log.log("TOOL_RESULT", f"{name} -> {result}")
-                yield {"type": "tool_result", "name": name, "result": result}
+                    nuke_summary = _extract_nuke_summary(result)
+                    if nuke_summary is not None:
+                        await _apply_finished_summaries(pending_summaries)
+                        yield {"type": "text_chunk", "text": nuke_summary}
+                        yield {
+                            "type": "done",
+                            "provider": provider_used,
+                            "turn_messages": [{"role": "assistant", "content": nuke_summary, "_nuke": True}],
+                            "pending_summaries": pending_summaries,
+                        }
+                        return
 
-                nuke_summary = _extract_nuke_summary(result)
-                if nuke_summary is not None:
-                    await _apply_finished_summaries(pending_summaries)
-                    yield {"type": "text_chunk", "text": nuke_summary}
-                    yield {
-                        "type": "done",
-                        "provider": provider_used,
-                        "turn_messages": [{"role": "assistant", "content": nuke_summary, "_nuke": True}],
-                        "pending_summaries": pending_summaries,
+                    msg_dict = {
+                        "role":         "tool",
+                        "name":         name,
+                        "tool_call_id": tc_id,
+                        "content":      result,
                     }
-                    return
+                    result_messages.append(msg_dict)
+                    if len(result) > _HISTORY_SUMMARIZE_THRESHOLD:
+                        task = asyncio.create_task(_summarize_for_history(name, args, _user_text, result))
+                        pending_summaries.append((msg_dict, task))
 
-                msg_dict = {
-                    "role":         "tool",
-                    "name":         name,
-                    "tool_call_id": tc_id,
-                    "content":      result,
-                }
-                result_messages.append(msg_dict)
-                if len(result) > _HISTORY_SUMMARIZE_THRESHOLD:
-                    task = asyncio.create_task(_summarize_for_history(name, args, _user_text, result))
-                    pending_summaries.append((msg_dict, task))
+                messages.extend(result_messages)
 
-            messages.extend(result_messages)
-
-        else:
-            # Text was already forwarded chunk-by-chunk during streaming. The
-            # repair gate keys on VISIBLE content, not raw — a stream that is
-            # entirely <thinking>...</thinking> has non-empty raw content but
-            # zero visible content, and the user still saw nothing. §4.3.
-            if not visible_content.strip():
-                if not full_content.strip():
-                    yield {"type": "error", "detail": "Empty response from model."}
-                    return
-                # Thinking-only reply → repair. Run the repair against a scratch
-                # message list so the scaffold (`_REPAIR_USER` + the empty-visible
-                # assistant placeholder) does NOT leak into stored history.
-                repair_messages = messages + [
-                    {"role": "assistant", "content": full_content},
-                    {"role": "user", "content": _REPAIR_USER},
-                ]
-                response2, provider2 = await _call(repair_messages, use_tools=False)
-                provider_used = provider2
-                rtxt = _visible_after_think(response2.choices[0].message.content or "")
-                if not rtxt:
-                    yield {"type": "error", "detail": "Empty response after repair."}
-                    return
-                messages.append({"role": "assistant", "content": rtxt})
-                session_log.log("OUTPUT", rtxt)
-                yield {"type": "text_chunk", "text": rtxt}
             else:
-                messages.append({"role": "assistant", "content": visible_content})
-                session_log.log("OUTPUT", visible_content)
-            await _apply_finished_summaries(pending_summaries)
-            yield {
-                "type": "done",
-                "provider": provider_used,
-                "turn_messages": messages[turn_start:],
-                "pending_summaries": pending_summaries,
-            }
+                # Text was already forwarded chunk-by-chunk during streaming. The
+                # repair gate keys on VISIBLE content, not raw — a stream that is
+                # entirely <thinking>...</thinking> has non-empty raw content but
+                # zero visible content, and the user still saw nothing. §4.3.
+                if not visible_content.strip():
+                    if not full_content.strip():
+                        detail = "Empty response from model."
+                        yield {
+                            "type": "error",
+                            "detail": detail,
+                            "turn_messages": _turn_messages_for_stream_error(
+                                messages, turn_start, "", detail
+                            ),
+                        }
+                        return
+                    # Thinking-only reply → repair. Run the repair against a scratch
+                    # message list so the scaffold (`_REPAIR_USER` + the empty-visible
+                    # assistant placeholder) does NOT leak into stored history.
+                    repair_messages = messages + [
+                        {"role": "assistant", "content": full_content},
+                        {"role": "user", "content": _REPAIR_USER},
+                    ]
+                    response2, provider2 = await _call(repair_messages, use_tools=False)
+                    provider_used = provider2
+                    rtxt = _visible_after_think(response2.choices[0].message.content or "")
+                    if not rtxt:
+                        detail = "Empty response after repair."
+                        yield {
+                            "type": "error",
+                            "detail": detail,
+                            "turn_messages": _turn_messages_for_stream_error(
+                                messages, turn_start, "", detail
+                            ),
+                        }
+                        return
+                    messages.append({"role": "assistant", "content": rtxt})
+                    session_log.log("OUTPUT", rtxt)
+                    yield {"type": "text_chunk", "text": rtxt}
+                else:
+                    messages.append({"role": "assistant", "content": visible_content})
+                    session_log.log("OUTPUT", visible_content)
+                await _apply_finished_summaries(pending_summaries)
+                yield {
+                    "type": "done",
+                    "provider": provider_used,
+                    "turn_messages": messages[turn_start:],
+                    "pending_summaries": pending_summaries,
+                }
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            tm = _turn_messages_for_stream_error(messages, turn_start, "".join(visible_parts), str(e))
+            yield {"type": "error", "detail": str(e), "turn_messages": tm}
             return
 
     await _apply_finished_summaries(pending_summaries)
-    yield {"type": "error", "detail": "Reached max tool iterations."}
+    detail = "Reached max tool iterations."
+    yield {
+        "type": "error",
+        "detail": detail,
+        "turn_messages": _turn_messages_for_stream_error(messages, turn_start, "", detail),
+    }

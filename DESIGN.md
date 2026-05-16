@@ -447,20 +447,24 @@ When `TELEGRAM_BOT_TOKEN` is set, `main.py` starts **long-polling** `getUpdates`
 | `done` | `provider: str`, `turn_messages: list` | Turn complete; `turn_messages` is the full history slice |
 | `error` | `detail: str` | Unrecoverable error |
 
-After a successful turn, `main.py` extends the per-session in-memory cache and appends the row to SQLite (`_persist_stream_turn` runs in the stream producer’s `finally`, so this still happens if the browser disconnects mid-stream). The UI uses `turn_messages` from the `done` event to render the completed turn; canonical persisted history is served by `GET /sessions/{id}/history`.
+After a successful turn, `main.py` extends the per-session in-memory cache and fills in the **pending** SQLite row via `update_turn_messages` (`_persist_stream_turn` runs in the stream producer’s `finally`, so this still happens if the browser disconnects mid-stream).
+
+**Failed stream persistence:** If the producer raises or `run_stream` yields `{"type":"error",...}` (before a `done` event), the same pending row is still completed. When the error event carries **`turn_messages`** (from `agent.py`: snapshot of the turn including **`tool_calls` / `tool` rows** plus a closing assistant line with streamed visible text and `**Error:** …`), that list is stored verbatim; otherwise `main.py` synthesizes user + `text_chunk` text + error. **User-initiated cancellation** (`/chat/stream/cancel` or task cancel) still **deletes** the pending row so an intentional stop does not clutter history.
+
+The UI renders from `turn_messages` on `done` for successful turns; canonical history is `GET /sessions/{id}/history`. After an SSE `error` event, the web client calls `loadHistory()` so the feed matches SQLite (partial streamed text + error line) without orphan optimistic-only bubbles.
 
 **Server-owned streaming (per session):**
 
 - **Multiple chats**: Any number of sessions may exist in parallel; each `session_id` has its own history and at most **one** active streamed turn at a time. A second `POST /chat/stream` for the same session while a turn is still running **attaches** to that turn’s event queue (duplicate generation is not started).
 - **Client disconnect**: Closing the tab or losing the SSE connection **cancels only the HTTP response handler** for that browser; the background producer keeps running until the turn finishes, errors, or is cancelled via `/chat/stream/cancel`.
-- **Persistence**: A completed, non-cancelled turn with a non-empty assistant reply is written to SQLite even when no client was connected at completion time (disconnect-safe persistence of the **final** turn — not mid-stream partials in the DB).
+- **Persistence**: A completed, non-cancelled turn is written to SQLite (the pending row is finalized with `turn_messages`) even when no client was connected at completion time (disconnect-safe persistence). **Errored** streams still finalize the pending row with a synthetic user+assistant turn (partial visible output plus `**Error:** …`). Mid-stream partials alone are not stored until the turn ends (success or error).
 
 Cancellation semantics:
 
 - `main.py` tracks one active streaming producer task per `session_id`.
 - `POST /chat/stream/cancel` calls `task.cancel()` for that session and returns `{cancelled: true}` when a live stream existed.
 - On cancellation, the SSE stream emits `{"type":"cancelled"}` and exits.
-- Cancelled streams are **not persisted** to SQLite/history (same as error mid-stream).
+- Cancelled streams are **not** persisted to SQLite/history (pending row removed). **Errored** streams **are** persisted: user message plus any streamed assistant text and an explicit error footer.
 
 ---
 
