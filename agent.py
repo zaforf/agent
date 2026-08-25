@@ -86,10 +86,11 @@ def _ordered_clients(messages: list[dict]) -> tuple[str, list[dict]]:
     profile = _request_profile(messages)
     if profile != "fast":
         return profile, _clients
-    preferred = {"groq", "gemini-gemma4-26b", "cerebras"}
-    return profile, [
-        *[entry for entry in _clients if entry["name"] in preferred],
-        *[entry for entry in _clients if entry["name"] not in preferred],
+    preferred_order = ("groq", "gemini-gemma4-26b", "cerebras")
+    by_name = {entry["name"]: entry for entry in _clients}
+    preferred = [by_name[name] for name in preferred_order if name in by_name]
+    return profile, preferred + [
+        entry for entry in _clients if entry["name"] not in preferred_order
     ]
 
 

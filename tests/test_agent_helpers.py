@@ -174,13 +174,16 @@ def test_fast_profile_prioritizes_fast_providers(monkeypatch):
     monkeypatch.setattr(agent.config, "AGENT_PROVIDER_ROUTING_ENABLED", True)
     entries = [
         {"name": "gemini-gemma4-31b"},
-        {"name": "groq"},
         {"name": "gemini-gemma4-26b"},
+        {"name": "cerebras"},
+        {"name": "groq"},
     ]
     monkeypatch.setattr(agent, "_clients", entries)
     profile, ordered = agent._ordered_clients([{"role": "user", "content": "current weather"}])
     assert profile == "fast"
-    assert [entry["name"] for entry in ordered] == ["groq", "gemini-gemma4-26b", "gemini-gemma4-31b"]
+    assert [entry["name"] for entry in ordered] == [
+        "groq", "gemini-gemma4-26b", "cerebras", "gemini-gemma4-31b"
+    ]
 
 
 def test_memory_tool_timeout_returns_model_visible_error(monkeypatch):
