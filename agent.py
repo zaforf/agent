@@ -1118,15 +1118,16 @@ async def run_stream(
     pending_summaries: list[tuple[dict, asyncio.Task]] = []
 
     for iteration in range(MAX_TOOL_ITERATIONS):
+        provider = None
         try:
             raw_parts: list[str] = []
             visible_parts: list[str] = []
+            tool_calls_slots: list[dict] = []
             stream, provider = await _call_stream(messages)
             provider_used    = provider
             log.info("turn[%d]  provider=%s", iteration, provider)
         
             # The raw stream contains the thoughts; we capture them for the debug log.
-            tool_calls_slots: list[dict] = []
             stripper        = _ThinkStripper()
             tool_mode       = False   # once True, suppress text forwarding
 
@@ -1317,6 +1318,29 @@ async def run_stream(
                 return
         except asyncio.CancelledError:
             raise
+        except APIConnectionError as e:
+            # A stream can fail after the request was accepted but before any
+            # user-visible content/tool call arrived. In that narrow window,
+            # skip the interrupted provider and let the next iteration use a
+            # fallback. Once output exists, never silently duplicate or stitch
+            # responses together.
+            if (
+                provider
+                and not raw_parts
+                and not visible_parts
+                and not tool_calls_slots
+                and iteration + 1 < MAX_TOOL_ITERATIONS
+            ):
+                _cooldown_provider(
+                    provider,
+                    config.PROVIDER_STREAM_INTERRUPT_COOLDOWN_S,
+                    "stream_interrupt",
+                )
+                yield {"type": "status", "stage": "fallback"}
+                continue
+            tm = _turn_messages_for_stream_error(messages, turn_start, "".join(visible_parts), str(e))
+            yield {"type": "error", "detail": str(e), "turn_messages": tm}
+            return
         except Exception as e:
             tm = _turn_messages_for_stream_error(messages, turn_start, "".join(visible_parts), str(e))
             yield {"type": "error", "detail": str(e), "turn_messages": tm}

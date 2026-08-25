@@ -78,6 +78,9 @@ AGENT_PROVIDER_ROUTING_ENABLED = os.environ.get("AGENT_PROVIDER_ROUTING_ENABLED"
 # This is a temporary circuit breaker, not a permanent provider disablement.
 PROVIDER_RATE_LIMIT_COOLDOWN_S = float(os.environ.get("PROVIDER_RATE_LIMIT_COOLDOWN_S", "60"))
 PROVIDER_API_ERROR_COOLDOWN_S = float(os.environ.get("PROVIDER_API_ERROR_COOLDOWN_S", "300"))
+PROVIDER_STREAM_INTERRUPT_COOLDOWN_S = float(
+    os.environ.get("PROVIDER_STREAM_INTERRUPT_COOLDOWN_S", "10")
+)
 
 PROVIDERS: list[dict] = [
     {

@@ -1520,7 +1520,10 @@
             _thinkLastUpdate = 0;  // reset throttle for next block; label stays until text_chunk
 
           } else if (event.type === 'status') {
-            _showThinking(event.stage === 'started' ? 'starting' : 'working');
+            _showThinking(
+              event.stage === 'started' ? 'starting' :
+              event.stage === 'fallback' ? 'switching provider' : 'working'
+            );
 
           } else if (event.type === 'memory_prefetch_started') {
             _showThinking('recalling memory');

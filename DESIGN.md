@@ -37,6 +37,8 @@ This is a personal AI assistant for Zafir, exposed as a web application. It runs
 
 Providers are tried in order. Transient connection failures are retried up to 3 times with exponential backoff (1s, 2s). Rate-limit failures advance immediately to the next provider. Provider-wide payment/model errors are also skipped immediately. Those known-unavailable providers enter a temporary cooldown so later turns do not repeat the same failed request; they become eligible again automatically after the configured cooldown.
 
+If a provider's stream connection fails before any visible text or tool call is emitted, the loop temporarily skips that provider and retries the current turn through the next provider. Once output has been emitted, the failure is surfaced rather than silently duplicating content.
+
 When `AGENT_PROVIDER_ROUTING_ENABLED` is true, only obvious fast/current/inspection requests use a faster-first ordering. Requests that look deep, tutoring-oriented, coding/debugging-oriented, or ambiguous retain the quality-first chain. This heuristic is intentionally conservative and can be disabled to restore the static order.
 
 If a provider rejects a request specifically because its input is too large, the adapter retries that provider once with a compact system prompt and only the active user turn (plus ambient memory and live tool results). This preserves the current task while dropping older replay history; ordinary requests retain the full prompt and history.

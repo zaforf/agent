@@ -487,6 +487,58 @@ def test_input_too_large_retries_provider_with_active_turn_context(
     assert compacted_messages[-1]["content"] == "current question"
 
 
+def test_stream_interrupt_before_output_falls_back(monkeypatch, tmp_system_prompt):
+    """A pre-visible stream disconnect skips the provider and retries once."""
+    from openai import APIConnectionError
+    import httpx
+
+    error = APIConnectionError(request=httpx.Request("POST", "https://example.invalid"))
+
+    class _BrokenStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise error
+
+    class _Completions:
+        def __init__(self, streams):
+            self.streams = list(streams)
+            self.calls = 0
+
+        async def create(self, **kwargs):
+            self.calls += 1
+            stream = self.streams.pop(0)
+            if isinstance(stream, list):
+                async def _gen():
+                    for item in stream:
+                        yield item
+                return _gen()
+            return stream
+
+    broken = _Completions([_BrokenStream()])
+    good = _Completions([[text_chunk("fallback answer")]])
+    monkeypatch.setattr(
+        agent,
+        "_clients",
+        [
+            {"name": "a", "model": "a", "client": type("C", (), {"chat": type("H", (), {"completions": broken})()})()},
+            {"name": "b", "model": "b", "client": type("C", (), {"chat": type("H", (), {"completions": good})()})()},
+        ],
+    )
+    monkeypatch.setattr(agent, "_provider_cooldowns", {})
+
+    async def collect():
+        return [event async for event in agent.run_stream("hi", [])]
+
+    events = asyncio.run(collect())
+    assert {event.get("stage") for event in events if event["type"] == "status"} >= {"fallback"}
+    assert any(event.get("text") == "fallback answer" for event in events)
+    assert events[-1]["type"] == "done"
+    assert broken.calls == 1
+    assert good.calls == 1
+
+
 def test_all_providers_exhausted_raises_cleanly(monkeypatch, tmp_system_prompt, providers):
     """When every provider in the chain fails retryably, run() surfaces a
     RuntimeError. main.py converts this to HTTP 500 for the client.
