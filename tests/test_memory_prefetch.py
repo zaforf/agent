@@ -3,8 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import time
+import pytest
 
 import agent
+
+
+@pytest.fixture(autouse=True)
+def enable_prefetch_for_tests(monkeypatch):
+    monkeypatch.setattr(agent.config, "MEMORY_PREFETCH_ENABLED", True)
 
 
 # ── _memories_system_block ────────────────────────────────────────────────────
@@ -80,6 +86,15 @@ def test_prefetch_empty_when_no_memories(monkeypatch):
     monkeypatch.setattr("tools.memory.recall_prefetch", lambda *a, **kw: [])
     results = asyncio.run(agent._prefetch_memories("anything", []))
     assert results == []
+
+
+def test_prefetch_disabled_skips_memory_store(monkeypatch):
+    monkeypatch.setattr(agent.config, "MEMORY_PREFETCH_ENABLED", False)
+    monkeypatch.setattr(
+        "tools.memory.recall_prefetch",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not call memory")),
+    )
+    assert asyncio.run(agent._prefetch_memories("anything", [])) == []
 
 
 def test_prefetch_timeout_does_not_block_turn(monkeypatch):

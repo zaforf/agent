@@ -613,6 +613,9 @@ async def _prefetch_memories(user_text: str, history: list[dict]) -> list[str]:
     formatting preferences).  Returns [] on any failure so the turn is never
     blocked.
     """
+    if not config.MEMORY_PREFETCH_ENABLED:
+        return []
+
     from tools.memory import recall_prefetch
 
     query_parts = [user_text.strip()]
