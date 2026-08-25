@@ -163,6 +163,26 @@ def test_compact_messages_keeps_memory_and_active_turn():
     assert compacted[-1]["content"] == "tool result"
 
 
+def test_request_profile_is_conservative(monkeypatch):
+    monkeypatch.setattr(agent.config, "AGENT_PROVIDER_ROUTING_ENABLED", True)
+    assert agent._request_profile([{"role": "user", "content": "Teach me why this works"}]) == "deep"
+    assert agent._request_profile([{"role": "user", "content": "Find where retries are implemented"}]) == "fast"
+    assert agent._request_profile([{"role": "user", "content": "Help me with this"}]) == "default"
+
+
+def test_fast_profile_prioritizes_fast_providers(monkeypatch):
+    monkeypatch.setattr(agent.config, "AGENT_PROVIDER_ROUTING_ENABLED", True)
+    entries = [
+        {"name": "gemini-gemma4-31b"},
+        {"name": "groq"},
+        {"name": "gemini-gemma4-26b"},
+    ]
+    monkeypatch.setattr(agent, "_clients", entries)
+    profile, ordered = agent._ordered_clients([{"role": "user", "content": "current weather"}])
+    assert profile == "fast"
+    assert [entry["name"] for entry in ordered] == ["groq", "gemini-gemma4-26b", "gemini-gemma4-31b"]
+
+
 # ── _summarize_for_history fall-throughs (DESIGN §6.5) ───────────────────────
 
 def _patch_summarize_gemma(monkeypatch, response_or_exc):

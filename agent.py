@@ -38,6 +38,15 @@ _COMPACT_SYSTEM_PROMPT = (
     "Return a visible answer outside any reasoning tags.\n"
 )
 
+_DEEP_REQUEST_HINTS = (
+    "teach", "tutor", "explain why", "prove", "derive", "reason", "tradeoff",
+    "compare", "deep dive", "understand", "walk me through", "debug", "design",
+)
+_FAST_REQUEST_HINTS = (
+    "current", "latest", "look up", "search", "find where", "inspect", "status",
+    "quick", "what time", "weather", "fetch", "summarize this page",
+)
+
 
 def _provider_available(name: str) -> bool:
     until = _provider_cooldowns.get(name, 0.0)
@@ -52,6 +61,35 @@ def _cooldown_provider(name: str, seconds: float, reason: str) -> None:
         return
     _provider_cooldowns[name] = time.monotonic() + seconds
     log.warning("provider=%s cooldown=%.1fs reason=%s", name, seconds, reason)
+
+
+def _request_profile(messages: list[dict]) -> str:
+    """Classify only obvious task shapes; ambiguous requests stay quality-first."""
+    if not config.AGENT_PROVIDER_ROUTING_ENABLED:
+        return "default"
+    user_text = ""
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            content = message.get("content") or ""
+            user_text = content if isinstance(content, str) else str(content)
+            break
+    lowered = user_text.lower()
+    if any(hint in lowered for hint in _DEEP_REQUEST_HINTS):
+        return "deep"
+    if any(hint in lowered for hint in _FAST_REQUEST_HINTS):
+        return "fast"
+    return "default"
+
+
+def _ordered_clients(messages: list[dict]) -> tuple[str, list[dict]]:
+    profile = _request_profile(messages)
+    if profile != "fast":
+        return profile, _clients
+    preferred = {"groq", "gemini-gemma4-26b", "cerebras"}
+    return profile, [
+        *[entry for entry in _clients if entry["name"] in preferred],
+        *[entry for entry in _clients if entry["name"] not in preferred],
+    ]
 
 
 def _compact_messages(messages: list[dict]) -> list[dict]:
@@ -567,8 +605,10 @@ async def _call(messages: list[dict], use_tools: bool = True) -> tuple:
     if not _clients:
         raise RuntimeError("No providers configured — set at least one API key.")
 
+    profile, clients = _ordered_clients(messages)
+    log.info("request profile=%s", profile)
     last_err = None
-    for entry in _clients:
+    for entry in clients:
         if not _provider_available(entry["name"]):
             log.info("provider=%s temporarily unavailable; skipping", entry["name"])
             continue
@@ -626,8 +666,10 @@ async def _call_stream(messages: list[dict]) -> tuple:
     if not _clients:
         raise RuntimeError("No providers configured.")
 
+    profile, clients = _ordered_clients(messages)
+    log.info("stream request profile=%s", profile)
     last_err = None
-    for entry in _clients:
+    for entry in clients:
         if not _provider_available(entry["name"]):
             log.info("stream provider=%s temporarily unavailable; skipping", entry["name"])
             continue

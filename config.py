@@ -67,6 +67,13 @@ AGENT_PARALLEL_TOOL_CALLS = os.environ.get("AGENT_PARALLEL_TOOL_CALLS", "true").
     "yes",
 )
 
+# Conservative task-aware ordering. Deep/ambiguous requests retain the
+# quality-first chain; obvious quick/current/inspection requests can use a
+# faster provider without changing the fallback set.
+AGENT_PROVIDER_ROUTING_ENABLED = os.environ.get("AGENT_PROVIDER_ROUTING_ENABLED", "true").lower() in (
+    "1", "true", "yes",
+)
+
 # Avoid rediscovering a provider-wide quota/payment failure on every turn.
 # This is a temporary circuit breaker, not a permanent provider disablement.
 PROVIDER_RATE_LIMIT_COOLDOWN_S = float(os.environ.get("PROVIDER_RATE_LIMIT_COOLDOWN_S", "60"))
