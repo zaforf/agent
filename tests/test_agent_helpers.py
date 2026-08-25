@@ -127,6 +127,8 @@ def test_repo_system_prompt_covers_math_and_tool_discipline():
     assert "Never use `$` or `$$` for math" in text
     assert "\\(...\\)" in text
     assert "\\[...\\]" in text
+    assert "Ask one focused clarifying question" in text
+    assert "Do not interrogate the user before routine work" in text
 
 
 def test_build_system_prompt_telegram_channel_adds_plain_text_rules(tmp_system_prompt):
