@@ -164,6 +164,7 @@ def test_compact_messages_keeps_memory_and_active_turn():
 
 
 def test_request_profile_is_conservative(monkeypatch):
+    monkeypatch.setattr(agent.config, "AGENT_PROVIDER_MODE", "quality")
     monkeypatch.setattr(agent.config, "AGENT_PROVIDER_ROUTING_ENABLED", True)
     assert agent._request_profile([{"role": "user", "content": "Teach me why this works"}]) == "deep"
     assert agent._request_profile([{"role": "user", "content": "Find where retries are implemented"}]) == "fast"
@@ -171,6 +172,7 @@ def test_request_profile_is_conservative(monkeypatch):
 
 
 def test_fast_profile_prioritizes_fast_providers(monkeypatch):
+    monkeypatch.setattr(agent.config, "AGENT_PROVIDER_MODE", "quality")
     monkeypatch.setattr(agent.config, "AGENT_PROVIDER_ROUTING_ENABLED", True)
     entries = [
         {"name": "gemini-gemma4-31b"},
@@ -183,6 +185,26 @@ def test_fast_profile_prioritizes_fast_providers(monkeypatch):
     assert profile == "fast"
     assert [entry["name"] for entry in ordered] == [
         "groq", "gemini-gemma4-26b", "cerebras", "gemini-gemma4-31b"
+    ]
+
+
+def test_responsive_mode_uses_fixed_26b_first_order(monkeypatch):
+    monkeypatch.setattr(agent.config, "AGENT_PROVIDER_MODE", "responsive")
+    entries = [
+        {"name": "gemini-gemma4-31b"},
+        {"name": "gemini-gemma4-26b"},
+        {"name": "cerebras"},
+        {"name": "groq"},
+    ]
+    monkeypatch.setattr(agent, "_clients", entries)
+
+    profile, ordered = agent._ordered_clients(
+        [{"role": "user", "content": "Please prove this carefully."}]
+    )
+
+    assert profile == "responsive"
+    assert [entry["name"] for entry in ordered] == [
+        "gemini-gemma4-26b", "groq", "gemini-gemma4-31b", "cerebras"
     ]
 
 

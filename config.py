@@ -68,9 +68,18 @@ AGENT_PARALLEL_TOOL_CALLS = os.environ.get("AGENT_PARALLEL_TOOL_CALLS", "true").
     "yes",
 )
 
-# Conservative task-aware ordering. Deep/ambiguous requests retain the
-# quality-first chain; obvious quick/current/inspection requests can use a
-# faster provider without changing the fallback set.
+# Provider policy. ``responsive`` is the low-development-time experiment: use
+# the fast Gemma 26B path for every request and retain the rest as fallbacks.
+# ``quality`` enables the older conservative task-aware ordering for comparison.
+_provider_mode_raw = os.environ.get("AGENT_PROVIDER_MODE", "responsive").strip().lower()
+if _provider_mode_raw not in {"responsive", "quality"}:
+    log.warning("AGENT_PROVIDER_MODE=%r is invalid; using responsive", _provider_mode_raw)
+    _provider_mode_raw = "responsive"
+AGENT_PROVIDER_MODE = _provider_mode_raw
+
+# In quality mode, deep/ambiguous requests retain the quality-first chain;
+# obvious quick/current/inspection requests can use a faster provider without
+# changing the fallback set.
 AGENT_PROVIDER_ROUTING_ENABLED = os.environ.get("AGENT_PROVIDER_ROUTING_ENABLED", "true").lower() in (
     "1", "true", "yes",
 )

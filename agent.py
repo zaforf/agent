@@ -83,6 +83,16 @@ def _request_profile(messages: list[dict]) -> str:
 
 
 def _ordered_clients(messages: list[dict]) -> tuple[str, list[dict]]:
+    if config.AGENT_PROVIDER_MODE == "responsive":
+        preferred_order = (
+            "gemini-gemma4-26b", "groq", "gemini-gemma4-31b", "cerebras"
+        )
+        by_name = {entry["name"]: entry for entry in _clients}
+        preferred = [by_name[name] for name in preferred_order if name in by_name]
+        return "responsive", preferred + [
+            entry for entry in _clients if entry["name"] not in preferred_order
+        ]
+
     profile = _request_profile(messages)
     if profile != "fast":
         return profile, _clients

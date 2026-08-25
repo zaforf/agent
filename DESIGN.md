@@ -39,7 +39,7 @@ Providers are tried in order. Transient connection failures are retried up to 3 
 
 If a provider's stream connection fails before any visible text or tool call is emitted, the loop temporarily skips that provider and retries the current turn through the next provider. Once output has been emitted, the failure is surfaced rather than silently duplicating content.
 
-When `AGENT_PROVIDER_ROUTING_ENABLED` is true, only obvious fast/current/inspection requests use a faster-first ordering. Requests that look deep, tutoring-oriented, coding/debugging-oriented, or ambiguous retain the quality-first chain. This heuristic is intentionally conservative and can be disabled to restore the static order.
+`AGENT_PROVIDER_MODE` defaults to **`responsive`**: every request tries Gemma 4 26B first, then Groq, Gemma 4 31B, and Cerebras. This is intentionally a simple, low-latency prototype policy with no prompt classification; provider fallback happens only on errors or cooldowns. Set it to **`quality`** to use the older conservative policy: deep/ambiguous requests retain the 31B-first chain, while only obvious fast/current/inspection requests use the explicit faster-first order. `AGENT_PROVIDER_ROUTING_ENABLED` controls that heuristic only in `quality` mode.
 
 If a provider rejects a request specifically because its input is too large, the adapter retries that provider once with a compact system prompt and only the active user turn (plus ambient memory and live tool results). This preserves the current task while dropping older replay history; ordinary requests retain the full prompt and history.
 
