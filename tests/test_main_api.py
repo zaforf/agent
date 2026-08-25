@@ -250,6 +250,19 @@ def test_chat_stream_events_and_persist(client, monkeypatch):
     assert hist[1]["content"] == "hello"
 
 
+def test_chat_stream_disables_proxy_buffering(client, monkeypatch):
+    async def fake_stream(user_message, history, **kwargs):
+        yield {"type": "done", "provider": "fake", "turn_messages": []}
+
+    monkeypatch.setattr(agent, "run_stream", fake_stream)
+
+    with client.stream(
+        "POST", "/chat/stream", json={"message": "go", "session_id": "s-headers"}
+    ) as response:
+        assert response.headers["cache-control"] == "no-cache, no-transform"
+        assert response.headers["x-accel-buffering"] == "no"
+
+
 def test_latency_endpoint_returns_bounded_samples(client):
     r = client.get("/latency?limit=2")
     assert r.status_code == 200

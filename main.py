@@ -581,7 +581,17 @@ async def chat_stream(req: ChatRequest):
             if cur is state and state.completed:
                 _active_stream_turns.pop(req.session_id, None)
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    # SSE must reach the browser incrementally.  These headers prevent reverse
+    # proxies and response transformers from buffering or rewriting status and
+    # token events into an apparently silent request.
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/chat/stream/cancel")

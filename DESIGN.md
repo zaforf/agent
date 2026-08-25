@@ -446,6 +446,10 @@ When `TELEGRAM_BOT_TOKEN` is set, `main.py` starts **long-polling** `getUpdates`
 
 ### 8.2 SSE event types (`/chat/stream`)
 
+The endpoint returns `text/event-stream` with `Cache-Control: no-cache, no-transform`
+and `X-Accel-Buffering: no` so reverse proxies do not hold status or token events
+until the response is complete.
+
 | `type` | Fields | Description |
 |---|---|---|
 | `text_chunk` | `text: str` | Incremental visible text from the model |
