@@ -49,6 +49,15 @@ async def lifespan(app: FastAPI):
         memory_warm_task = asyncio.create_task(
             asyncio.to_thread(warm_memory), name="memory-warm"
         )
+
+        def _report_memory_warm(task: asyncio.Task) -> None:
+            with suppress(asyncio.CancelledError):
+                try:
+                    task.result()
+                except Exception:
+                    log.warning("background memory warm-up failed", exc_info=True)
+
+        memory_warm_task.add_done_callback(_report_memory_warm)
     tg_task: asyncio.Task | None = None
     if config.TELEGRAM_BOT_TOKEN:
         from telegram_transport import run_telegram_polling

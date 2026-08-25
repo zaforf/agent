@@ -250,6 +250,12 @@ def test_chat_stream_events_and_persist(client, monkeypatch):
     assert hist[1]["content"] == "hello"
 
 
+def test_latency_endpoint_returns_bounded_samples(client):
+    r = client.get("/latency?limit=2")
+    assert r.status_code == 200
+    assert isinstance(r.json()["samples"], list)
+
+
 def test_chat_stream_handles_error_event(client, monkeypatch):
     async def fake_stream(user_message, history, **kwargs):
         yield {"type": "text_chunk", "text": "partial"}
