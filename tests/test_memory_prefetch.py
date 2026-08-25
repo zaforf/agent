@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-import pytest
+import time
 
 import agent
 
@@ -28,7 +28,6 @@ def test_memories_block_single():
 def test_prefetch_returns_filtered_results(monkeypatch):
     """Only memories above the threshold are returned."""
     def fake_recall_prefetch(query, *, top_k, threshold):
-        all_results = ["high-score memory", "low-score memory"]
         # Simulate threshold filtering already done inside recall_prefetch
         return ["high-score memory"]
 
@@ -81,3 +80,20 @@ def test_prefetch_empty_when_no_memories(monkeypatch):
     monkeypatch.setattr("tools.memory.recall_prefetch", lambda *a, **kw: [])
     results = asyncio.run(agent._prefetch_memories("anything", []))
     assert results == []
+
+
+def test_prefetch_timeout_does_not_block_turn(monkeypatch):
+    def slow_recall(*args, **kwargs):
+        time.sleep(0.2)
+        return ["late memory"]
+
+    monkeypatch.setattr("tools.memory.recall_prefetch", slow_recall)
+    monkeypatch.setattr(agent.config, "MEMORY_PREFETCH_TIMEOUT_S", 0.01)
+    async def probe():
+        started = time.perf_counter()
+        result = await agent._prefetch_memories("anything", [])
+        return result, time.perf_counter() - started
+
+    results, elapsed = asyncio.run(probe())
+    assert results == []
+    assert elapsed < 0.1

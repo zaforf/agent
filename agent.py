@@ -628,12 +628,21 @@ async def _prefetch_memories(user_text: str, history: list[dict]) -> list[str]:
     query = "\n".join(query_parts)
 
     try:
-        return await asyncio.to_thread(
-            recall_prefetch,
-            query,
-            top_k=config.MEMORY_PREFETCH_TOP_K,
-            threshold=config.MEMORY_PREFETCH_THRESHOLD,
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                recall_prefetch,
+                query,
+                top_k=config.MEMORY_PREFETCH_TOP_K,
+                threshold=config.MEMORY_PREFETCH_THRESHOLD,
+            ),
+            timeout=config.MEMORY_PREFETCH_TIMEOUT_S,
         )
+    except asyncio.TimeoutError:
+        log.warning(
+            "memory prefetch exceeded %.1fs; continuing without ambient memory",
+            config.MEMORY_PREFETCH_TIMEOUT_S,
+        )
+        return []
     except Exception as exc:
         log.warning("memory prefetch failed (skipping): %s", exc)
         return []

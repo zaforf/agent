@@ -117,6 +117,9 @@ MEM0_LLM_MODEL = os.environ.get("MEM0_LLM_MODEL", "gemma-4-26b-a4b-it")
 # Threshold is cosine similarity (0–1); results below it are suppressed as noise.
 MEMORY_PREFETCH_TOP_K    = int(os.environ.get("MEMORY_PREFETCH_TOP_K", "5"))
 MEMORY_PREFETCH_THRESHOLD = float(os.environ.get("MEMORY_PREFETCH_THRESHOLD", "0.3"))
+# Ambient recall is an enhancement, never a prerequisite for responding. Mem0
+# may cold-start by inspecting/migrating Qdrant collections, so bound it.
+MEMORY_PREFETCH_TIMEOUT_S = float(os.environ.get("MEMORY_PREFETCH_TIMEOUT_S", "1.5"))
 
 # After a successful ``workspace_search_replace`` on a ``.py`` file, optionally append
 # ``ruff check`` / scoped ``pytest`` output to the same tool result (see ``tools/post_edit_verify.py``).
