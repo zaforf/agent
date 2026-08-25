@@ -145,6 +145,7 @@ The model is instructed to use native API `tool_calls` only — no XML or fenced
 ### 5.1 Memory tools (`tools/memory.py`)
 
 Backed by Mem0 + Qdrant. Qdrant host/port are read from `QDRANT_HOST` / `QDRANT_PORT` env vars (defaulting to `localhost:6333`); prod typically sets `QDRANT_HOST=qdrant` inside docker-compose. `docker-compose.yml` is gitignored because dev/prod topologies differ. Embeddings use the **Gemini Embedding API** (`GEMINI_API_KEY`, model `GEMINI_EMBEDDING_MODEL` defaulting to `models/gemini-embedding-001`, `GEMINI_EMBEDDING_DIMS` default 768). Vectors are stored under collection `MEM0_QDRANT_COLLECTION` (default `agent_memories_gemini` — new name so a prior local 768-d HuggingFace index is not reused). Mem0 uses the **Gemini** LLM provider (`MEM0_LLM_MODEL`, default **Gemma 4 26B MoE** `gemma-4-26b-a4b-it`) for memory extraction/processing — same `GEMINI_API_KEY` as the agent. This avoids Groq free-tier **tokens-per-minute** failures when the extraction prompt is large. Override with `MEM0_LLM_MODEL` (e.g. `gemma-4-31b-it`) if needed. Memory tools run in a worker thread (`asyncio.to_thread`) like `fetch_url` / `web_search` so the async event loop is not blocked during embedding or Qdrant I/O.
+Explicit memory operations are bounded by `MEMORY_TOOL_TIMEOUT_S` and return a tool error on timeout; the underlying synchronous work may finish in its worker thread.
 
 All memories are stored under the single user ID `"user"`.
 

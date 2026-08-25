@@ -333,6 +333,7 @@ _BLOCKING_SYNC_TOOLS = frozenset({
     "lsp_hover",
     "lsp_definition_for_symbol",
 })
+_MEMORY_TOOLS = frozenset({"remember", "recall", "list_memories", "delete_memory"})
 
 # Tools that never mutate workspace files, shell session, or destructive memory
 # state — safe to execute concurrently within one assistant tool-call batch when
@@ -846,7 +847,13 @@ async def _run_tool_async(name: str, args: dict) -> str:
         return result
 
     if name in _BLOCKING_SYNC_TOOLS:
-        return await asyncio.to_thread(_invoke_sync)
+        task = asyncio.to_thread(_invoke_sync)
+        if name in _MEMORY_TOOLS:
+            try:
+                return await asyncio.wait_for(task, timeout=config.MEMORY_TOOL_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                return f"Error in {name}: timed out after {config.MEMORY_TOOL_TIMEOUT_S:g}s"
+        return await task
     return _invoke_sync()
 
 

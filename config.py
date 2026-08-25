@@ -138,6 +138,9 @@ MEMORY_PREFETCH_TIMEOUT_S = float(os.environ.get("MEMORY_PREFETCH_TIMEOUT_S", "1
 MEMORY_WARM_ON_STARTUP = os.environ.get("MEMORY_WARM_ON_STARTUP", "true").lower() in (
     "1", "true", "yes",
 )
+# Explicit memory operations are valuable but must not make a turn hang when
+# Mem0/Qdrant or its embedding provider is unhealthy.
+MEMORY_TOOL_TIMEOUT_S = float(os.environ.get("MEMORY_TOOL_TIMEOUT_S", "30"))
 
 # After a successful ``workspace_search_replace`` on a ``.py`` file, optionally append
 # ``ruff check`` / scoped ``pytest`` output to the same tool result (see ``tools/post_edit_verify.py``).

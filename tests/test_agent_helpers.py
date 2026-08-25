@@ -183,6 +183,19 @@ def test_fast_profile_prioritizes_fast_providers(monkeypatch):
     assert [entry["name"] for entry in ordered] == ["groq", "gemini-gemma4-26b", "gemini-gemma4-31b"]
 
 
+def test_memory_tool_timeout_returns_model_visible_error(monkeypatch):
+    import time
+
+    def slow_recall(**kwargs):
+        time.sleep(0.1)
+        return "late result"
+
+    monkeypatch.setattr(agent.config, "MEMORY_TOOL_TIMEOUT_S", 0.01)
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "recall", slow_recall)
+    result = asyncio.run(agent._run_tool_async("recall", {"query": "x"}))
+    assert "timed out" in result
+
+
 # ── _summarize_for_history fall-throughs (DESIGN §6.5) ───────────────────────
 
 def _patch_summarize_gemma(monkeypatch, response_or_exc):
