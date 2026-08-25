@@ -37,6 +37,8 @@ This is a personal AI assistant for Zafir, exposed as a web application. It runs
 
 Providers are tried in order. Transient connection failures are retried up to 3 times with exponential backoff (1s, 2s). Rate-limit failures advance immediately to the next provider. Provider-wide payment/model errors are also skipped immediately. Those known-unavailable providers enter a temporary cooldown so later turns do not repeat the same failed request; they become eligible again automatically after the configured cooldown.
 
+If a provider rejects a request specifically because its input is too large, the adapter retries that provider once with a compact system prompt and only the active user turn (plus ambient memory and live tool results). This preserves the current task while dropping older replay history; ordinary requests retain the full prompt and history.
+
 | Priority | Name | Model | Notes |
 |---|---|---|---|
 | 1 | `gemini-gemma4-31b` | `gemma-4-31b-it` | Primary — dense model, strong reasoning and tool use |

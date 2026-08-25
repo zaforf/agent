@@ -146,6 +146,23 @@ def test_build_system_prompt_forbids_xml_tool_format(tmp_system_prompt):
     assert "tool_calls" in prompt
 
 
+def test_compact_messages_keeps_memory_and_active_turn():
+    messages = [
+        {"role": "system", "content": "full system"},
+        {"role": "user", "content": "old"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "user", "content": "[Memory — these may help]\n- prefers depth"},
+        {"role": "user", "content": "new question"},
+        {"role": "assistant", "content": "tool call"},
+        {"role": "tool", "content": "tool result"},
+    ]
+    compacted = agent._compact_messages(messages)
+    assert compacted[0]["role"] == "system"
+    assert "old answer" not in str(compacted)
+    assert "prefers depth" in str(compacted)
+    assert compacted[-1]["content"] == "tool result"
+
+
 # ── _summarize_for_history fall-throughs (DESIGN §6.5) ───────────────────────
 
 def _patch_summarize_gemma(monkeypatch, response_or_exc):

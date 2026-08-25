@@ -29,6 +29,15 @@ _clients: list[dict] = [
 
 _provider_cooldowns: dict[str, float] = {}
 
+_COMPACT_SYSTEM_PROMPT = (
+    "You are Zafir's personal AI assistant for technical work, learning, research, and general tasks.\n"
+    "Be correct, direct, and useful. Ask one focused question only when a missing detail would materially change the result; otherwise make a reasonable assumption and proceed.\n"
+    "Use the provided native tools when current information, memory, files, code, or external actions are needed. Do not invent tool results.\n"
+    "Preserve and use relevant memory about Zafir's preferences, projects, knowledge, and learning level.\n"
+    "For code changes, inspect before editing, make narrow changes, verify them, and report failures honestly.\n"
+    "Return a visible answer outside any reasoning tags.\n"
+)
+
 
 def _provider_available(name: str) -> bool:
     until = _provider_cooldowns.get(name, 0.0)
@@ -43,6 +52,39 @@ def _cooldown_provider(name: str, seconds: float, reason: str) -> None:
         return
     _provider_cooldowns[name] = time.monotonic() + seconds
     log.warning("provider=%s cooldown=%.1fs reason=%s", name, seconds, reason)
+
+
+def _compact_messages(messages: list[dict]) -> list[dict]:
+    """Keep the active turn while reducing context for a provider input limit.
+
+    This is used only after a provider rejects the request as too large. The
+    current user turn, an adjacent ambient-memory block, and all live tool
+    results remain intact; older replay history is the expendable portion.
+    """
+    if not messages:
+        return messages
+    latest_user = next(
+        (i for i in range(len(messages) - 1, -1, -1) if messages[i].get("role") == "user"),
+        None,
+    )
+    if latest_user is None:
+        active = messages[1:]
+    else:
+        start = latest_user
+        if start > 1:
+            previous = messages[start - 1]
+            if previous.get("role") == "user" and str(previous.get("content", "")).startswith("[Memory"):
+                start -= 1
+        active = messages[start:]
+    compact_system = f"Today's date: {datetime.date.today():%A %Y-%m-%d}\n\n{_COMPACT_SYSTEM_PROMPT}"
+    return [{"role": "system", "content": compact_system}, *active]
+
+
+def _is_input_too_large(error: APIError) -> bool:
+    return getattr(error, "status_code", None) in (400, 413) and any(
+        marker in str(error).lower()
+        for marker in ("too large", "too long", "tokens per minute", "context length", "prompt")
+    )
 
 MAX_TOOL_ITERATIONS = 30
 
@@ -537,6 +579,7 @@ async def _call(messages: list[dict], use_tools: bool = True) -> tuple:
             if config.AGENT_PARALLEL_TOOL_CALLS:
                 kwargs["parallel_tool_calls"] = True
 
+        compacted = False
         for attempt in range(3):
             try:
                 resp = await entry["client"].chat.completions.create(**kwargs)
@@ -559,6 +602,11 @@ async def _call(messages: list[dict], use_tools: bool = True) -> tuple:
                     await asyncio.sleep(2 ** attempt)
             except APIError as e:
                 last_err = e
+                if _is_input_too_large(e) and not compacted:
+                    kwargs["messages"] = _compact_messages(messages)
+                    compacted = True
+                    log.warning("provider=%s input too large; retrying with active-turn context", entry["name"])
+                    continue
                 if getattr(e, "status_code", None) in (402, 403, 404):
                     _cooldown_provider(
                         entry["name"], config.PROVIDER_API_ERROR_COOLDOWN_S, f"http_{e.status_code}"
@@ -594,6 +642,7 @@ async def _call_stream(messages: list[dict]) -> tuple:
         if config.AGENT_PARALLEL_TOOL_CALLS:
             kwargs["parallel_tool_calls"] = True
 
+        compacted = False
         for attempt in range(3):
             try:
                 stream = await entry["client"].chat.completions.create(**kwargs)
@@ -614,6 +663,11 @@ async def _call_stream(messages: list[dict]) -> tuple:
                     await asyncio.sleep(2 ** attempt)
             except APIError as e:
                 last_err = e
+                if _is_input_too_large(e) and not compacted:
+                    kwargs["messages"] = _compact_messages(messages)
+                    compacted = True
+                    log.warning("stream provider=%s input too large; retrying with active-turn context", entry["name"])
+                    continue
                 if getattr(e, "status_code", None) in (402, 403, 404):
                     _cooldown_provider(
                         entry["name"], config.PROVIDER_API_ERROR_COOLDOWN_S, f"http_{e.status_code}"

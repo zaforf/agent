@@ -413,7 +413,7 @@ def test_provider_fallback_on_retryable_error(monkeypatch, tmp_system_prompt, pr
 
     err = APIConnectionError(request=httpx.Request("POST", "https://example.invalid"))
 
-    comps = providers([
+    providers([
         [err, err, err],                       # provider A exhausts all 3 retries
         [make_response("ok from B")],          # provider B succeeds
     ], names=["a", "b"])
@@ -452,6 +452,39 @@ def test_provider_cooldown_skips_known_unavailable_provider(monkeypatch, tmp_sys
     assert provider == "b"
     assert response == "ready"
     assert comps[0].calls == []
+
+
+def test_input_too_large_retries_provider_with_active_turn_context(
+    monkeypatch, tmp_system_prompt, providers
+):
+    """A context rejection gets one quality-preserving compact retry."""
+    from openai import APIError
+    import httpx
+
+    err = APIError(
+        "request too large for tokens per minute",
+        request=httpx.Request("POST", "https://example.invalid"),
+        body=None,
+    )
+    monkeypatch.setattr(err, "status_code", 413, raising=False)
+    comp = providers([[err, make_response("compacted answer")]], names=["limited"])
+
+    response, provider, _, _ = asyncio.run(
+        agent.run(
+            "current question",
+            [
+                {"role": "user", "content": "old question"},
+                {"role": "assistant", "content": "old answer"},
+            ],
+        )
+    )
+    assert response == "compacted answer"
+    assert provider == "limited"
+    assert len(comp.calls) == 2
+    compacted_messages = comp.calls[1]["messages"]
+    assert compacted_messages[0]["role"] == "system"
+    assert "old question" not in str(compacted_messages)
+    assert compacted_messages[-1]["content"] == "current question"
 
 
 def test_all_providers_exhausted_raises_cleanly(monkeypatch, tmp_system_prompt, providers):
