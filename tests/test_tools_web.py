@@ -234,6 +234,14 @@ def test_web_search_quota_error_is_actionable(monkeypatch):
     assert "new Brave Search plan or API key" in out
 
 
+def test_web_search_quota_error_is_cached(monkeypatch):
+    monkeypatch.setattr(fetch, "BRAVE_SEARCH_API_KEY", "k")
+    monkeypatch.setattr(fetch, "_search_quota_until", 10**12)
+    monkeypatch.setattr(fetch, "_search_quota_key", "k")
+    out = fetch.web_search("q")
+    assert "cached" in out
+
+
 def test_web_search_sends_subscription_token(monkeypatch):
     captured = _patch_search(monkeypatch, {"web": {"results": []}}, key="brave-secret")
     fetch.web_search("q")

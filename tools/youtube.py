@@ -92,6 +92,7 @@ def youtube_transcript(
         # Still return metadata even if transcript is missing
         return f"{meta_header}\n(no transcript available)" if meta_header else "(no transcript available)"
 
+    degraded_note = ""
     if prompt and not raw:
         if len(text) > _SUMMARIZER_CHAR_LIMIT:
             text = (
@@ -104,6 +105,10 @@ def youtube_transcript(
             return summarize_gemma(_SUMMARIZER_SYSTEM, f"{meta_header}\n\n{prompt}\n\n---\n\n{text}")
         except Exception as e:
             log.warning("youtube_transcript: summarizer failed (%s), falling back to raw", e)
+            degraded_note = (
+                "[youtube_transcript note: structured transcript summarization was unavailable; "
+                "this is raw paginated transcript text and may be incomplete.]\n\n"
+            )
 
     total = len(text)
     chunk = text[offset:]
@@ -116,7 +121,7 @@ def youtube_transcript(
         )
     
     # Prepend metadata to raw results
-    return f"{meta_header}\n\n{chunk}"
+    return f"{meta_header}\n\n{degraded_note}{chunk}"
 
 
 SCHEMAS = [

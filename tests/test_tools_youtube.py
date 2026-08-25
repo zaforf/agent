@@ -4,8 +4,6 @@ HTTP is fully mocked; no network required for default pytest run.
 """
 from __future__ import annotations
 
-import pytest
-
 import config
 from tools import youtube as yt
 
@@ -141,6 +139,7 @@ def test_summarizer_failure_falls_back_to_raw(monkeypatch):
     monkeypatch.setattr(yt, "summarize_gemma", boom)
     out = yt.youtube_transcript("dQw4w9WgXcQ", prompt="summarize")
     assert "raw fallback text" in out
+    assert "structured transcript summarization was unavailable" in out
 
 
 def test_supadata_error_returns_string(monkeypatch):

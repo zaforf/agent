@@ -200,6 +200,7 @@ Returns a numbered markdown list of `title — url` plus a short snippet (≤ 24
 
 - `max_results` is clamped to `[1, 10]` (default 5). Snippets and titles have HTML highlight tags stripped.
 - If `BRAVE_SEARCH_API_KEY` is unset, the tool returns the stable error string `"Error: web_search disabled — set BRAVE_SEARCH_API_KEY in .env"` so the model can react. HTTP / timeout failures also return short `Error: …` strings.
+- A Brave HTTP 402 quota error is cached for `BRAVE_SEARCH_QUOTA_COOLDOWN_S` so repeated calls during the same exhausted usage window do not waste requests; the returned error remains actionable.
 - Single endpoint (`/res/v1/web/search`), 10 s timeout, no retry — Brave's free tier is rate-limited and one failure is enough signal for the model to switch strategies.
 
 ### 5.3 Shell tool (`tools/shell.py`)
@@ -273,7 +274,7 @@ Accepts a bare video ID (e.g. `dQw4w9WgXcQ`) or any YouTube URL form (watch, you
 3. Pass the transcript + prompt to `summarizer.summarize_gemma` (same Gemma 4 26B helper as `fetch_url`)
 4. Return the summarizer's focused response
 
-If the summarizer fails, falls back to raw mode silently (logs a warning).
+If the summarizer fails, falls back to raw mode with an explicit note that the transcript may be incomplete (and logs a warning).
 
 **Raw/paginated mode** — when `raw=True` or no prompt given:
 - Returns up to 8,000 characters starting from `offset`

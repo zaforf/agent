@@ -12,6 +12,7 @@ GROQ_API_KEY          = os.environ.get("GROQ_API_KEY", "")
 GEMINI_API_KEY        = os.environ.get("GEMINI_API_KEY", "")
 BRAVE_SEARCH_API_KEY  = os.environ.get("BRAVE_SEARCH_API_KEY", "")
 SUPADATA_API_KEY      = os.environ.get("SUPADATA_API_KEY", "")
+BRAVE_SEARCH_QUOTA_COOLDOWN_S = float(os.environ.get("BRAVE_SEARCH_QUOTA_COOLDOWN_S", "300"))
 
 # Provider model IDs are configurable so a model retirement does not require
 # editing several modules independently.
