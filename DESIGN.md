@@ -424,7 +424,7 @@ Table: `messages` — one row per completed turn.
 
 ### 8.1 Telegram bot transport (optional)
 
-When `TELEGRAM_BOT_TOKEN` is set, `main.py` starts **long-polling** `getUpdates` in the FastAPI lifespan (`telegram_transport.py`). The bot shares the same SQLite history and `main.complete_chat_turn()` (non-streaming) as `POST /chat`.
+When `TELEGRAM_BOT_TOKEN` is set, `main.py` starts **long-polling** `getUpdates` in the FastAPI lifespan (`telegram_transport.py`). The bot shares the same SQLite history and `main.complete_chat_turn()` (non-streaming) as `POST /chat`. Production starts Gunicorn with a configurable `GUNICORN_TIMEOUT` (default 90 seconds), which exceeds Telegram's 60-second HTTP long-poll timeout and leaves headroom for slower reasoning/tool turns while retaining worker recycling for genuinely stuck processes.
 
 **Access control**: Set `TELEGRAM_ALLOWED_USER_IDS` to a comma-separated list of Telegram **user** IDs (integers). When set, updates from anyone else are ignored (no reply, no LLM call). Uses `message.from.id`, so in groups only allowlisted senders can trigger the bot. When unset, any user who finds the bot can use it—set the allowlist in production.
 
