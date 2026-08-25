@@ -12,6 +12,7 @@ GROQ_API_KEY          = os.environ.get("GROQ_API_KEY", "")
 GEMINI_API_KEY        = os.environ.get("GEMINI_API_KEY", "")
 BRAVE_SEARCH_API_KEY  = os.environ.get("BRAVE_SEARCH_API_KEY", "")
 SUPADATA_API_KEY      = os.environ.get("SUPADATA_API_KEY", "")
+BRAVE_SEARCH_QUOTA_COOLDOWN_S = float(os.environ.get("BRAVE_SEARCH_QUOTA_COOLDOWN_S", "300"))
 
 # Provider model IDs are configurable so a model retirement does not require
 # editing several modules independently.
@@ -65,6 +66,36 @@ AGENT_PARALLEL_TOOL_CALLS = os.environ.get("AGENT_PARALLEL_TOOL_CALLS", "true").
     "1",
     "true",
     "yes",
+)
+
+# Provider policy. ``responsive`` is the low-development-time experiment: use
+# the fast Gemma 26B path for every request and retain the rest as fallbacks.
+# ``quality`` enables the older conservative task-aware ordering for comparison.
+_provider_mode_raw = os.environ.get("AGENT_PROVIDER_MODE", "responsive").strip().lower()
+if _provider_mode_raw not in {"responsive", "quality"}:
+    log.warning("AGENT_PROVIDER_MODE=%r is invalid; using responsive", _provider_mode_raw)
+    _provider_mode_raw = "responsive"
+AGENT_PROVIDER_MODE = _provider_mode_raw
+
+# In quality mode, deep/ambiguous requests retain the quality-first chain;
+# obvious quick/current/inspection requests can use a faster provider without
+# changing the fallback set.
+AGENT_PROVIDER_ROUTING_ENABLED = os.environ.get("AGENT_PROVIDER_ROUTING_ENABLED", "true").lower() in (
+    "1", "true", "yes",
+)
+
+# Avoid rediscovering a provider-wide quota/payment failure on every turn.
+# This is a temporary circuit breaker, not a permanent provider disablement.
+PROVIDER_RATE_LIMIT_COOLDOWN_S = float(os.environ.get("PROVIDER_RATE_LIMIT_COOLDOWN_S", "60"))
+PROVIDER_API_ERROR_COOLDOWN_S = float(os.environ.get("PROVIDER_API_ERROR_COOLDOWN_S", "300"))
+PROVIDER_STREAM_INTERRUPT_COOLDOWN_S = float(
+    os.environ.get("PROVIDER_STREAM_INTERRUPT_COOLDOWN_S", "10")
+)
+# Emit honest SSE progress while a provider is still preparing its stream.
+# This is especially useful for reasoning models whose first chunk contains
+# hidden thinking and may arrive several seconds after the request begins.
+PROVIDER_WAIT_STATUS_INTERVAL_S = float(
+    os.environ.get("PROVIDER_WAIT_STATUS_INTERVAL_S", "2")
 )
 
 PROVIDERS: list[dict] = [
@@ -123,6 +154,12 @@ MEMORY_PREFETCH_ENABLED = os.environ.get("MEMORY_PREFETCH_ENABLED", "false").low
     "1", "true", "yes",
 )
 MEMORY_PREFETCH_TIMEOUT_S = float(os.environ.get("MEMORY_PREFETCH_TIMEOUT_S", "1.5"))
+MEMORY_WARM_ON_STARTUP = os.environ.get("MEMORY_WARM_ON_STARTUP", "true").lower() in (
+    "1", "true", "yes",
+)
+# Explicit memory operations are valuable but must not make a turn hang when
+# Mem0/Qdrant or its embedding provider is unhealthy.
+MEMORY_TOOL_TIMEOUT_S = float(os.environ.get("MEMORY_TOOL_TIMEOUT_S", "30"))
 
 # After a successful ``workspace_search_replace`` on a ``.py`` file, optionally append
 # ``ruff check`` / scoped ``pytest`` output to the same tool result (see ``tools/post_edit_verify.py``).

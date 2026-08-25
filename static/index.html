@@ -1519,6 +1519,17 @@
           } else if (event.type === 'thinking_done') {
             _thinkLastUpdate = 0;  // reset throttle for next block; label stays until text_chunk
 
+          } else if (event.type === 'status') {
+            const waitSeconds = Math.max(1, Math.round((event.elapsed_ms || 0) / 1000));
+            _showThinking(
+              event.stage === 'started' ? 'starting' :
+              event.stage === 'fallback' ? 'switching provider' :
+              event.stage === 'waiting' ? `waiting · ${waitSeconds}s` : 'working'
+            );
+
+          } else if (event.type === 'memory_prefetch_started') {
+            _showThinking('recalling memory');
+
           } else if (event.type === 'memory_prefetch') {
             console.debug('[agent] memory_prefetch:', event.count, event.memories);
             const memLines = (event.memories || []).map(m => `• ${m}`).join('\n');

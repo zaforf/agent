@@ -6,6 +6,13 @@ from unittest.mock import MagicMock, patch
 import tools.memory as memory
 
 
+def test_warm_initializes_memory(monkeypatch):
+    sentinel = object()
+    monkeypatch.setattr(memory, "_memory", sentinel)
+    memory.warm()
+    assert memory._memory is sentinel
+
+
 def test_recall_calls_search_with_filters_and_top_k():
     mock_mem = MagicMock()
     mock_mem.search.return_value = {"results": [{"memory": "x"}]}

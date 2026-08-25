@@ -241,13 +241,32 @@ def test_chat_stream_events_and_persist(client, monkeypatch):
 
     events = [json.loads(ln[6:]) for ln in lines]
     types = [e["type"] for e in events]
-    assert types == ["text_chunk", "text_chunk", "done"]
+    assert types == ["status", "text_chunk", "text_chunk", "done"]
     assert "".join(e["text"] for e in events if e["type"] == "text_chunk") == "hello"
 
     # Persisted
     hist = db.get_history("s-stream")
     assert [m["role"] for m in hist] == ["user", "assistant"]
     assert hist[1]["content"] == "hello"
+
+
+def test_chat_stream_disables_proxy_buffering(client, monkeypatch):
+    async def fake_stream(user_message, history, **kwargs):
+        yield {"type": "done", "provider": "fake", "turn_messages": []}
+
+    monkeypatch.setattr(agent, "run_stream", fake_stream)
+
+    with client.stream(
+        "POST", "/chat/stream", json={"message": "go", "session_id": "s-headers"}
+    ) as response:
+        assert response.headers["cache-control"] == "no-cache, no-transform"
+        assert response.headers["x-accel-buffering"] == "no"
+
+
+def test_latency_endpoint_returns_bounded_samples(client):
+    r = client.get("/latency?limit=2")
+    assert r.status_code == 200
+    assert isinstance(r.json()["samples"], list)
 
 
 def test_chat_stream_handles_error_event(client, monkeypatch):

@@ -16,6 +16,7 @@ from html.parser import HTMLParser
 
 import httpx
 
+import config
 from config import BRAVE_SEARCH_API_KEY
 from summarizer import summarize_gemma
 
@@ -37,6 +38,8 @@ _SEARCH_DEFAULT_RESULTS = 10
 _SEARCH_MAX_RESULTS     = 20
 _SEARCH_SNIPPET_CHARS   = 240
 _SEARCH_TOTAL_CHARS     = 4000
+_search_quota_until = 0.0
+_search_quota_key = ""
 
 
 class _TextExtractor(HTMLParser):
@@ -148,11 +151,17 @@ def fetch_url(url: str, prompt: str = "", offset: int = 0, raw: bool = False) ->
             return "(no readable content)"
 
         # ── Summarizer mode (default when prompt given) ──────────────────────
+        degraded_note = ""
         if prompt and not raw:
             try:
                 return _summarize_content(text, prompt)
             except Exception as e:
                 log.warning("fetch_url: summarizer failed (%s), falling back to raw text", e)
+                degraded_note = (
+                    "[fetch_url note: structured page summarization was unavailable; "
+                    "this is raw paginated text and may not contain the requested fact yet. "
+                    "Use offset pagination or retry prompt mode if needed.]\n\n"
+                )
 
         # ── Raw / paginated mode ─────────────────────────────────────────────
         total = len(text)
@@ -164,7 +173,7 @@ def fetch_url(url: str, prompt: str = "", offset: int = 0, raw: bool = False) ->
                 chunk[:_RAW_CHAR_LIMIT]
                 + f"\n\n[… {remaining:,} more chars — call fetch_url with offset={next_offset} to continue]"
             )
-        return chunk
+        return degraded_note + chunk
 
     except httpx.TimeoutException:
         return f"Error: request to {url} timed out ({_FETCH_TIMEOUT_S} s)"
@@ -195,8 +204,13 @@ def web_search(query: str, max_results: int = _SEARCH_DEFAULT_RESULTS) -> str:
     is clamped to [1, _SEARCH_MAX_RESULTS]. Returns a stable error string when
     the API key is missing or the request fails (so the model can react).
     """
+    global _search_quota_key, _search_quota_until
+
     if not BRAVE_SEARCH_API_KEY:
         return "Error: web_search disabled — set BRAVE_SEARCH_API_KEY in .env"
+
+    if _search_quota_key == BRAVE_SEARCH_API_KEY and time.monotonic() < _search_quota_until:
+        return "Error: web_search quota exhausted (cached until the Brave usage window resets). Configure a new Brave Search plan or API key."
 
     q = (query or "").strip()
     if not q:
@@ -223,6 +237,8 @@ def web_search(query: str, max_results: int = _SEARCH_DEFAULT_RESULTS) -> str:
             except ValueError:
                 detail = "monthly usage limit exceeded"
             detail = detail or "monthly usage limit exceeded"
+            _search_quota_until = time.monotonic() + config.BRAVE_SEARCH_QUOTA_COOLDOWN_S
+            _search_quota_key = BRAVE_SEARCH_API_KEY
             return f"Error: web_search quota exhausted ({detail}). Configure a new Brave Search plan or API key."
         return f"Error: web_search HTTP {e.response.status_code}"
     except httpx.TimeoutException:

@@ -35,7 +35,13 @@ This is a personal AI assistant for Zafir, exposed as a web application. It runs
 
 ## 3. Provider Chain
 
-Providers are tried in order. On rate-limit (`RateLimitError`, `APIConnectionError`), the same provider is retried up to 3 times with exponential backoff (1s, 2s). On non-retryable errors (`APIError`, unexpected exceptions), the provider is skipped immediately and the next one is tried.
+Providers are tried in order. Transient connection failures are retried up to 3 times with exponential backoff (1s, 2s). Rate-limit failures advance immediately to the next provider. Provider-wide payment/model errors are also skipped immediately. Those known-unavailable providers enter a temporary cooldown so later turns do not repeat the same failed request; they become eligible again automatically after the configured cooldown.
+
+If a provider's stream connection fails before any visible text or tool call is emitted, the loop temporarily skips that provider and retries the current turn through the next provider. Once output has been emitted, the failure is surfaced rather than silently duplicating content.
+
+`AGENT_PROVIDER_MODE` defaults to **`responsive`**: every request tries Gemma 4 26B first, then Groq, Gemma 4 31B, and Cerebras. This is intentionally a simple, low-latency prototype policy with no prompt classification; provider fallback happens only on errors or cooldowns. Set it to **`quality`** to use the older conservative policy: deep/ambiguous requests retain the 31B-first chain, while only obvious fast/current/inspection requests use the explicit faster-first order. `AGENT_PROVIDER_ROUTING_ENABLED` controls that heuristic only in `quality` mode.
+
+If a provider rejects a request specifically because its input is too large, the adapter retries that provider once with a compact system prompt and only the active user turn (plus ambient memory and live tool results). This preserves the current task while dropping older replay history; ordinary requests retain the full prompt and history.
 
 | Priority | Name | Model | Notes |
 |---|---|---|---|
@@ -141,6 +147,7 @@ The model is instructed to use native API `tool_calls` only — no XML or fenced
 ### 5.1 Memory tools (`tools/memory.py`)
 
 Backed by Mem0 + Qdrant. Qdrant host/port are read from `QDRANT_HOST` / `QDRANT_PORT` env vars (defaulting to `localhost:6333`); prod typically sets `QDRANT_HOST=qdrant` inside docker-compose. `docker-compose.yml` is gitignored because dev/prod topologies differ. Embeddings use the **Gemini Embedding API** (`GEMINI_API_KEY`, model `GEMINI_EMBEDDING_MODEL` defaulting to `models/gemini-embedding-001`, `GEMINI_EMBEDDING_DIMS` default 768). Vectors are stored under collection `MEM0_QDRANT_COLLECTION` (default `agent_memories_gemini` — new name so a prior local 768-d HuggingFace index is not reused). Mem0 uses the **Gemini** LLM provider (`MEM0_LLM_MODEL`, default **Gemma 4 26B MoE** `gemma-4-26b-a4b-it`) for memory extraction/processing — same `GEMINI_API_KEY` as the agent. This avoids Groq free-tier **tokens-per-minute** failures when the extraction prompt is large. Override with `MEM0_LLM_MODEL` (e.g. `gemma-4-31b-it`) if needed. Memory tools run in a worker thread (`asyncio.to_thread`) like `fetch_url` / `web_search` so the async event loop is not blocked during embedding or Qdrant I/O.
+Explicit memory operations are bounded by `MEMORY_TOOL_TIMEOUT_S` and return a tool error on timeout; the underlying synchronous work may finish in its worker thread.
 
 All memories are stored under the single user ID `"user"`.
 
@@ -185,7 +192,7 @@ The model can always paginate regardless of whether a pagination note is visible
 
 Retry behavior: up to 4 retries on timeout or connection errors with exponential backoff; up to 3 retries on HTTP 429 (rate limit) with `Retry-After` header respect.
 
-If the summarizer fails, the tool falls back to raw mode silently (logs a warning).
+If the summarizer fails, the tool falls back to raw mode with an explicit note that the result may be incomplete and can require pagination; the failure is also logged.
 
 #### 5.2.2 `web_search(query, max_results=5)`
 
@@ -193,6 +200,7 @@ Returns a numbered markdown list of `title — url` plus a short snippet (≤ 24
 
 - `max_results` is clamped to `[1, 10]` (default 5). Snippets and titles have HTML highlight tags stripped.
 - If `BRAVE_SEARCH_API_KEY` is unset, the tool returns the stable error string `"Error: web_search disabled — set BRAVE_SEARCH_API_KEY in .env"` so the model can react. HTTP / timeout failures also return short `Error: …` strings.
+- A Brave HTTP 402 quota error is cached for `BRAVE_SEARCH_QUOTA_COOLDOWN_S` so repeated calls during the same exhausted usage window do not waste requests; the returned error remains actionable.
 - Single endpoint (`/res/v1/web/search`), 10 s timeout, no retry — Brave's free tier is rate-limited and one failure is enough signal for the model to switch strategies.
 
 ### 5.3 Shell tool (`tools/shell.py`)
@@ -266,7 +274,7 @@ Accepts a bare video ID (e.g. `dQw4w9WgXcQ`) or any YouTube URL form (watch, you
 3. Pass the transcript + prompt to `summarizer.summarize_gemma` (same Gemma 4 26B helper as `fetch_url`)
 4. Return the summarizer's focused response
 
-If the summarizer fails, falls back to raw mode silently (logs a warning).
+If the summarizer fails, falls back to raw mode with an explicit note that the transcript may be incomplete (and logs a warning).
 
 **Raw/paginated mode** — when `raw=True` or no prompt given:
 - Returns up to 8,000 characters starting from `offset`
@@ -411,11 +419,12 @@ Table: `messages` — one row per completed turn.
 | `GET` | `/memories` | List all Mem0 memories. |
 | `DELETE` | `/memories/{id}` | Delete a memory by ID. |
 | `GET` | `/health` | Returns status plus configured provider/model metadata and whether web search has a key. It does not perform live provider calls. |
+| `GET` | `/latency` | Returns the most recent bounded stream timing samples (first event, first model-visible event, first text, memory completion, tools, provider, total). In-process only; not a metrics database. |
 | `GET` | `/*` | Static files from `static/` (serves the web UI). |
 
 ### 8.1 Telegram bot transport (optional)
 
-When `TELEGRAM_BOT_TOKEN` is set, `main.py` starts **long-polling** `getUpdates` in the FastAPI lifespan (`telegram_transport.py`). The bot shares the same SQLite history and `main.complete_chat_turn()` (non-streaming) as `POST /chat`.
+When `TELEGRAM_BOT_TOKEN` is set, `main.py` starts **long-polling** `getUpdates` in the FastAPI lifespan (`telegram_transport.py`). The bot shares the same SQLite history and `main.complete_chat_turn()` (non-streaming) as `POST /chat`. Production starts Gunicorn with a configurable `GUNICORN_TIMEOUT` (default 90 seconds), which exceeds Telegram's 60-second HTTP long-poll timeout and leaves headroom for slower reasoning/tool turns while retaining worker recycling for genuinely stuck processes.
 
 **Access control**: Set `TELEGRAM_ALLOWED_USER_IDS` to a comma-separated list of Telegram **user** IDs (integers). When set, updates from anyone else are ignored (no reply, no LLM call). Uses `message.from.id`, so in groups only allowlisted senders can trigger the bot. When unset, any user who finds the bot can use it—set the allowlist in production.
 
@@ -437,9 +446,15 @@ When `TELEGRAM_BOT_TOKEN` is set, `main.py` starts **long-polling** `getUpdates`
 
 ### 8.2 SSE event types (`/chat/stream`)
 
+The endpoint returns `text/event-stream` with `Cache-Control: no-cache, no-transform`
+and `X-Accel-Buffering: no` so reverse proxies do not hold status or token events
+until the response is complete.
+
 | `type` | Fields | Description |
 |---|---|---|
 | `text_chunk` | `text: str` | Incremental visible text from the model |
+| `status` | `stage: str`, optional `elapsed_ms: int` | Request lifecycle status emitted before or during memory/provider work; `waiting` repeats while a provider has not produced its stream yet |
+| `memory_prefetch_started` | *(none)* | Ambient memory retrieval has started |
 | `thinking_chars` | `count: int` | Number of thinking chars buffered so far (drives indicator) |
 | `tool_call` | `name: str`, `args: dict` | A tool is about to be called |
 | `tool_result` | `name: str`, `result: str` | Tool execution completed |

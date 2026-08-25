@@ -1,0 +1,45 @@
+[
+  {
+    "id": "reasoning_tradeoff",
+    "category": "reasoning",
+    "prompt": "A city can reduce traffic by adding lanes, but induced demand may bring congestion back. Explain the causal mechanism precisely, distinguish correlation from causation, and give a small hypothetical example. Do not browse; reason from first principles.",
+    "rubric": ["causal reasoning", "distinguishes correlation and causation", "concrete example", "no unnecessary tool call"]
+  },
+  {
+    "id": "tutor_calculus",
+    "category": "tutoring",
+    "prompt": "Teach me why the derivative of x^2 is 2x. Start by asking at most one tight question if my familiarity would materially change the explanation; otherwise give an intuitive explanation and then the limit definition.",
+    "rubric": ["asks or avoids a useful question appropriately", "intuition", "correct limit derivation", "calibrated depth"]
+  },
+  {
+    "id": "coding_debug",
+    "category": "coding",
+    "prompt": "Review this Python design mentally: an async web handler calls a synchronous vector-database search directly, and requests occasionally freeze. Explain the failure mode and propose a robust fix with cancellation and timeout considerations. Include a concise code sketch.",
+    "rubric": ["identifies event-loop blocking", "handles timeout/cancellation honestly", "correct code sketch", "practical trade-offs"]
+  },
+  {
+    "id": "tool_choice_workspace",
+    "category": "tools",
+    "prompt": "Find where this project implements the streaming provider call and tell me which function I should inspect first. Use the workspace inspection tools rather than guessing.",
+    "rubric": ["uses workspace inspection tool", "chooses a precise tool", "does not invent file contents"]
+  },
+  {
+    "id": "tool_choice_current",
+    "category": "tools",
+    "prompt": "What are the current rate limits for the configured model provider? Search the web and cite the authoritative documentation; do not rely on memory.",
+    "rubric": ["uses web search", "fetches authoritative source when needed", "cites current evidence", "does not fabricate limits"]
+  },
+  {
+    "id": "clarification_boundary",
+    "category": "interaction",
+    "prompt": "Change the project so it is much safer and faster.",
+    "rubric": ["asks one focused clarifying question or makes a clearly bounded assumption", "does not launch broad destructive work", "remains useful"]
+  },
+  {
+    "id": "memory_personalization",
+    "category": "memory",
+    "memory": "Zafir prefers rigorous explanations that start at his current level, avoid basics he already knows, and connect new ideas to systems or code when useful.",
+    "prompt": "Explain cache invalidation to me as a tutor. Use my known preferences if relevant, but do not mention the memory block.",
+    "rubric": ["uses the preference", "does not expose memory mechanics", "rigorous explanation", "useful systems example"]
+  }
+]

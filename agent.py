@@ -4,6 +4,8 @@ import datetime
 import json
 import logging
 import re
+import time
+from contextlib import suppress
 from pathlib import Path
 from openai import AsyncOpenAI, RateLimitError, APIError, APIConnectionError
 import config
@@ -25,6 +27,114 @@ _clients: list[dict] = [
     }
     for p in PROVIDERS if p["api_key"]
 ]
+
+_provider_cooldowns: dict[str, float] = {}
+
+_COMPACT_SYSTEM_PROMPT = (
+    "You are Zafir's personal AI assistant for technical work, learning, research, and general tasks.\n"
+    "Be correct, direct, and useful. Ask one focused question only when a missing detail would materially change the result; otherwise make a reasonable assumption and proceed.\n"
+    "Use the provided native tools when current information, memory, files, code, or external actions are needed. Do not invent tool results.\n"
+    "Preserve and use relevant memory about Zafir's preferences, projects, knowledge, and learning level.\n"
+    "For code changes, inspect before editing, make narrow changes, verify them, and report failures honestly.\n"
+    "Return a visible answer outside any reasoning tags.\n"
+)
+
+_DEEP_REQUEST_HINTS = (
+    "teach", "tutor", "explain why", "prove", "derive", "reason", "tradeoff",
+    "compare", "deep dive", "understand", "walk me through", "debug", "design",
+)
+_FAST_REQUEST_HINTS = (
+    "current", "latest", "look up", "search", "find where", "inspect", "status",
+    "quick", "what time", "weather", "fetch", "summarize this page",
+)
+
+
+def _provider_available(name: str) -> bool:
+    until = _provider_cooldowns.get(name, 0.0)
+    if until <= time.monotonic():
+        _provider_cooldowns.pop(name, None)
+        return True
+    return False
+
+
+def _cooldown_provider(name: str, seconds: float, reason: str) -> None:
+    if seconds <= 0:
+        return
+    _provider_cooldowns[name] = time.monotonic() + seconds
+    log.warning("provider=%s cooldown=%.1fs reason=%s", name, seconds, reason)
+
+
+def _request_profile(messages: list[dict]) -> str:
+    """Classify only obvious task shapes; ambiguous requests stay quality-first."""
+    if not config.AGENT_PROVIDER_ROUTING_ENABLED:
+        return "default"
+    user_text = ""
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            content = message.get("content") or ""
+            user_text = content if isinstance(content, str) else str(content)
+            break
+    lowered = user_text.lower()
+    if any(hint in lowered for hint in _DEEP_REQUEST_HINTS):
+        return "deep"
+    if any(hint in lowered for hint in _FAST_REQUEST_HINTS):
+        return "fast"
+    return "default"
+
+
+def _ordered_clients(messages: list[dict]) -> tuple[str, list[dict]]:
+    if config.AGENT_PROVIDER_MODE == "responsive":
+        preferred_order = (
+            "gemini-gemma4-26b", "groq", "gemini-gemma4-31b", "cerebras"
+        )
+        by_name = {entry["name"]: entry for entry in _clients}
+        preferred = [by_name[name] for name in preferred_order if name in by_name]
+        return "responsive", preferred + [
+            entry for entry in _clients if entry["name"] not in preferred_order
+        ]
+
+    profile = _request_profile(messages)
+    if profile != "fast":
+        return profile, _clients
+    preferred_order = ("groq", "gemini-gemma4-26b", "cerebras")
+    by_name = {entry["name"]: entry for entry in _clients}
+    preferred = [by_name[name] for name in preferred_order if name in by_name]
+    return profile, preferred + [
+        entry for entry in _clients if entry["name"] not in preferred_order
+    ]
+
+
+def _compact_messages(messages: list[dict]) -> list[dict]:
+    """Keep the active turn while reducing context for a provider input limit.
+
+    This is used only after a provider rejects the request as too large. The
+    current user turn, an adjacent ambient-memory block, and all live tool
+    results remain intact; older replay history is the expendable portion.
+    """
+    if not messages:
+        return messages
+    latest_user = next(
+        (i for i in range(len(messages) - 1, -1, -1) if messages[i].get("role") == "user"),
+        None,
+    )
+    if latest_user is None:
+        active = messages[1:]
+    else:
+        start = latest_user
+        if start > 1:
+            previous = messages[start - 1]
+            if previous.get("role") == "user" and str(previous.get("content", "")).startswith("[Memory"):
+                start -= 1
+        active = messages[start:]
+    compact_system = f"Today's date: {datetime.date.today():%A %Y-%m-%d}\n\n{_COMPACT_SYSTEM_PROMPT}"
+    return [{"role": "system", "content": compact_system}, *active]
+
+
+def _is_input_too_large(error: APIError) -> bool:
+    return getattr(error, "status_code", None) in (400, 413) and any(
+        marker in str(error).lower()
+        for marker in ("too large", "too long", "tokens per minute", "context length", "prompt")
+    )
 
 MAX_TOOL_ITERATIONS = 30
 
@@ -235,6 +345,7 @@ _BLOCKING_SYNC_TOOLS = frozenset({
     "lsp_hover",
     "lsp_definition_for_symbol",
 })
+_MEMORY_TOOLS = frozenset({"remember", "recall", "list_memories", "delete_memory"})
 
 # Tools that never mutate workspace files, shell session, or destructive memory
 # state — safe to execute concurrently within one assistant tool-call batch when
@@ -507,8 +618,13 @@ async def _call(messages: list[dict], use_tools: bool = True) -> tuple:
     if not _clients:
         raise RuntimeError("No providers configured — set at least one API key.")
 
+    profile, clients = _ordered_clients(messages)
+    log.info("request profile=%s", profile)
     last_err = None
-    for entry in _clients:
+    for entry in clients:
+        if not _provider_available(entry["name"]):
+            log.info("provider=%s temporarily unavailable; skipping", entry["name"])
+            continue
         kwargs = dict(model=entry["model"], messages=messages, max_tokens=8192)
         if use_tools:
             kwargs["tools"] = TOOL_SCHEMAS
@@ -516,6 +632,7 @@ async def _call(messages: list[dict], use_tools: bool = True) -> tuple:
             if config.AGENT_PARALLEL_TOOL_CALLS:
                 kwargs["parallel_tool_calls"] = True
 
+        compacted = False
         for attempt in range(3):
             try:
                 resp = await entry["client"].chat.completions.create(**kwargs)
@@ -526,6 +643,9 @@ async def _call(messages: list[dict], use_tools: bool = True) -> tuple:
                 # produce the first token instead of adding several seconds
                 # of avoidable dead air.
                 last_err = e
+                _cooldown_provider(
+                    entry["name"], config.PROVIDER_RATE_LIMIT_COOLDOWN_S, "rate_limit"
+                )
                 log.warning("provider=%s rate limited; skipping to next provider: %s", entry["name"], e)
                 break
             except APIConnectionError as e:
@@ -535,6 +655,15 @@ async def _call(messages: list[dict], use_tools: bool = True) -> tuple:
                     await asyncio.sleep(2 ** attempt)
             except APIError as e:
                 last_err = e
+                if _is_input_too_large(e) and not compacted:
+                    kwargs["messages"] = _compact_messages(messages)
+                    compacted = True
+                    log.warning("provider=%s input too large; retrying with active-turn context", entry["name"])
+                    continue
+                if getattr(e, "status_code", None) in (402, 403, 404):
+                    _cooldown_provider(
+                        entry["name"], config.PROVIDER_API_ERROR_COOLDOWN_S, f"http_{e.status_code}"
+                    )
                 log.warning("provider=%s attempt=%d api error (skipping): %s", entry["name"], attempt, e)
                 break
             except Exception as e:
@@ -550,8 +679,13 @@ async def _call_stream(messages: list[dict]) -> tuple:
     if not _clients:
         raise RuntimeError("No providers configured.")
 
+    profile, clients = _ordered_clients(messages)
+    log.info("stream request profile=%s", profile)
     last_err = None
-    for entry in _clients:
+    for entry in clients:
+        if not _provider_available(entry["name"]):
+            log.info("stream provider=%s temporarily unavailable; skipping", entry["name"])
+            continue
         kwargs = dict(
             model       = entry["model"],
             messages    = messages,
@@ -563,6 +697,7 @@ async def _call_stream(messages: list[dict]) -> tuple:
         if config.AGENT_PARALLEL_TOOL_CALLS:
             kwargs["parallel_tool_calls"] = True
 
+        compacted = False
         for attempt in range(3):
             try:
                 stream = await entry["client"].chat.completions.create(**kwargs)
@@ -571,6 +706,9 @@ async def _call_stream(messages: list[dict]) -> tuple:
                 # Quota exhaustion is provider-specific and retrying it here
                 # only delays the next provider in the chain.
                 last_err = e
+                _cooldown_provider(
+                    entry["name"], config.PROVIDER_RATE_LIMIT_COOLDOWN_S, "rate_limit"
+                )
                 log.warning("stream provider=%s rate limited; skipping to next provider: %s", entry["name"], e)
                 break
             except APIConnectionError as e:
@@ -580,6 +718,15 @@ async def _call_stream(messages: list[dict]) -> tuple:
                     await asyncio.sleep(2 ** attempt)
             except APIError as e:
                 last_err = e
+                if _is_input_too_large(e) and not compacted:
+                    kwargs["messages"] = _compact_messages(messages)
+                    compacted = True
+                    log.warning("stream provider=%s input too large; retrying with active-turn context", entry["name"])
+                    continue
+                if getattr(e, "status_code", None) in (402, 403, 404):
+                    _cooldown_provider(
+                        entry["name"], config.PROVIDER_API_ERROR_COOLDOWN_S, f"http_{e.status_code}"
+                    )
                 log.warning("stream provider=%s attempt=%d api error (skipping): %s", entry["name"], attempt, e)
                 break
             except Exception as e:
@@ -712,7 +859,13 @@ async def _run_tool_async(name: str, args: dict) -> str:
         return result
 
     if name in _BLOCKING_SYNC_TOOLS:
-        return await asyncio.to_thread(_invoke_sync)
+        task = asyncio.to_thread(_invoke_sync)
+        if name in _MEMORY_TOOLS:
+            try:
+                return await asyncio.wait_for(task, timeout=config.MEMORY_TOOL_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                return f"Error in {name}: timed out after {config.MEMORY_TOOL_TIMEOUT_S:g}s"
+        return await task
     return _invoke_sync()
 
 
@@ -955,6 +1108,8 @@ async def run_stream(
     history = _sanitize_history(history)
     _user_text = _user_content_as_text(user_content)
     system_prompt = _build_system_prompt(output_channel=output_channel)
+    if config.MEMORY_PREFETCH_ENABLED:
+        yield {"type": "memory_prefetch_started"}
     prefetched = await _prefetch_memories(_user_text, history)
     mem_block = [_memories_user_block(prefetched)] if prefetched else []
     if prefetched:
@@ -975,15 +1130,40 @@ async def run_stream(
     pending_summaries: list[tuple[dict, asyncio.Task]] = []
 
     for iteration in range(MAX_TOOL_ITERATIONS):
+        provider = None
         try:
             raw_parts: list[str] = []
             visible_parts: list[str] = []
-            stream, provider = await _call_stream(messages)
+            tool_calls_slots: list[dict] = []
+            # Keep the SSE connection informative while the provider is still
+            # establishing the stream.  Some reasoning models do not emit a
+            # first chunk for many seconds, and their first chunk may be
+            # hidden thinking rather than visible text.
+            stream_task = asyncio.create_task(_call_stream(messages))
+            wait_started = time.monotonic()
+            try:
+                while not stream_task.done():
+                    done, _ = await asyncio.wait(
+                        {stream_task},
+                        timeout=config.PROVIDER_WAIT_STATUS_INTERVAL_S,
+                    )
+                    if not done:
+                        yield {
+                            "type": "status",
+                            "stage": "waiting",
+                            "elapsed_ms": round((time.monotonic() - wait_started) * 1000),
+                        }
+                stream, provider = stream_task.result()
+            except BaseException:
+                if not stream_task.done():
+                    stream_task.cancel()
+                with suppress(BaseException):
+                    await stream_task
+                raise
             provider_used    = provider
             log.info("turn[%d]  provider=%s", iteration, provider)
         
             # The raw stream contains the thoughts; we capture them for the debug log.
-            tool_calls_slots: list[dict] = []
             stripper        = _ThinkStripper()
             tool_mode       = False   # once True, suppress text forwarding
 
@@ -1174,6 +1354,29 @@ async def run_stream(
                 return
         except asyncio.CancelledError:
             raise
+        except APIConnectionError as e:
+            # A stream can fail after the request was accepted but before any
+            # user-visible content/tool call arrived. In that narrow window,
+            # skip the interrupted provider and let the next iteration use a
+            # fallback. Once output exists, never silently duplicate or stitch
+            # responses together.
+            if (
+                provider
+                and not raw_parts
+                and not visible_parts
+                and not tool_calls_slots
+                and iteration + 1 < MAX_TOOL_ITERATIONS
+            ):
+                _cooldown_provider(
+                    provider,
+                    config.PROVIDER_STREAM_INTERRUPT_COOLDOWN_S,
+                    "stream_interrupt",
+                )
+                yield {"type": "status", "stage": "fallback"}
+                continue
+            tm = _turn_messages_for_stream_error(messages, turn_start, "".join(visible_parts), str(e))
+            yield {"type": "error", "detail": str(e), "turn_messages": tm}
+            return
         except Exception as e:
             tm = _turn_messages_for_stream_error(messages, turn_start, "".join(visible_parts), str(e))
             yield {"type": "error", "detail": str(e), "turn_messages": tm}

@@ -94,7 +94,7 @@ def test_raw_mode_no_note_when_below_limit(monkeypatch):
 
 
 def test_summarizer_failure_falls_back_to_raw(monkeypatch):
-    """When the summarizer blows up, fetch_url silently returns raw text."""
+    """When the summarizer blows up, fetch_url labels the raw fallback."""
     text = "hello " * 100
     _mock_fetch(monkeypatch, text, content_type="text/plain")
 
@@ -104,6 +104,7 @@ def test_summarizer_failure_falls_back_to_raw(monkeypatch):
 
     out = fetch.fetch_url("https://example.com", prompt="extract something")
     assert "hello" in out, "expected raw text fallback on summarizer failure"
+    assert "structured page summarization was unavailable" in out
 
 
 def test_empty_page_returns_no_content_marker(monkeypatch):
@@ -231,6 +232,14 @@ def test_web_search_quota_error_is_actionable(monkeypatch):
     out = fetch.web_search("q")
     assert "quota exhausted" in out
     assert "new Brave Search plan or API key" in out
+
+
+def test_web_search_quota_error_is_cached(monkeypatch):
+    monkeypatch.setattr(fetch, "BRAVE_SEARCH_API_KEY", "k")
+    monkeypatch.setattr(fetch, "_search_quota_until", 10**12)
+    monkeypatch.setattr(fetch, "_search_quota_key", "k")
+    out = fetch.web_search("q")
+    assert "cached" in out
 
 
 def test_web_search_sends_subscription_token(monkeypatch):

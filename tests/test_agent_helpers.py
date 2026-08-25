@@ -127,6 +127,8 @@ def test_repo_system_prompt_covers_math_and_tool_discipline():
     assert "Never use `$` or `$$` for math" in text
     assert "\\(...\\)" in text
     assert "\\[...\\]" in text
+    assert "Ask one focused clarifying question" in text
+    assert "Do not interrogate the user before routine work" in text
 
 
 def test_build_system_prompt_telegram_channel_adds_plain_text_rules(tmp_system_prompt):
@@ -142,6 +144,81 @@ def test_build_system_prompt_forbids_xml_tool_format(tmp_system_prompt):
     # The generated tool docs section tells the model to use native tool_calls
     # only (not XML / fenced code).
     assert "tool_calls" in prompt
+
+
+def test_compact_messages_keeps_memory_and_active_turn():
+    messages = [
+        {"role": "system", "content": "full system"},
+        {"role": "user", "content": "old"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "user", "content": "[Memory — these may help]\n- prefers depth"},
+        {"role": "user", "content": "new question"},
+        {"role": "assistant", "content": "tool call"},
+        {"role": "tool", "content": "tool result"},
+    ]
+    compacted = agent._compact_messages(messages)
+    assert compacted[0]["role"] == "system"
+    assert "old answer" not in str(compacted)
+    assert "prefers depth" in str(compacted)
+    assert compacted[-1]["content"] == "tool result"
+
+
+def test_request_profile_is_conservative(monkeypatch):
+    monkeypatch.setattr(agent.config, "AGENT_PROVIDER_MODE", "quality")
+    monkeypatch.setattr(agent.config, "AGENT_PROVIDER_ROUTING_ENABLED", True)
+    assert agent._request_profile([{"role": "user", "content": "Teach me why this works"}]) == "deep"
+    assert agent._request_profile([{"role": "user", "content": "Find where retries are implemented"}]) == "fast"
+    assert agent._request_profile([{"role": "user", "content": "Help me with this"}]) == "default"
+
+
+def test_fast_profile_prioritizes_fast_providers(monkeypatch):
+    monkeypatch.setattr(agent.config, "AGENT_PROVIDER_MODE", "quality")
+    monkeypatch.setattr(agent.config, "AGENT_PROVIDER_ROUTING_ENABLED", True)
+    entries = [
+        {"name": "gemini-gemma4-31b"},
+        {"name": "gemini-gemma4-26b"},
+        {"name": "cerebras"},
+        {"name": "groq"},
+    ]
+    monkeypatch.setattr(agent, "_clients", entries)
+    profile, ordered = agent._ordered_clients([{"role": "user", "content": "current weather"}])
+    assert profile == "fast"
+    assert [entry["name"] for entry in ordered] == [
+        "groq", "gemini-gemma4-26b", "cerebras", "gemini-gemma4-31b"
+    ]
+
+
+def test_responsive_mode_uses_fixed_26b_first_order(monkeypatch):
+    monkeypatch.setattr(agent.config, "AGENT_PROVIDER_MODE", "responsive")
+    entries = [
+        {"name": "gemini-gemma4-31b"},
+        {"name": "gemini-gemma4-26b"},
+        {"name": "cerebras"},
+        {"name": "groq"},
+    ]
+    monkeypatch.setattr(agent, "_clients", entries)
+
+    profile, ordered = agent._ordered_clients(
+        [{"role": "user", "content": "Please prove this carefully."}]
+    )
+
+    assert profile == "responsive"
+    assert [entry["name"] for entry in ordered] == [
+        "gemini-gemma4-26b", "groq", "gemini-gemma4-31b", "cerebras"
+    ]
+
+
+def test_memory_tool_timeout_returns_model_visible_error(monkeypatch):
+    import time
+
+    def slow_recall(**kwargs):
+        time.sleep(0.1)
+        return "late result"
+
+    monkeypatch.setattr(agent.config, "MEMORY_TOOL_TIMEOUT_S", 0.01)
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "recall", slow_recall)
+    result = asyncio.run(agent._run_tool_async("recall", {"query": "x"}))
+    assert "timed out" in result
 
 
 # ── _summarize_for_history fall-throughs (DESIGN §6.5) ───────────────────────

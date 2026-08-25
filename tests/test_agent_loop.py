@@ -413,7 +413,7 @@ def test_provider_fallback_on_retryable_error(monkeypatch, tmp_system_prompt, pr
 
     err = APIConnectionError(request=httpx.Request("POST", "https://example.invalid"))
 
-    comps = providers([
+    providers([
         [err, err, err],                       # provider A exhausts all 3 retries
         [make_response("ok from B")],          # provider B succeeds
     ], names=["a", "b"])
@@ -439,6 +439,104 @@ def test_provider_fallback_skips_rate_limited_provider(monkeypatch, tmp_system_p
     assert provider == "b"
     assert response == "fast fallback"
     assert len(comps[0].calls) == 1
+
+
+def test_provider_cooldown_skips_known_unavailable_provider(monkeypatch, tmp_system_prompt, providers):
+    """A later turn does not re-request a provider still in cooldown."""
+    import time
+
+    comps = providers([[make_response("should not run")], [make_response("ready")]], names=["a", "b"])
+    agent._provider_cooldowns["a"] = time.monotonic() + 60
+
+    response, provider, _, _ = asyncio.run(agent.run("hi", []))
+    assert provider == "b"
+    assert response == "ready"
+    assert comps[0].calls == []
+
+
+def test_input_too_large_retries_provider_with_active_turn_context(
+    monkeypatch, tmp_system_prompt, providers
+):
+    """A context rejection gets one quality-preserving compact retry."""
+    from openai import APIError
+    import httpx
+
+    err = APIError(
+        "request too large for tokens per minute",
+        request=httpx.Request("POST", "https://example.invalid"),
+        body=None,
+    )
+    monkeypatch.setattr(err, "status_code", 413, raising=False)
+    comp = providers([[err, make_response("compacted answer")]], names=["limited"])
+
+    response, provider, _, _ = asyncio.run(
+        agent.run(
+            "current question",
+            [
+                {"role": "user", "content": "old question"},
+                {"role": "assistant", "content": "old answer"},
+            ],
+        )
+    )
+    assert response == "compacted answer"
+    assert provider == "limited"
+    assert len(comp.calls) == 2
+    compacted_messages = comp.calls[1]["messages"]
+    assert compacted_messages[0]["role"] == "system"
+    assert "old question" not in str(compacted_messages)
+    assert compacted_messages[-1]["content"] == "current question"
+
+
+def test_stream_interrupt_before_output_falls_back(monkeypatch, tmp_system_prompt):
+    """A pre-visible stream disconnect skips the provider and retries once."""
+    from openai import APIConnectionError
+    import httpx
+
+    error = APIConnectionError(request=httpx.Request("POST", "https://example.invalid"))
+
+    class _BrokenStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise error
+
+    class _Completions:
+        def __init__(self, streams):
+            self.streams = list(streams)
+            self.calls = 0
+
+        async def create(self, **kwargs):
+            self.calls += 1
+            stream = self.streams.pop(0)
+            if isinstance(stream, list):
+                async def _gen():
+                    for item in stream:
+                        yield item
+                return _gen()
+            return stream
+
+    broken = _Completions([_BrokenStream()])
+    good = _Completions([[text_chunk("fallback answer")]])
+    monkeypatch.setattr(
+        agent,
+        "_clients",
+        [
+            {"name": "a", "model": "a", "client": type("C", (), {"chat": type("H", (), {"completions": broken})()})()},
+            {"name": "b", "model": "b", "client": type("C", (), {"chat": type("H", (), {"completions": good})()})()},
+        ],
+    )
+    monkeypatch.setattr(agent, "_provider_cooldowns", {})
+
+    async def collect():
+        return [event async for event in agent.run_stream("hi", [])]
+
+    events = asyncio.run(collect())
+    assert {event.get("stage") for event in events if event["type"] == "status"} >= {"fallback"}
+    assert any(event.get("text") == "fallback answer" for event in events)
+    assert events[-1]["type"] == "done"
+    assert broken.calls == 1
+    assert good.calls == 1
 
 
 def test_all_providers_exhausted_raises_cleanly(monkeypatch, tmp_system_prompt, providers):
@@ -531,6 +629,25 @@ def test_streaming_emits_text_chunks_and_done(monkeypatch, tmp_system_prompt, pr
     assert types[-1] == "done"
     text = "".join(e["text"] for e in events if e["type"] == "text_chunk")
     assert text == "hello world"
+
+
+def test_streaming_reports_provider_wait(monkeypatch, tmp_system_prompt, providers):
+    async def delayed_call(_messages):
+        await asyncio.sleep(0.02)
+
+        async def stream():
+            yield text_chunk("ready")
+
+        return stream(), "delayed-provider"
+
+    monkeypatch.setattr(agent, "_call_stream", delayed_call)
+    monkeypatch.setattr(agent.config, "PROVIDER_WAIT_STATUS_INTERVAL_S", 0.005, raising=False)
+
+    events = asyncio.run(_collect_stream("hi"))
+    waiting = [e for e in events if e.get("type") == "status" and e.get("stage") == "waiting"]
+    assert waiting
+    assert waiting[0]["elapsed_ms"] >= 0
+    assert events[-1]["type"] == "done"
 
 
 def test_streaming_strips_thinking_tags_from_visible_text(monkeypatch, tmp_system_prompt, providers):
@@ -723,4 +840,3 @@ def test_streaming_tool_call_arguments_accumulate_across_chunks(
     events = asyncio.run(_collect_stream("go"))
     assert events[-1]["type"] == "done"
     assert seen_args == {"query": "x", "max_results": 3}
-

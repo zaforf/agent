@@ -15,6 +15,7 @@ from pydantic import BaseModel
 import agent
 import config
 import db
+import telemetry
 from summarizer import summarize_gemma
 from tools.memory import get_all as get_all_memories, delete_memory
 
@@ -38,6 +39,25 @@ log = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init()
+    memory_warm_task: asyncio.Task | None = None
+    if config.MEMORY_PREFETCH_ENABLED and config.MEMORY_WARM_ON_STARTUP:
+        # Mem0 may import spaCy and inspect/create Qdrant collections on first
+        # use. Warm it outside the request path so enabled ambient memory does
+        # not make the first personal-assistant turn appear idle.
+        from tools.memory import warm as warm_memory
+
+        memory_warm_task = asyncio.create_task(
+            asyncio.to_thread(warm_memory), name="memory-warm"
+        )
+
+        def _report_memory_warm(task: asyncio.Task) -> None:
+            with suppress(asyncio.CancelledError):
+                try:
+                    task.result()
+                except Exception:
+                    log.warning("background memory warm-up failed", exc_info=True)
+
+        memory_warm_task.add_done_callback(_report_memory_warm)
     tg_task: asyncio.Task | None = None
     if config.TELEGRAM_BOT_TOKEN:
         from telegram_transport import run_telegram_polling
@@ -48,6 +68,9 @@ async def lifespan(app: FastAPI):
         tg_task.cancel()
         with suppress(asyncio.CancelledError):
             await tg_task
+    if memory_warm_task is not None and memory_warm_task.done():
+        with suppress(Exception):
+            memory_warm_task.result()
 
 
 app = FastAPI(title="Agent", lifespan=lifespan)
@@ -167,10 +190,40 @@ async def _run_stream_turn(
     output_channel: str = "default",
 ) -> None:
     """Background producer: runs agent stream, queues SSE events, persists on completion."""
+    started = asyncio.get_running_loop().time()
+    timing: dict = {
+        "session_id": state.session_id,
+        "first_event_ms": None,
+        "first_provider_event_ms": None,
+        "memory_ms": None,
+        "first_visible_ms": None,
+        "done_ms": None,
+        "provider": None,
+        "tool_count": 0,
+    }
+
+    def elapsed_ms() -> float:
+        return round((asyncio.get_running_loop().time() - started) * 1000, 1)
+
     try:
         run_stream_sig = inspect.signature(agent.run_stream)
         kwargs = {"output_channel": output_channel} if "output_channel" in run_stream_sig.parameters else {}
         async for event in agent.run_stream(user_content, history, session_id=state.session_id, **kwargs):
+            event_type = event.get("type")
+            if timing["first_event_ms"] is None:
+                timing["first_event_ms"] = elapsed_ms()
+            if event_type == "memory_prefetch" and timing["memory_ms"] is None:
+                timing["memory_ms"] = elapsed_ms()
+            if event_type in {"thinking_chars", "thinking_done", "text_chunk", "tool_call"}:
+                if timing["first_provider_event_ms"] is None:
+                    timing["first_provider_event_ms"] = elapsed_ms()
+            if event_type == "text_chunk" and timing["first_visible_ms"] is None:
+                timing["first_visible_ms"] = elapsed_ms()
+            if event_type == "tool_call":
+                timing["tool_count"] += 1
+            if event_type == "done":
+                timing["provider"] = event.get("provider")
+                timing["done_ms"] = elapsed_ms()
             if event.get("type") == "text_chunk":
                 state.full_response += event.get("text", "")
             elif event.get("type") == "done":
@@ -195,6 +248,10 @@ async def _run_stream_turn(
     finally:
         with suppress(Exception):
             await _persist_stream_turn(state)
+        if timing["done_ms"] is None:
+            timing["done_ms"] = elapsed_ms()
+        timing["total_ms"] = timing["done_ms"]
+        telemetry.record(timing)
         state.completed = True
         await state.queue.put(None)
 
@@ -507,6 +564,9 @@ async def chat_stream(req: ChatRequest):
 
     async def generate():
         try:
+            # Let the UI confirm that the request is alive before waiting on
+            # memory retrieval or the provider's first token.
+            yield "data: {\"type\":\"status\",\"stage\":\"started\"}\n\n"
             while True:
                 item = await state.queue.get()
                 if item is None:
@@ -521,7 +581,17 @@ async def chat_stream(req: ChatRequest):
             if cur is state and state.completed:
                 _active_stream_turns.pop(req.session_id, None)
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    # SSE must reach the browser incrementally.  These headers prevent reverse
+    # proxies and response transformers from buffering or rewriting status and
+    # token events into an apparently silent request.
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/chat/stream/cancel")
@@ -681,6 +751,12 @@ def health():
         ],
         "web_search_configured": bool(config.BRAVE_SEARCH_API_KEY),
     }
+
+
+@app.get("/latency")
+def latency(limit: int = 50):
+    """Recent bounded stream timings for diagnosing responsiveness."""
+    return {"samples": telemetry.recent(limit)}
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
