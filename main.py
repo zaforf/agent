@@ -669,7 +669,18 @@ async def get_token_count(session_id: str):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "providers": [
+            {
+                "name": p["name"],
+                "model": p["model"],
+                "configured": bool(p["api_key"]),
+            }
+            for p in config.PROVIDERS
+        ],
+        "web_search_configured": bool(config.BRAVE_SEARCH_API_KEY),
+    }
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

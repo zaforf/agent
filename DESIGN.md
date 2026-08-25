@@ -41,8 +41,8 @@ Providers are tried in order. On rate-limit (`RateLimitError`, `APIConnectionErr
 |---|---|---|---|
 | 1 | `gemini-gemma4-31b` | `gemma-4-31b-it` | Primary — dense model, strong reasoning and tool use |
 | 2 | `gemini-gemma4-26b` | `gemma-4-26b-a4b-it` | Secondary — MoE, 3.8B active params, very fast |
-| 3 | `cerebras` | `qwen-3-235b-a22b-instruct-2507` | Fallback — 1M tokens/day free |
-| 4 | `groq` | `llama-3.3-70b-versatile` | Last resort — no daily cap, always available |
+| 3 | `cerebras` | `gpt-oss-120b` | Fallback — account quota dependent; override with `CEREBRAS_MODEL` |
+| 4 | `groq` | `openai/gpt-oss-120b` | Last resort — free-tier limits apply; override with `GROQ_MODEL` |
 
 A provider is only added to the active client list if its API key is present in the environment. Missing-key providers are silently skipped at startup.
 
@@ -410,7 +410,7 @@ Table: `messages` — one row per completed turn.
 | `DELETE` | `/sessions/{id}` | Delete a session from cache and SQLite. |
 | `GET` | `/memories` | List all Mem0 memories. |
 | `DELETE` | `/memories/{id}` | Delete a memory by ID. |
-| `GET` | `/health` | Returns `{"status": "ok"}`. |
+| `GET` | `/health` | Returns status plus configured provider/model metadata and whether web search has a key. It does not perform live provider calls. |
 | `GET` | `/*` | Static files from `static/` (serves the web UI). |
 
 ### 8.1 Telegram bot transport (optional)

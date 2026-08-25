@@ -5,7 +5,6 @@ no network in default pytest.
 from __future__ import annotations
 
 import httpx
-import pytest
 
 from tools import web as fetch  # historical alias keeps fetch_url tests terse
 
@@ -225,6 +224,13 @@ def test_web_search_http_error_returns_string(monkeypatch):
     _patch_search(monkeypatch, {}, status=429)
     out = fetch.web_search("q")
     assert out.startswith("Error: web_search HTTP 429"), out
+
+
+def test_web_search_quota_error_is_actionable(monkeypatch):
+    _patch_search(monkeypatch, {}, status=402)
+    out = fetch.web_search("q")
+    assert "quota exhausted" in out
+    assert "new Brave Search plan or API key" in out
 
 
 def test_web_search_sends_subscription_token(monkeypatch):

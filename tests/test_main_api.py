@@ -12,8 +12,6 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from collections.abc import AsyncIterator
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -35,7 +33,10 @@ def client(tmp_db, monkeypatch):
 def test_health(client):
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    body = r.json()
+    assert body["status"] == "ok"
+    assert "providers" in body
+    assert "web_search_configured" in body
 
 
 def test_sessions_empty(client):
@@ -440,5 +441,3 @@ def test_delete_session_clears_cache_and_db(client, monkeypatch):
     assert r.status_code == 200
     assert "dl" not in main._cache
     assert db.get_history("dl") == []
-
-

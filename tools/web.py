@@ -215,6 +215,15 @@ def web_search(query: str, max_results: int = _SEARCH_DEFAULT_RESULTS) -> str:
             resp.raise_for_status()
             data = resp.json()
     except httpx.HTTPStatusError as e:
+        if e.response.status_code == 402:
+            # Brave uses 402 for exhausted monthly credits, distinct from a
+            # transient 429 rate limit. Keep this actionable for the model/UI.
+            try:
+                detail = e.response.json().get("error", {}).get("detail", "")
+            except ValueError:
+                detail = "monthly usage limit exceeded"
+            detail = detail or "monthly usage limit exceeded"
+            return f"Error: web_search quota exhausted ({detail}). Configure a new Brave Search plan or API key."
         return f"Error: web_search HTTP {e.response.status_code}"
     except httpx.TimeoutException:
         return f"Error: web_search timed out ({_BRAVE_TIMEOUT_S} s)"

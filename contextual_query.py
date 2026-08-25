@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from openai import AsyncOpenAI
 
-from config import GROQ_API_KEY
+from config import GROQ_API_KEY, GROQ_MODEL
 
-_MODEL = "llama-3.3-70b-versatile"
+_MODEL = GROQ_MODEL
 _BASE_URL = "https://api.groq.com/openai/v1"
 
 _SYSTEM = (

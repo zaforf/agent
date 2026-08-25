@@ -13,6 +13,11 @@ GEMINI_API_KEY        = os.environ.get("GEMINI_API_KEY", "")
 BRAVE_SEARCH_API_KEY  = os.environ.get("BRAVE_SEARCH_API_KEY", "")
 SUPADATA_API_KEY      = os.environ.get("SUPADATA_API_KEY", "")
 
+# Provider model IDs are configurable so a model retirement does not require
+# editing several modules independently.
+CEREBRAS_MODEL = os.environ.get("CEREBRAS_MODEL", "gpt-oss-120b")
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
+
 # Optional: Telegram bot long-polling transport (issue #60). Empty = disabled.
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 
@@ -46,8 +51,8 @@ else:
 #
 #   1. Gemma 4 31B  (dense, #3 open model globally, strong reasoning + tool use)
 #   2. Gemma 4 26B  (MoE, 3.8B active params — extremely fast, same quality tier)
-#   3. Cerebras Q3  (Qwen3-235B, 1M tok/day free, strong fallback)
-#   4. Groq L3.3    (last resort — proven reliable, no daily cap)
+#   3. Cerebras GPT-OSS 120B (strong fallback; account quota dependent)
+#   4. Groq GPT-OSS 120B     (last resort; free-tier limits apply)
 #
 # All Gemini calls go through the OpenAI-compat endpoint via AsyncOpenAI.
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -79,13 +84,13 @@ PROVIDERS: list[dict] = [
         "name":     "cerebras",
         "api_key":  CEREBRAS_API_KEY,
         "base_url": "https://api.cerebras.ai/v1",
-        "model":    "qwen-3-235b-a22b-instruct-2507",
+        "model":    CEREBRAS_MODEL,
     },
     {
         "name":     "groq",
         "api_key":  GROQ_API_KEY,
         "base_url": "https://api.groq.com/openai/v1",
-        "model":    "llama-3.3-70b-versatile",
+        "model":    GROQ_MODEL,
     },
 ]
 
