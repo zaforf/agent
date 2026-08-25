@@ -1520,9 +1520,11 @@
             _thinkLastUpdate = 0;  // reset throttle for next block; label stays until text_chunk
 
           } else if (event.type === 'status') {
+            const waitSeconds = Math.max(1, Math.round((event.elapsed_ms || 0) / 1000));
             _showThinking(
               event.stage === 'started' ? 'starting' :
-              event.stage === 'fallback' ? 'switching provider' : 'working'
+              event.stage === 'fallback' ? 'switching provider' :
+              event.stage === 'waiting' ? `waiting · ${waitSeconds}s` : 'working'
             );
 
           } else if (event.type === 'memory_prefetch_started') {

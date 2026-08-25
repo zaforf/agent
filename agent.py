@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import time
+from contextlib import suppress
 from pathlib import Path
 from openai import AsyncOpenAI, RateLimitError, APIError, APIConnectionError
 import config
@@ -1123,7 +1124,31 @@ async def run_stream(
             raw_parts: list[str] = []
             visible_parts: list[str] = []
             tool_calls_slots: list[dict] = []
-            stream, provider = await _call_stream(messages)
+            # Keep the SSE connection informative while the provider is still
+            # establishing the stream.  Some reasoning models do not emit a
+            # first chunk for many seconds, and their first chunk may be
+            # hidden thinking rather than visible text.
+            stream_task = asyncio.create_task(_call_stream(messages))
+            wait_started = time.monotonic()
+            try:
+                while not stream_task.done():
+                    done, _ = await asyncio.wait(
+                        {stream_task},
+                        timeout=config.PROVIDER_WAIT_STATUS_INTERVAL_S,
+                    )
+                    if not done:
+                        yield {
+                            "type": "status",
+                            "stage": "waiting",
+                            "elapsed_ms": round((time.monotonic() - wait_started) * 1000),
+                        }
+                stream, provider = stream_task.result()
+            except BaseException:
+                if not stream_task.done():
+                    stream_task.cancel()
+                with suppress(BaseException):
+                    await stream_task
+                raise
             provider_used    = provider
             log.info("turn[%d]  provider=%s", iteration, provider)
         

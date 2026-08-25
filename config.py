@@ -82,6 +82,12 @@ PROVIDER_API_ERROR_COOLDOWN_S = float(os.environ.get("PROVIDER_API_ERROR_COOLDOW
 PROVIDER_STREAM_INTERRUPT_COOLDOWN_S = float(
     os.environ.get("PROVIDER_STREAM_INTERRUPT_COOLDOWN_S", "10")
 )
+# Emit honest SSE progress while a provider is still preparing its stream.
+# This is especially useful for reasoning models whose first chunk contains
+# hidden thinking and may arrive several seconds after the request begins.
+PROVIDER_WAIT_STATUS_INTERVAL_S = float(
+    os.environ.get("PROVIDER_WAIT_STATUS_INTERVAL_S", "2")
+)
 
 PROVIDERS: list[dict] = [
     {

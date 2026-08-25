@@ -631,6 +631,25 @@ def test_streaming_emits_text_chunks_and_done(monkeypatch, tmp_system_prompt, pr
     assert text == "hello world"
 
 
+def test_streaming_reports_provider_wait(monkeypatch, tmp_system_prompt, providers):
+    async def delayed_call(_messages):
+        await asyncio.sleep(0.02)
+
+        async def stream():
+            yield text_chunk("ready")
+
+        return stream(), "delayed-provider"
+
+    monkeypatch.setattr(agent, "_call_stream", delayed_call)
+    monkeypatch.setattr(agent.config, "PROVIDER_WAIT_STATUS_INTERVAL_S", 0.005, raising=False)
+
+    events = asyncio.run(_collect_stream("hi"))
+    waiting = [e for e in events if e.get("type") == "status" and e.get("stage") == "waiting"]
+    assert waiting
+    assert waiting[0]["elapsed_ms"] >= 0
+    assert events[-1]["type"] == "done"
+
+
 def test_streaming_strips_thinking_tags_from_visible_text(monkeypatch, tmp_system_prompt, providers):
     chunks = [text_chunk("<thought>scratch</thought>"), text_chunk("visible")]
     providers([[chunks]])

@@ -453,7 +453,7 @@ until the response is complete.
 | `type` | Fields | Description |
 |---|---|---|
 | `text_chunk` | `text: str` | Incremental visible text from the model |
-| `status` | `stage: str` | Request lifecycle status emitted before waiting on memory/provider work |
+| `status` | `stage: str`, optional `elapsed_ms: int` | Request lifecycle status emitted before or during memory/provider work; `waiting` repeats while a provider has not produced its stream yet |
 | `memory_prefetch_started` | *(none)* | Ambient memory retrieval has started |
 | `thinking_chars` | `count: int` | Number of thinking chars buffered so far (drives indicator) |
 | `tool_call` | `name: str`, `args: dict` | A tool is about to be called |
