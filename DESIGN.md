@@ -413,6 +413,7 @@ Table: `messages` — one row per completed turn.
 | `GET` | `/memories` | List all Mem0 memories. |
 | `DELETE` | `/memories/{id}` | Delete a memory by ID. |
 | `GET` | `/health` | Returns status plus configured provider/model metadata and whether web search has a key. It does not perform live provider calls. |
+| `GET` | `/latency` | Returns the most recent bounded stream timing samples (first event, first model-visible event, first text, memory completion, tools, provider, total). In-process only; not a metrics database. |
 | `GET` | `/*` | Static files from `static/` (serves the web UI). |
 
 ### 8.1 Telegram bot transport (optional)

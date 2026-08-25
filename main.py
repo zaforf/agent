@@ -15,6 +15,7 @@ from pydantic import BaseModel
 import agent
 import config
 import db
+import telemetry
 from summarizer import summarize_gemma
 from tools.memory import get_all as get_all_memories, delete_memory
 
@@ -180,10 +181,40 @@ async def _run_stream_turn(
     output_channel: str = "default",
 ) -> None:
     """Background producer: runs agent stream, queues SSE events, persists on completion."""
+    started = asyncio.get_running_loop().time()
+    timing: dict = {
+        "session_id": state.session_id,
+        "first_event_ms": None,
+        "first_provider_event_ms": None,
+        "memory_ms": None,
+        "first_visible_ms": None,
+        "done_ms": None,
+        "provider": None,
+        "tool_count": 0,
+    }
+
+    def elapsed_ms() -> float:
+        return round((asyncio.get_running_loop().time() - started) * 1000, 1)
+
     try:
         run_stream_sig = inspect.signature(agent.run_stream)
         kwargs = {"output_channel": output_channel} if "output_channel" in run_stream_sig.parameters else {}
         async for event in agent.run_stream(user_content, history, session_id=state.session_id, **kwargs):
+            event_type = event.get("type")
+            if timing["first_event_ms"] is None:
+                timing["first_event_ms"] = elapsed_ms()
+            if event_type == "memory_prefetch" and timing["memory_ms"] is None:
+                timing["memory_ms"] = elapsed_ms()
+            if event_type in {"thinking_chars", "thinking_done", "text_chunk", "tool_call"}:
+                if timing["first_provider_event_ms"] is None:
+                    timing["first_provider_event_ms"] = elapsed_ms()
+            if event_type == "text_chunk" and timing["first_visible_ms"] is None:
+                timing["first_visible_ms"] = elapsed_ms()
+            if event_type == "tool_call":
+                timing["tool_count"] += 1
+            if event_type == "done":
+                timing["provider"] = event.get("provider")
+                timing["done_ms"] = elapsed_ms()
             if event.get("type") == "text_chunk":
                 state.full_response += event.get("text", "")
             elif event.get("type") == "done":
@@ -208,6 +239,10 @@ async def _run_stream_turn(
     finally:
         with suppress(Exception):
             await _persist_stream_turn(state)
+        if timing["done_ms"] is None:
+            timing["done_ms"] = elapsed_ms()
+        timing["total_ms"] = timing["done_ms"]
+        telemetry.record(timing)
         state.completed = True
         await state.queue.put(None)
 
@@ -697,6 +732,12 @@ def health():
         ],
         "web_search_configured": bool(config.BRAVE_SEARCH_API_KEY),
     }
+
+
+@app.get("/latency")
+def latency(limit: int = 50):
+    """Recent bounded stream timings for diagnosing responsiveness."""
+    return {"samples": telemetry.recent(limit)}
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
