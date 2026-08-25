@@ -520,7 +520,15 @@ async def _call(messages: list[dict], use_tools: bool = True) -> tuple:
             try:
                 resp = await entry["client"].chat.completions.create(**kwargs)
                 return resp, entry["name"]
-            except (RateLimitError, APIConnectionError) as e:
+            except RateLimitError as e:
+                # A provider quota response is not made healthier by retrying
+                # the same request.  Move on immediately so a fallback can
+                # produce the first token instead of adding several seconds
+                # of avoidable dead air.
+                last_err = e
+                log.warning("provider=%s rate limited; skipping to next provider: %s", entry["name"], e)
+                break
+            except APIConnectionError as e:
                 last_err = e
                 log.warning("provider=%s attempt=%d retryable error: %s", entry["name"], attempt, e)
                 if attempt < 2:
@@ -559,7 +567,13 @@ async def _call_stream(messages: list[dict]) -> tuple:
             try:
                 stream = await entry["client"].chat.completions.create(**kwargs)
                 return stream, entry["name"]
-            except (RateLimitError, APIConnectionError) as e:
+            except RateLimitError as e:
+                # Quota exhaustion is provider-specific and retrying it here
+                # only delays the next provider in the chain.
+                last_err = e
+                log.warning("stream provider=%s rate limited; skipping to next provider: %s", entry["name"], e)
+                break
+            except APIConnectionError as e:
                 last_err = e
                 log.warning("stream provider=%s attempt=%d retryable error: %s", entry["name"], attempt, e)
                 if attempt < 2:

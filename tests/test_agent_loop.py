@@ -423,6 +423,24 @@ def test_provider_fallback_on_retryable_error(monkeypatch, tmp_system_prompt, pr
     assert "ok from B" in response
 
 
+def test_provider_fallback_skips_rate_limited_provider(monkeypatch, tmp_system_prompt, providers):
+    """A quota/rate-limit response advances immediately to the next provider."""
+    from openai import RateLimitError
+    import httpx
+
+    err = RateLimitError(
+        message="quota exceeded",
+        response=httpx.Response(429, request=httpx.Request("POST", "https://example.invalid")),
+        body={"error": {"message": "quota exceeded"}},
+    )
+    comps = providers([[err], [make_response("fast fallback")]], names=["a", "b"])
+
+    response, provider, _, _ = asyncio.run(agent.run("hi", []))
+    assert provider == "b"
+    assert response == "fast fallback"
+    assert len(comps[0].calls) == 1
+
+
 def test_all_providers_exhausted_raises_cleanly(monkeypatch, tmp_system_prompt, providers):
     """When every provider in the chain fails retryably, run() surfaces a
     RuntimeError. main.py converts this to HTTP 500 for the client.
@@ -705,5 +723,4 @@ def test_streaming_tool_call_arguments_accumulate_across_chunks(
     events = asyncio.run(_collect_stream("go"))
     assert events[-1]["type"] == "done"
     assert seen_args == {"query": "x", "max_results": 3}
-
 
