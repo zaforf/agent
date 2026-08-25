@@ -1522,6 +1522,9 @@
           } else if (event.type === 'status') {
             _showThinking(event.stage === 'started' ? 'starting' : 'working');
 
+          } else if (event.type === 'memory_prefetch_started') {
+            _showThinking('recalling memory');
+
           } else if (event.type === 'memory_prefetch') {
             console.debug('[agent] memory_prefetch:', event.count, event.memories);
             const memLines = (event.memories || []).map(m => `• ${m}`).join('\n');

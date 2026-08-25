@@ -1047,6 +1047,8 @@ async def run_stream(
     history = _sanitize_history(history)
     _user_text = _user_content_as_text(user_content)
     system_prompt = _build_system_prompt(output_channel=output_channel)
+    if config.MEMORY_PREFETCH_ENABLED:
+        yield {"type": "memory_prefetch_started"}
     prefetched = await _prefetch_memories(_user_text, history)
     mem_block = [_memories_user_block(prefetched)] if prefetched else []
     if prefetched:
