@@ -440,6 +440,7 @@ When `TELEGRAM_BOT_TOKEN` is set, `main.py` starts **long-polling** `getUpdates`
 | `type` | Fields | Description |
 |---|---|---|
 | `text_chunk` | `text: str` | Incremental visible text from the model |
+| `status` | `stage: str` | Request lifecycle status emitted before waiting on memory/provider work |
 | `thinking_chars` | `count: int` | Number of thinking chars buffered so far (drives indicator) |
 | `tool_call` | `name: str`, `args: dict` | A tool is about to be called |
 | `tool_result` | `name: str`, `result: str` | Tool execution completed |

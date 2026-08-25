@@ -123,6 +123,9 @@ MEMORY_PREFETCH_ENABLED = os.environ.get("MEMORY_PREFETCH_ENABLED", "false").low
     "1", "true", "yes",
 )
 MEMORY_PREFETCH_TIMEOUT_S = float(os.environ.get("MEMORY_PREFETCH_TIMEOUT_S", "1.5"))
+MEMORY_WARM_ON_STARTUP = os.environ.get("MEMORY_WARM_ON_STARTUP", "true").lower() in (
+    "1", "true", "yes",
+)
 
 # After a successful ``workspace_search_replace`` on a ``.py`` file, optionally append
 # ``ruff check`` / scoped ``pytest`` output to the same tool result (see ``tools/post_edit_verify.py``).

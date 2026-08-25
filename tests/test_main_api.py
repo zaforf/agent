@@ -241,7 +241,7 @@ def test_chat_stream_events_and_persist(client, monkeypatch):
 
     events = [json.loads(ln[6:]) for ln in lines]
     types = [e["type"] for e in events]
-    assert types == ["text_chunk", "text_chunk", "done"]
+    assert types == ["status", "text_chunk", "text_chunk", "done"]
     assert "".join(e["text"] for e in events if e["type"] == "text_chunk") == "hello"
 
     # Persisted

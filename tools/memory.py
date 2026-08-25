@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import config
 
 
@@ -37,18 +39,26 @@ def mem0_config_dict() -> dict:
 
 USER_ID = "user"
 _memory = None
+_memory_lock = threading.Lock()
 
 
 def _get_memory():
     global _memory
     if _memory is None:
-        # Mem0 is a large optional dependency and can initialize/migrate Qdrant
-        # collections on first use. Do not import it on the normal chat startup
-        # path; explicit memory operations pay this cost when they are needed.
-        from mem0 import Memory
+        with _memory_lock:
+            if _memory is None:
+                # Mem0 is a large optional dependency and can initialize/migrate
+                # Qdrant collections on first use. Keep one-time initialization
+                # serialized so concurrent requests cannot initialize it twice.
+                from mem0 import Memory
 
-        _memory = Memory.from_config(mem0_config_dict())
+                _memory = Memory.from_config(mem0_config_dict())
     return _memory
+
+
+def warm() -> None:
+    """Initialize Mem0 without performing a read or write operation."""
+    _get_memory()
 
 
 def remember(content: str, category: str = "fact") -> str:

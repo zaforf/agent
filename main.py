@@ -38,6 +38,16 @@ log = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init()
+    memory_warm_task: asyncio.Task | None = None
+    if config.MEMORY_PREFETCH_ENABLED and config.MEMORY_WARM_ON_STARTUP:
+        # Mem0 may import spaCy and inspect/create Qdrant collections on first
+        # use. Warm it outside the request path so enabled ambient memory does
+        # not make the first personal-assistant turn appear idle.
+        from tools.memory import warm as warm_memory
+
+        memory_warm_task = asyncio.create_task(
+            asyncio.to_thread(warm_memory), name="memory-warm"
+        )
     tg_task: asyncio.Task | None = None
     if config.TELEGRAM_BOT_TOKEN:
         from telegram_transport import run_telegram_polling
@@ -48,6 +58,9 @@ async def lifespan(app: FastAPI):
         tg_task.cancel()
         with suppress(asyncio.CancelledError):
             await tg_task
+    if memory_warm_task is not None and memory_warm_task.done():
+        with suppress(Exception):
+            memory_warm_task.result()
 
 
 app = FastAPI(title="Agent", lifespan=lifespan)
@@ -507,6 +520,9 @@ async def chat_stream(req: ChatRequest):
 
     async def generate():
         try:
+            # Let the UI confirm that the request is alive before waiting on
+            # memory retrieval or the provider's first token.
+            yield "data: {\"type\":\"status\",\"stage\":\"started\"}\n\n"
             while True:
                 item = await state.queue.get()
                 if item is None:
