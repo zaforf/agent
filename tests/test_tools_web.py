@@ -94,7 +94,7 @@ def test_raw_mode_no_note_when_below_limit(monkeypatch):
 
 
 def test_summarizer_failure_falls_back_to_raw(monkeypatch):
-    """When the summarizer blows up, fetch_url silently returns raw text."""
+    """When the summarizer blows up, fetch_url labels the raw fallback."""
     text = "hello " * 100
     _mock_fetch(monkeypatch, text, content_type="text/plain")
 
@@ -104,6 +104,7 @@ def test_summarizer_failure_falls_back_to_raw(monkeypatch):
 
     out = fetch.fetch_url("https://example.com", prompt="extract something")
     assert "hello" in out, "expected raw text fallback on summarizer failure"
+    assert "structured page summarization was unavailable" in out
 
 
 def test_empty_page_returns_no_content_marker(monkeypatch):

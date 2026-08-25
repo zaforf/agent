@@ -148,11 +148,17 @@ def fetch_url(url: str, prompt: str = "", offset: int = 0, raw: bool = False) ->
             return "(no readable content)"
 
         # ── Summarizer mode (default when prompt given) ──────────────────────
+        degraded_note = ""
         if prompt and not raw:
             try:
                 return _summarize_content(text, prompt)
             except Exception as e:
                 log.warning("fetch_url: summarizer failed (%s), falling back to raw text", e)
+                degraded_note = (
+                    "[fetch_url note: structured page summarization was unavailable; "
+                    "this is raw paginated text and may not contain the requested fact yet. "
+                    "Use offset pagination or retry prompt mode if needed.]\n\n"
+                )
 
         # ── Raw / paginated mode ─────────────────────────────────────────────
         total = len(text)
@@ -164,7 +170,7 @@ def fetch_url(url: str, prompt: str = "", offset: int = 0, raw: bool = False) ->
                 chunk[:_RAW_CHAR_LIMIT]
                 + f"\n\n[… {remaining:,} more chars — call fetch_url with offset={next_offset} to continue]"
             )
-        return chunk
+        return degraded_note + chunk
 
     except httpx.TimeoutException:
         return f"Error: request to {url} timed out ({_FETCH_TIMEOUT_S} s)"

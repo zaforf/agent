@@ -192,7 +192,7 @@ The model can always paginate regardless of whether a pagination note is visible
 
 Retry behavior: up to 4 retries on timeout or connection errors with exponential backoff; up to 3 retries on HTTP 429 (rate limit) with `Retry-After` header respect.
 
-If the summarizer fails, the tool falls back to raw mode silently (logs a warning).
+If the summarizer fails, the tool falls back to raw mode with an explicit note that the result may be incomplete and can require pagination; the failure is also logged.
 
 #### 5.2.2 `web_search(query, max_results=5)`
 
