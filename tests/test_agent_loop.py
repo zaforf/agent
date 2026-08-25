@@ -441,6 +441,19 @@ def test_provider_fallback_skips_rate_limited_provider(monkeypatch, tmp_system_p
     assert len(comps[0].calls) == 1
 
 
+def test_provider_cooldown_skips_known_unavailable_provider(monkeypatch, tmp_system_prompt, providers):
+    """A later turn does not re-request a provider still in cooldown."""
+    import time
+
+    comps = providers([[make_response("should not run")], [make_response("ready")]], names=["a", "b"])
+    agent._provider_cooldowns["a"] = time.monotonic() + 60
+
+    response, provider, _, _ = asyncio.run(agent.run("hi", []))
+    assert provider == "b"
+    assert response == "ready"
+    assert comps[0].calls == []
+
+
 def test_all_providers_exhausted_raises_cleanly(monkeypatch, tmp_system_prompt, providers):
     """When every provider in the chain fails retryably, run() surfaces a
     RuntimeError. main.py converts this to HTTP 500 for the client.
@@ -723,4 +736,3 @@ def test_streaming_tool_call_arguments_accumulate_across_chunks(
     events = asyncio.run(_collect_stream("go"))
     assert events[-1]["type"] == "done"
     assert seen_args == {"query": "x", "max_results": 3}
-

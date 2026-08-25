@@ -189,6 +189,9 @@ def install_providers(monkeypatch, chains, names=None):
     otherwise a list (so callers can assert on multiple provider histories).
     """
     import agent
+    # Provider circuit-breaker state is process-global in production; isolate
+    # fake provider chains so one test's quota failure cannot affect another.
+    monkeypatch.setattr(agent, "_provider_cooldowns", {})
     if names is None:
         names = [f"fake-{i}" for i in range(len(chains))]
     entries = []

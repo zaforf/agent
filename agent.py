@@ -4,6 +4,7 @@ import datetime
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from openai import AsyncOpenAI, RateLimitError, APIError, APIConnectionError
 import config
@@ -25,6 +26,23 @@ _clients: list[dict] = [
     }
     for p in PROVIDERS if p["api_key"]
 ]
+
+_provider_cooldowns: dict[str, float] = {}
+
+
+def _provider_available(name: str) -> bool:
+    until = _provider_cooldowns.get(name, 0.0)
+    if until <= time.monotonic():
+        _provider_cooldowns.pop(name, None)
+        return True
+    return False
+
+
+def _cooldown_provider(name: str, seconds: float, reason: str) -> None:
+    if seconds <= 0:
+        return
+    _provider_cooldowns[name] = time.monotonic() + seconds
+    log.warning("provider=%s cooldown=%.1fs reason=%s", name, seconds, reason)
 
 MAX_TOOL_ITERATIONS = 30
 
@@ -509,6 +527,9 @@ async def _call(messages: list[dict], use_tools: bool = True) -> tuple:
 
     last_err = None
     for entry in _clients:
+        if not _provider_available(entry["name"]):
+            log.info("provider=%s temporarily unavailable; skipping", entry["name"])
+            continue
         kwargs = dict(model=entry["model"], messages=messages, max_tokens=8192)
         if use_tools:
             kwargs["tools"] = TOOL_SCHEMAS
@@ -526,6 +547,9 @@ async def _call(messages: list[dict], use_tools: bool = True) -> tuple:
                 # produce the first token instead of adding several seconds
                 # of avoidable dead air.
                 last_err = e
+                _cooldown_provider(
+                    entry["name"], config.PROVIDER_RATE_LIMIT_COOLDOWN_S, "rate_limit"
+                )
                 log.warning("provider=%s rate limited; skipping to next provider: %s", entry["name"], e)
                 break
             except APIConnectionError as e:
@@ -535,6 +559,10 @@ async def _call(messages: list[dict], use_tools: bool = True) -> tuple:
                     await asyncio.sleep(2 ** attempt)
             except APIError as e:
                 last_err = e
+                if getattr(e, "status_code", None) in (402, 403, 404):
+                    _cooldown_provider(
+                        entry["name"], config.PROVIDER_API_ERROR_COOLDOWN_S, f"http_{e.status_code}"
+                    )
                 log.warning("provider=%s attempt=%d api error (skipping): %s", entry["name"], attempt, e)
                 break
             except Exception as e:
@@ -552,6 +580,9 @@ async def _call_stream(messages: list[dict]) -> tuple:
 
     last_err = None
     for entry in _clients:
+        if not _provider_available(entry["name"]):
+            log.info("stream provider=%s temporarily unavailable; skipping", entry["name"])
+            continue
         kwargs = dict(
             model       = entry["model"],
             messages    = messages,
@@ -571,6 +602,9 @@ async def _call_stream(messages: list[dict]) -> tuple:
                 # Quota exhaustion is provider-specific and retrying it here
                 # only delays the next provider in the chain.
                 last_err = e
+                _cooldown_provider(
+                    entry["name"], config.PROVIDER_RATE_LIMIT_COOLDOWN_S, "rate_limit"
+                )
                 log.warning("stream provider=%s rate limited; skipping to next provider: %s", entry["name"], e)
                 break
             except APIConnectionError as e:
@@ -580,6 +614,10 @@ async def _call_stream(messages: list[dict]) -> tuple:
                     await asyncio.sleep(2 ** attempt)
             except APIError as e:
                 last_err = e
+                if getattr(e, "status_code", None) in (402, 403, 404):
+                    _cooldown_provider(
+                        entry["name"], config.PROVIDER_API_ERROR_COOLDOWN_S, f"http_{e.status_code}"
+                    )
                 log.warning("stream provider=%s attempt=%d api error (skipping): %s", entry["name"], attempt, e)
                 break
             except Exception as e:

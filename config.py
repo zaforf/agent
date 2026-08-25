@@ -67,6 +67,11 @@ AGENT_PARALLEL_TOOL_CALLS = os.environ.get("AGENT_PARALLEL_TOOL_CALLS", "true").
     "yes",
 )
 
+# Avoid rediscovering a provider-wide quota/payment failure on every turn.
+# This is a temporary circuit breaker, not a permanent provider disablement.
+PROVIDER_RATE_LIMIT_COOLDOWN_S = float(os.environ.get("PROVIDER_RATE_LIMIT_COOLDOWN_S", "60"))
+PROVIDER_API_ERROR_COOLDOWN_S = float(os.environ.get("PROVIDER_API_ERROR_COOLDOWN_S", "300"))
+
 PROVIDERS: list[dict] = [
     {
         "name":     "gemini-gemma4-31b",

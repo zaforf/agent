@@ -35,7 +35,7 @@ This is a personal AI assistant for Zafir, exposed as a web application. It runs
 
 ## 3. Provider Chain
 
-Providers are tried in order. On rate-limit (`RateLimitError`, `APIConnectionError`), the same provider is retried up to 3 times with exponential backoff (1s, 2s). On non-retryable errors (`APIError`, unexpected exceptions), the provider is skipped immediately and the next one is tried.
+Providers are tried in order. Transient connection failures are retried up to 3 times with exponential backoff (1s, 2s). Rate-limit failures advance immediately to the next provider. Provider-wide payment/model errors are also skipped immediately. Those known-unavailable providers enter a temporary cooldown so later turns do not repeat the same failed request; they become eligible again automatically after the configured cooldown.
 
 | Priority | Name | Model | Notes |
 |---|---|---|---|
