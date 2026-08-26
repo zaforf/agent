@@ -1041,17 +1041,11 @@
   }
 
   /** Create an agent bubble and return its md-content div for streaming into. */
-  function createAgentBubble(fallbackProvider, shouldScroll = true) {
+  function createAgentBubble(shouldScroll = true) {
     const row = document.createElement('div');
     row.className = 'row agent';
     const bub = document.createElement('div');
     bub.className = 'bubble';
-    if (fallbackProvider) {
-      const tag = document.createElement('div');
-      tag.className = 'fallback-tag';
-      tag.textContent = `via ${fallbackProvider}`;
-      bub.appendChild(tag);
-    }
     const md = document.createElement('div');
     md.className = 'md-content';
     bub.appendChild(md);
@@ -1063,7 +1057,7 @@
 
   /** Render a complete agent message. `syncMath`: history load renders KaTeX before scroll anchor runs. */
   function addAgentMsg(text, shouldScroll = true, syncMath = false) {
-    const md = createAgentBubble(null, shouldScroll);
+    const md = createAgentBubble(shouldScroll);
     md.innerHTML = renderMarkdown(text);
     if (syncMath) renderMath(md);
     else setTimeout(() => renderMath(md), 0);
@@ -1558,7 +1552,7 @@
 
           } else if (event.type === 'text_chunk') {
             _hideThinking();
-            if (!agentMd) agentMd = createAgentBubble(null);
+            if (!agentMd) agentMd = createAgentBubble();
             textBuffer  += event.text;
             _charQueue  += event.text;
             if (_charDrainId === null) _charDrainId = requestAnimationFrame(_drainCharQueue);
@@ -1583,13 +1577,6 @@
               renderMath(agentMd);
               if (stickToBottom) requestAnimationFrame(() => scrollFeed(true));
 
-              const primary = 'gemini-gemma4-31b';
-              if (providerUsed && providerUsed !== primary) {
-                const tag = document.createElement('div');
-                tag.className = 'fallback-tag';
-                tag.textContent = `via ${providerUsed}`;
-                agentMd.parentElement.insertBefore(tag, agentMd);
-              }
             }
             if (remembered && document.getElementById('mem-panel').classList.contains('open'))
               loadMemories();

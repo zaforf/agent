@@ -56,7 +56,7 @@ The **Gemma 26B summarizer** (`summarizer.summarize_gemma`) is not part of that 
 
 If all providers are exhausted without success, the server raises `RuntimeError("All providers exhausted")`.
 
-**Provider used** is returned in the API response and shown in the UI as a "via X" tag when the primary is not used.
+**Provider used** is returned in the API response and retained for logs and latency/debug views; it is not shown in normal chat bubbles because provider selection is an implementation detail.
 
 ### 3.1 Gemini Authentication
 
