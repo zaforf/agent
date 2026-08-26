@@ -150,7 +150,9 @@ MEMORY_PREFETCH_TOP_K    = int(os.environ.get("MEMORY_PREFETCH_TOP_K", "5"))
 MEMORY_PREFETCH_THRESHOLD = float(os.environ.get("MEMORY_PREFETCH_THRESHOLD", "0.3"))
 # Ambient recall is an enhancement, never a prerequisite for responding. Mem0
 # may cold-start by inspecting/migrating Qdrant collections, so bound it.
-MEMORY_PREFETCH_ENABLED = os.environ.get("MEMORY_PREFETCH_ENABLED", "false").lower() in (
+# Enabled by default: memory is part of the personal-agent experience. The
+# timeout below keeps an unavailable/cold memory service from blocking a turn.
+MEMORY_PREFETCH_ENABLED = os.environ.get("MEMORY_PREFETCH_ENABLED", "true").lower() in (
     "1", "true", "yes",
 )
 MEMORY_PREFETCH_TIMEOUT_S = float(os.environ.get("MEMORY_PREFETCH_TIMEOUT_S", "1.5"))

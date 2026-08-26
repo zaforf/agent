@@ -45,10 +45,10 @@ If a provider rejects a request specifically because its input is too large, the
 
 | Priority | Name | Model | Notes |
 |---|---|---|---|
-| 1 | `gemini-gemma4-31b` | `gemma-4-31b-it` | Primary — dense model, strong reasoning and tool use |
-| 2 | `gemini-gemma4-26b` | `gemma-4-26b-a4b-it` | Secondary — MoE, 3.8B active params, very fast |
-| 3 | `cerebras` | `gpt-oss-120b` | Fallback — account quota dependent; override with `CEREBRAS_MODEL` |
-| 4 | `groq` | `openai/gpt-oss-120b` | Last resort — free-tier limits apply; override with `GROQ_MODEL` |
+| 1 | `gemini-gemma4-26b` | `gemma-4-26b-a4b-it` | Responsive default — MoE, 3.8B active params, very fast |
+| 2 | `groq` | `openai/gpt-oss-120b` | Fallback — free-tier limits apply; override with `GROQ_MODEL` |
+| 3 | `gemini-gemma4-31b` | `gemma-4-31b-it` | Quality fallback — dense model, stronger reasoning and tool use |
+| 4 | `cerebras` | `gpt-oss-120b` | Fallback — account quota dependent; override with `CEREBRAS_MODEL` |
 
 A provider is only added to the active client list if its API key is present in the environment. Missing-key providers are silently skipped at startup.
 
@@ -147,6 +147,7 @@ The model is instructed to use native API `tool_calls` only — no XML or fenced
 ### 5.1 Memory tools (`tools/memory.py`)
 
 Backed by Mem0 + Qdrant. Qdrant host/port are read from `QDRANT_HOST` / `QDRANT_PORT` env vars (defaulting to `localhost:6333`); prod typically sets `QDRANT_HOST=qdrant` inside docker-compose. `docker-compose.yml` is gitignored because dev/prod topologies differ. Embeddings use the **Gemini Embedding API** (`GEMINI_API_KEY`, model `GEMINI_EMBEDDING_MODEL` defaulting to `models/gemini-embedding-001`, `GEMINI_EMBEDDING_DIMS` default 768). Vectors are stored under collection `MEM0_QDRANT_COLLECTION` (default `agent_memories_gemini` — new name so a prior local 768-d HuggingFace index is not reused). Mem0 uses the **Gemini** LLM provider (`MEM0_LLM_MODEL`, default **Gemma 4 26B MoE** `gemma-4-26b-a4b-it`) for memory extraction/processing — same `GEMINI_API_KEY` as the agent. This avoids Groq free-tier **tokens-per-minute** failures when the extraction prompt is large. Override with `MEM0_LLM_MODEL` (e.g. `gemma-4-31b-it`) if needed. Memory tools run in a worker thread (`asyncio.to_thread`) like `fetch_url` / `web_search` so the async event loop is not blocked during embedding or Qdrant I/O.
+Ambient memory prefetch is enabled by default. Before the first model call of a turn, the agent performs a semantic recall using the current request plus a short tail of the prior assistant response, then injects only results above `MEMORY_PREFETCH_THRESHOLD` (up to `MEMORY_PREFETCH_TOP_K`). The lookup is bounded by `MEMORY_PREFETCH_TIMEOUT_S` (default 1.5 seconds); on timeout or failure the turn continues without ambient memories. Set `MEMORY_PREFETCH_ENABLED=false` when deliberately testing zero-prefetch latency. Explicit memory tools remain available regardless of this setting.
 Explicit memory operations are bounded by `MEMORY_TOOL_TIMEOUT_S` and return a tool error on timeout; the underlying synchronous work may finish in its worker thread.
 
 All memories are stored under the single user ID `"user"`.
